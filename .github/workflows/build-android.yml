@@ -1,0 +1,67 @@
+name: Build Android App
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Android environment
+      uses: android-actions/setup-android@v3
+
+    - name: Setup JDK
+      uses: actions/setup-java@v3
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+
+    - name: Create minimal Android project
+      run: |
+        # ایجاد پوشه‌های ضروری
+        mkdir -p app/src/main/{assets,res/layout,java/com/signalapp}
+        
+        # کپی فایل HTML
+        cp index.html app/src/main/assets/
+        
+        # ایجاد فایل‌های ضروری
+        cat > app/src/main/java/com/signalapp/MainActivity.java << 'EOF'
+        package com.signalapp;
+        import androidx.appcompat.app.AppCompatActivity;
+        import android.os.Bundle;
+        import android.webkit.WebView;
+        import android.webkit.WebViewClient;
+        public class MainActivity extends AppCompatActivity {
+            @Override
+            protected void onCreate(Bundle savedInstanceState) {
+                super.onCreate(savedInstanceState);
+                WebView webView = new WebView(this);
+                webView.setWebViewClient(new WebViewClient());
+                webView.getSettings().setJavaScriptEnabled(true);
+                webView.loadUrl("file:///android_asset/index.html");
+                setContentView(webView);
+            }
+        }
+        EOF
+        
+        # ساخت APK با استفاده از ابزارهای مستقیم اندروید
+        $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "build-tools;34.0.0"
+        
+        # کامپایل مستقیم بدون Gradle
+        $ANDROID_HOME/build-tools/34.0.0/aapt package -f -M AndroidManifest.xml -S res/ -I $ANDROID_HOME/platforms/android-33/android.jar -F app.unsigned.apk app/src/main/
+        
+        # امضا کردن APK
+        keytool -genkey -v -keystore release.keystore -alias androidreleasekey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Developer, OU=Android, O=Google, L=Mountain View, S=California, C=US"
+        $ANDROID_HOME/build-tools/34.0.0/apksigner sign --ks release.keystore --ks-pass pass:android --ks-key-alias androidreleasekey --key-pass pass:android --out app-release.apk app.unsigned.apk
+
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: signal-app
+        path: app-release.apk
