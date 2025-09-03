@@ -1,0 +1,52 @@
+name: Build Android App with Docker
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    container: fedora:latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        dnf update -y
+        dnf install -y android-tools git java-17-openjdk
+
+    - name: Create Android project
+      run: |
+        mkdir -p app/src/main/{assets,res/layout,java/com/signalapp}
+        cp index.html app/src/main/assets/
+        
+        # ایجاد فایل‌های ضروری
+        cat > app/src/main/java/com/signalapp/MainActivity.java << 'EOF'
+        package com.signalapp;
+        import androidx.appcompat.app.AppCompatActivity;
+        import android.os.Bundle;
+        import android.webkit.WebView;
+        import android.webkit.WebViewClient;
+        public class MainActivity extends AppCompatActivity {
+            @Override
+            protected void onCreate(Bundle savedInstanceState) {
+                super.onCreate(savedInstanceState);
+                WebView webView = new WebView(this);
+                webView.setWebViewClient(new WebViewClient());
+                webView.getSettings().setJavaScriptEnabled(true);
+                webView.loadUrl("file:///android_asset/index.html");
+                setContentView(webView);
+            }
+        }
+        EOF
+
+    - name: Upload HTML as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: android-project
+        path: app/
+        if-no-files-found: error
