@@ -3,7 +3,7 @@ name: Build Android APK
 on:
   push:
     branches:
-      - main   # هر بار روی شاخه main چیزی push بشه این اکشن اجرا میشه
+      - main
 
 jobs:
   build:
@@ -11,12 +11,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v2
+        uses: actions/setup-node@v4
         with:
-          node-version: '16'
+          node-version: '18'
 
       - name: Install Cordova
         run: npm install -g cordova
@@ -31,7 +31,8 @@ jobs:
           cordova build android --release
 
       - name: Upload APK artifact
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: my-app-apk
           path: app/platforms/android/app/build/outputs/apk/release/app-release.apk
+
