@@ -1,0 +1,54 @@
+[build-system]
+requires = [
+    "setuptools>=45.0",
+    "wheel",
+    "setuptools-scm[toml]>=6.2",
+    "pygame>=2.5.2",
+    "PyOpenGL>=3.1.7",
+    "numpy>=1.24.3"
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "galactic-cinematic-game"
+version = "1.0.0"
+description = "یک بازی فضایی سینمایی با گرافیک سه‌بعدی حرفه‌ای"
+authors = [
+    {name = "Your Name", email = "your.email@example.com"},
+]
+readme = "README.md"
+license = {text = "MIT"}
+keywords = ["game", "space", "3d", "opengl", "pygame"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+requires-python = ">=3.8"
+dependencies = [
+    "pygame>=2.5.2",
+    "PyOpenGL>=3.1.7",
+    "PyOpenGL-accelerate>=3.1.7",
+    "numpy>=1.24.3"
+]
+
+[project.scripts]
+galactic-game = "main:main"
+
+[project.urls]
+"Homepage" = "https://github.com/yourusername/galactic-cinematic-game"
+"Bug Reports" = "https://github.com/yourusername/galactic-cinematic-game/issues"
+"Source" = "https://github.com/yourusername/galactic-cinematic-game"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["*"]
