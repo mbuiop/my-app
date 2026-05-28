@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: motherbot
+      POSTGRES_PASSWORD: SecurePass123!
+      POSTGRES_DB: motherbot
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - motherbot_network
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - motherbot_network
+
+  motherbot:
+    build: .
+    environment:
+      BOT_TOKEN: "8541672444:AAF4PBn7-XqiXUgaK0arVajyZfcMWqbxSJ0"
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - motherbot_network
+
+networks:
+  motherbot_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
