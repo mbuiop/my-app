@@ -49,9 +49,9 @@ for dir_path in DIRS.values():
     os.makedirs(dir_path, exist_ok=True)
 
 # ==================== توکن و تنظیمات ====================
-BOT_TOKEN = "8541672444:AAF4PBn7-XqiXUgaK0arVajyZfcMWqbxSJ0"
+BOT_TOKEN = "8861335338:AAGBwVrEAY9k7d6OyB0XtwxxTXAJOVa7P7o"
 ADMIN_IDS = [327855654]
-BOT_USERNAME = "Dfjfjll_bot"  # ⭐ لینک ثابت ربات - اینجا اسم ربات خودت رو بذار!
+BOT_USERNAME = "ROBTTSAZE_bot"  # ⭐ لینک ثابت ربات - اینجا اسم ربات خودت رو بذار!
 
 # تنظیمات پیش‌فرض (قابل تغییر در پنل مدیریت)
 SETTINGS = {
