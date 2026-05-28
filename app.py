@@ -62,7 +62,7 @@ for dir_path in DIRS.values():
     os.makedirs(dir_path, exist_ok=True)
 
 # ==================== توکن و تنظیمات ====================
-BOT_TOKEN = "8541672444:AAF4PBn7-XqiXUgaK0arVajyZfcMWqbxSJ0"
+BOT_TOKEN = "8052349235:AAFSaJmYpl359BKrJTWC8O-u-dI9r2olEOQ"
 ADMIN_IDS = [327855654]
 
 # ==================== کتابخانه‌های آماده برای نصب ====================
