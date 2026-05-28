@@ -55,10 +55,10 @@ CONFIG = {
     'ADMIN_IDS': [327855654],
     'CARD_NUMBER': "5892101187322777",
     'CARD_HOLDER': "مرتضی نیکخو خنجری",
-    'CARD_BANK': "بانک ملی",
-    'SUBSCRIPTION_PRICE': 2000000,  # ۲ میلیون تومان
+    'CARD_BANK': "بانگ سپه ",
+    'SUBSCRIPTION_PRICE': 3660000,  # ۲ میلیون تومان
     'REFERRAL_PERCENT': 7,  # ۷ درصد
-    'MIN_WITHDRAW': 2000000,  # حداقل برداشت ۲ میلیون
+    'MIN_WITHDRAW': 3660000,  # حداقل برداشت ۲ میلیون
     'SUBSCRIPTION_DAYS': 30,  # ۳۰ روز اشتراک
     'GRACE_PERIOD_HOURS': 24,  # ۲۴ ساعت اخطار
     'MAX_BOTS_PER_USER': 10,
