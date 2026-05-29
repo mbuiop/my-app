@@ -64,7 +64,7 @@ SETTINGS = {
     'card_number': "5892101187322777",
     'card_number_display': "5892 1011 8732 2777",
     'card_holder': "مرتضی نیکخو خنجری",
-    'card_bank': "بانک ملی - سپهر",
+    'card_bank': "بانک سپه",
     'subscription_price': 2000000,
     'subscription_price_str': "۲,۰۰۰,۰۰۰ تومان",
     'withdraw_percent': 7,
