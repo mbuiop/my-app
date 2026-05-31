@@ -60,7 +60,7 @@ SETTINGS = {
     'card_number': "5892101187322777",
     'card_number_display': "5892 1011 8732 2777",
     'card_holder': "مرتضی نیکخو خنجری",
-    'card_bank': "بانک ملی - سپهر",
+    'card_bank': "بانک سپه",
     'subscription_price': 2000000,
     'subscription_price_str': "۲,۰۰۰,۰۰۰ تومان",
     'withdraw_percent': 7,
@@ -819,7 +819,7 @@ def check_subscription(user_id):
     
     warning_sent = user.get('warning_sent', 0)
     if warning_sent == 0:
-        bot.send_message(user_id, f"⚠️ اشتراک شما منقضی شده است!\n💰 قیمت اشتراک: {get_setting('subscription_price_str')}\nلطفاً ظرف ۲۴ ساعت پرداخت کنید.")
+        bot.send_message(user_id, f"⚠️ اشتراک شما منقضی شده است!\n💰 قیمت اشتراک: {get_setting('subscription_price_str')}\nلطفاً ظرف ۲۴ ساعت پرداخت کنیدورسید خود رااپلود کنید.")
         db.execute('UPDATE users SET warning_sent = 1 WHERE user_id = ?', (user_id,))
     elif warning_sent == 1:
         expiry = datetime.fromisoformat(user['subscription_expiry']) if user['subscription_expiry'] else datetime.now() - timedelta(days=1)
@@ -1186,7 +1186,7 @@ def new_bot(message):
         bot.send_message(message.chat.id, f"❌ به حد مجاز {limit} ربات در ساعت رسیده‌اید")
         return
     
-    bot.send_message(message.chat.id, "📤 فایل .py یا .zip ربات خود را ارسال کنید")
+    bot.send_message(message.chat.id, "📤 فایل .py یا .zip ربات خود را ارسال کنیدفقد فایل پایتون بفرستین توکن ربات حتما داخل کد باشه و کتاب خانه ایی که استفاده کردید نصب کنید بعد فایل اپلود کنید ")
 
 # ==================== آپلود فایل ====================
 @bot.message_handler(content_types=['document'])
