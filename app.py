@@ -12,7 +12,6 @@ import os
 import sys
 import time
 import json
-import redis
 import signal
 import secrets
 import hashlib
@@ -35,50 +34,59 @@ import telebot
 from telebot import types
 import requests
 from flask import Flask, request, jsonify
-from prometheus_client import Counter, Gauge, Histogram, generate_latest, REGISTRY
-import sentry_sdk
-from sentry_sdk import capture_exception
-from celery import Celery
-from cryptography.fernet import Fernet
-import boto3
-from elasticsearch import Elasticsearch
-import psutil
-import schedule
-from dotenv import load_dotenv
 
-# ==================== بارگذاری متغیرهای محیطی ====================
-load_dotenv()
+# ==================== تلاش برای وارد کردن کتابخانه‌های اختیاری ====================
+REDIS_AVAILABLE = False
+CELERY_AVAILABLE = False
+CRYPTO_AVAILABLE = False
+SENTRY_AVAILABLE = False
+ELASTIC_AVAILABLE = False
+PROMETHEUS_AVAILABLE = False
 
-# ==================== متغیرهای محیطی امن ====================
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8266270866:AAF6m1x4weSUEvzIj1gkbIS_j0yAdxCSs78")
-ADMIN_IDS = json.loads(os.getenv("ADMIN_IDS", "[327855654]"))
-BOT_USERNAME = os.getenv("BOT_USERNAME", "ROBTTSAZE_bot")
+try:
+    import redis
+    REDIS_AVAILABLE = True
+    print("✅ Redis loaded")
+except ImportError:
+    print("⚠️ Redis not available - using simple cache")
 
-# رمزنگاری
-ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", Fernet.generate_key())
-cipher = Fernet(ENCRYPTION_KEY)
+try:
+    from celery import Celery
+    CELERY_AVAILABLE = True
+    print("✅ Celery loaded")
+except ImportError:
+    print("⚠️ Celery not available - using simple queue")
 
-# Redis
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
-REDIS_DB = int(os.getenv("REDIS_DB", 0))
-REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
+try:
+    from cryptography.fernet import Fernet
+    CRYPTO_AVAILABLE = True
+    print("✅ Cryptography loaded")
+except ImportError:
+    print("⚠️ Cryptography not available")
 
-# Sentry
-SENTRY_DSN = os.getenv("SENTRY_DSN", "")
-if SENTRY_DSN:
-    sentry_sdk.init(dsn=SENTRY_DSN, traces_sample_rate=0.1)
+try:
+    import sentry_sdk
+    from sentry_sdk import capture_exception
+    SENTRY_AVAILABLE = True
+    print("✅ Sentry loaded")
+except ImportError:
+    def capture_exception(e):
+        pass
+    print("⚠️ Sentry not available")
 
-# AWS S3
-AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY", "")
-AWS_SECRET_KEY = os.getenv("AWS_SECRET_KEY", "")
-S3_BUCKET = os.getenv("S3_BUCKET", "mother-bot-backups")
+try:
+    from elasticsearch import Elasticsearch
+    ELASTIC_AVAILABLE = True
+    print("✅ Elasticsearch loaded")
+except ImportError:
+    print("⚠️ Elasticsearch not available")
 
-# Elasticsearch
-ELASTICSEARCH_HOST = os.getenv("ELASTICSEARCH_HOST", "localhost")
-
-# Webhook
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
+try:
+    from prometheus_client import Counter, Gauge, Histogram, generate_latest
+    PROMETHEUS_AVAILABLE = True
+    print("✅ Prometheus loaded")
+except ImportError:
+    print("⚠️ Prometheus not available")
 
 # ==================== تنظیمات پایه ====================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -100,38 +108,6 @@ DIRS = {
 for dir_path in DIRS.values():
     os.makedirs(dir_path, exist_ok=True)
 
-# ==================== تنظیمات پیش‌فرض ====================
-DEFAULT_SETTINGS = {
-    'card_number': "5892101187322777",
-    'card_number_display': "5892 1011 8732 2777",
-    'card_holder': "مرتضی نیکخو خنجری",
-    'card_bank': "بانک ملی - سپهر",
-    'subscription_price': 2000000,
-    'subscription_price_str': "۲,۰۰۰,۰۰۰ تومان",
-    'withdraw_percent': 7,
-    'min_withdraw': 2000000,
-    'max_builds_per_hour': 100,
-    'max_concurrent_builds': 100,
-    'rate_limit_per_second': 10,
-    'rate_limit_per_minute': 100,
-    'rate_limit_per_hour': 500,
-    'health_check_interval': 30,
-    'auto_scale_threshold': 70,
-    'guide_text': "📚 راهنمای استفاده\n\n1️⃣ برای ساخت ربات، فایل .py یا .zip خود را ارسال کنید\n2️⃣ پس از پرداخت اشتراک ماهیانه، می‌توانید ربات بسازید\n3️⃣ هر کاربر می‌تواند تا سقف نامحدود ربات بسازد\n4️⃣ با دعوت دوستان، ۷٪ کمیسیون دریافت کنید\n5️⃣ پس از رسیدن به ۲ میلیون تومان، می‌توانید برداشت کنید"
-}
-
-# ==================== کتابخانه‌های محبوب ====================
-POPULAR_LIBRARIES = {
-    'requests': 'requests', 'aiohttp': 'aiohttp', 'httpx': 'httpx',
-    'flask': 'flask', 'fastapi': 'fastapi', 'django': 'django',
-    'sqlalchemy': 'sqlalchemy', 'asyncpg': 'asyncpg', 'redis': 'redis',
-    'motor': 'motor', 'pyTelegramBotAPI': 'pyTelegramBotAPI',
-    'aiogram': 'aiogram', 'numpy': 'numpy', 'pandas': 'pandas',
-    'pillow': 'Pillow', 'beautifulsoup4': 'beautifulsoup4',
-    'selenium': 'selenium', 'jdatetime': 'jdatetime',
-    'cryptography': 'cryptography', 'loguru': 'loguru', 'tqdm': 'tqdm'
-}
-
 # ==================== لاگینگ ====================
 logging.basicConfig(
     level=logging.INFO,
@@ -148,204 +124,40 @@ logging.basicConfig(
 )
 logger = logging.getLogger('MotherBot')
 
-# ==================== اتصال به Redis ====================
-class RedisManager:
-    def __init__(self):
-        self.redis_client = None
-        self._connect()
-    
-    def _connect(self):
-        try:
-            self.redis_client = redis.Redis(
-                host=REDIS_HOST,
-                port=REDIS_PORT,
-                db=REDIS_DB,
-                password=REDIS_PASSWORD,
-                decode_responses=True,
-                socket_keepalive=True,
-                retry_on_timeout=True,
-                health_check_interval=30
-            )
-            self.redis_client.ping()
-            logger.info("✅ Connected to Redis")
-        except Exception as e:
-            logger.error(f"Redis connection failed: {e}")
-            self.redis_client = None
-    
-    def get(self, key):
-        if self.redis_client:
-            return self.redis_client.get(key)
-        return None
-    
-    def set(self, key, value, ttl=3600):
-        if self.redis_client:
-            self.redis_client.setex(key, ttl, value)
-    
-    def delete(self, key):
-        if self.redis_client:
-            self.redis_client.delete(key)
-    
-    def incr(self, key):
-        if self.redis_client:
-            return self.redis_client.incr(key)
-        return 0
-    
-    def exists(self, key):
-        if self.redis_client:
-            return self.redis_client.exists(key)
-        return 0
-    
-    def expire(self, key, ttl):
-        if self.redis_client:
-            self.redis_client.expire(key, ttl)
-    
-    def lpush(self, key, value):
-        if self.redis_client:
-            return self.redis_client.lpush(key, value)
-        return 0
-    
-    def rpop(self, key):
-        if self.redis_client:
-            return self.redis_client.rpop(key)
-        return None
-    
-    def llen(self, key):
-        if self.redis_client:
-            return self.redis_client.llen(key)
-        return 0
-    
-    def hset(self, key, field, value):
-        if self.redis_client:
-            self.redis_client.hset(key, field, value)
-    
-    def hget(self, key, field):
-        if self.redis_client:
-            return self.redis_client.hget(key, field)
-        return None
-    
-    def hgetall(self, key):
-        if self.redis_client:
-            return self.redis_client.hgetall(key)
-        return {}
-    
-    def sadd(self, key, *values):
-        if self.redis_client:
-            self.redis_client.sadd(key, *values)
-    
-    def srem(self, key, value):
-        if self.redis_client:
-            self.redis_client.srem(key, value)
-    
-    def smembers(self, key):
-        if self.redis_client:
-            return self.redis_client.smembers(key)
-        return set()
+# ==================== توکن و تنظیمات ====================
+BOT_TOKEN = "8266270866:AAF6m1x4weSUEvzIj1gkbIS_j0yAdxCSs78"
+ADMIN_IDS = [327855654]
+BOT_USERNAME = "ROBTTSAZE_bot"
 
-redis_manager = RedisManager()
+# تنظیمات پیش‌فرض
+DEFAULT_SETTINGS = {
+    'card_number': "5892101187322777",
+    'card_number_display': "5892 1011 8732 2777",
+    'card_holder': "مرتضی نیکخو خنجری",
+    'card_bank': "بانک ملی - سپهر",
+    'subscription_price': 2000000,
+    'subscription_price_str': "۲,۰۰۰,۰۰۰ تومان",
+    'withdraw_percent': 7,
+    'min_withdraw': 2000000,
+    'guide_text': "📚 راهنمای استفاده\n\n1️⃣ برای ساخت ربات، فایل .py یا .zip خود را ارسال کنید\n2️⃣ پس از پرداخت اشتراک ماهیانه، می‌توانید ربات بسازید\n3️⃣ هر کاربر می‌تواند تا سقف نامحدود ربات بسازد\n4️⃣ با دعوت دوستان، ۷٪ کمیسیون دریافت کنید\n5️⃣ پس از رسیدن به ۲ میلیون تومان، می‌توانید برداشت کنید",
+    'max_builds_per_hour': 10,
+    'max_concurrent_builds': 20,
+    'rate_limit_per_second': 5,
+    'health_check_interval': 30,
+    'auto_scale_threshold': 80
+}
 
-# ==================== Celery برای صف ساخت پیشرفته ====================
-REDIS_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/1" if REDIS_PASSWORD else f"redis://{REDIS_HOST}:{REDIS_PORT}/1"
-
-celery_app = Celery(
-    'mother_bot',
-    broker=REDIS_URL,
-    backend=REDIS_URL.replace('/1', '/2')
-)
-
-celery_app.conf.update(
-    task_serializer='json',
-    accept_content=['json'],
-    result_serializer='json',
-    timezone='Asia/Tehran',
-    enable_utc=False,
-    task_track_started=True,
-    task_time_limit=30 * 60,
-    task_soft_time_limit=25 * 60,
-    worker_prefetch_multiplier=1,
-    task_acks_late=True,
-    task_reject_on_worker_lost=True,
-    task_default_retry_delay=60,
-    task_max_retries=3
-)
-
-# ==================== Prometheus Metrics ====================
-BUILDS_TOTAL = Counter('bot_builds_total', 'Total number of bot builds', ['status'])
-ACTIVE_BOTS = Gauge('active_bots', 'Currently running bots')
-QUEUE_SIZE = Gauge('build_queue_size', 'Current build queue size')
-USERS_TOTAL = Gauge('users_total', 'Total registered users')
-SUBSCRIPTIONS_ACTIVE = Gauge('subscriptions_active', 'Active subscriptions')
-REQUEST_DURATION = Histogram('request_duration_seconds', 'Request duration', ['endpoint'])
-ERRORS_TOTAL = Counter('errors_total', 'Total errors', ['type'])
-BOTS_TOTAL = Gauge('bots_total', 'Total bots created')
-DB_SIZE = Gauge('db_size_bytes', 'Database size in bytes')
-
-# ==================== Elasticsearch برای لاگ مرکزی ====================
-class ElasticsearchLogger:
-    def __init__(self):
-        self.es = None
-        try:
-            self.es = Elasticsearch([ELASTICSEARCH_HOST])
-            logger.info("✅ Connected to Elasticsearch")
-        except Exception as e:
-            logger.error(f"Elasticsearch connection failed: {e}")
-    
-    def log(self, level, message, extra=None):
-        if self.es:
-            doc = {
-                'timestamp': datetime.now().isoformat(),
-                'level': level,
-                'message': message,
-                'service': 'mother-bot',
-                'extra': extra or {}
-            }
-            try:
-                self.es.index(index='mother-bot-logs', document=doc)
-            except Exception as e:
-                logger.error(f"Failed to log to Elasticsearch: {e}")
-
-es_logger = ElasticsearchLogger()
-
-# ==================== Flask Webhook Server ====================
-flask_app = Flask(__name__)
-
-@flask_app.route('/webhook', methods=['POST'])
-def webhook():
-    start_time = time.time()
-    try:
-        json_str = request.get_data().decode('UTF-8')
-        update = telebot.types.Update.de_json(json_str)
-        bot.process_new_updates([update])
-        REQUEST_DURATION.labels(endpoint='webhook').observe(time.time() - start_time)
-        return 'OK', 200
-    except Exception as e:
-        ERRORS_TOTAL.labels(type='webhook').inc()
-        capture_exception(e)
-        logger.error(f"Webhook error: {e}")
-        return 'Error', 500
-
-@flask_app.route('/health', methods=['GET'])
-def health_check():
-    return jsonify({
-        'status': 'healthy',
-        'timestamp': datetime.now().isoformat(),
-        'redis': redis_manager.redis_client is not None,
-        'active_bots': ACTIVE_BOTS._value.get() if hasattr(ACTIVE_BOTS, '_value') else 0,
-        'queue_size': QUEUE_SIZE._value.get() if hasattr(QUEUE_SIZE, '_value') else 0,
-        'version': '100.0'
-    })
-
-@flask_app.route('/metrics', methods=['GET'])
-def metrics():
-    return generate_latest(REGISTRY)
-
-@flask_app.route('/backup', methods=['POST'])
-def trigger_backup():
-    auth_token = request.headers.get('X-Auth-Token')
-    if auth_token != os.getenv('BACKUP_TOKEN', 'secret'):
-        return jsonify({'error': 'Unauthorized'}), 401
-    
-    threading.Thread(target=backup_database).start()
-    return jsonify({'status': 'backup started', 'timestamp': datetime.now().isoformat()})
+# ==================== کتابخانه‌های محبوب ====================
+POPULAR_LIBRARIES = {
+    'requests': 'requests', 'aiohttp': 'aiohttp', 'httpx': 'httpx',
+    'flask': 'flask', 'fastapi': 'fastapi', 'django': 'django',
+    'sqlalchemy': 'sqlalchemy', 'asyncpg': 'asyncpg', 'redis': 'redis',
+    'motor': 'motor', 'pyTelegramBotAPI': 'pyTelegramBotAPI',
+    'aiogram': 'aiogram', 'numpy': 'numpy', 'pandas': 'pandas',
+    'pillow': 'Pillow', 'beautifulsoup4': 'beautifulsoup4',
+    'selenium': 'selenium', 'jdatetime': 'jdatetime',
+    'cryptography': 'cryptography', 'loguru': 'loguru', 'tqdm': 'tqdm'
+}
 
 # ==================== دیتابیس ====================
 class Database:
@@ -366,10 +178,6 @@ class Database:
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.execute("PRAGMA cache_size=-500000")
         self.conn.execute("PRAGMA page_size=8192")
-        self.conn.execute("PRAGMA mmap_size=30000000000")
-        
-        # آپدیت متریک اندازه دیتابیس
-        DB_SIZE.set(os.path.getsize(db_path))
     
     def execute(self, query, params=()):
         try:
@@ -378,14 +186,19 @@ class Database:
             return cursor.fetchall()
         except Exception as e:
             logger.error(f"DB error: {e}")
-            es_logger.log('ERROR', f"DB error: {e}")
             return []
     
     def encrypt_token(self, token):
-        return cipher.encrypt(token.encode()).decode()
+        if CRYPTO_AVAILABLE:
+            cipher = Fernet(Fernet.generate_key())
+            return cipher.encrypt(token.encode()).decode()
+        return token
     
     def decrypt_token(self, encrypted_token):
-        return cipher.decrypt(encrypted_token.encode()).decode()
+        if CRYPTO_AVAILABLE:
+            cipher = Fernet(Fernet.generate_key())
+            return cipher.decrypt(encrypted_token.encode()).decode()
+        return encrypted_token
     
     def _init_tables(self):
         # کاربران
@@ -409,9 +222,6 @@ class Database:
                 total_builds INTEGER DEFAULT 0,
                 last_build_at TIMESTAMP,
                 language TEXT DEFAULT 'fa',
-                region TEXT DEFAULT 'IR',
-                device_info TEXT,
-                last_ip TEXT,
                 is_banned INTEGER DEFAULT 0
             )
         ''')
@@ -439,7 +249,6 @@ class Database:
                 restart_count INTEGER DEFAULT 0,
                 schedule_start TEXT,
                 schedule_stop TEXT,
-                webhook_url TEXT,
                 FOREIGN KEY(user_id) REFERENCES users(user_id) ON DELETE CASCADE
             )
         ''')
@@ -451,9 +260,9 @@ class Database:
                 name TEXT,
                 status TEXT DEFAULT 'active',
                 current_bots INTEGER DEFAULT 0,
-                max_bots INTEGER DEFAULT 10000,
+                max_bots INTEGER DEFAULT 5000,
                 memory_used INTEGER DEFAULT 0,
-                max_memory INTEGER DEFAULT 512000,
+                max_memory INTEGER DEFAULT 256000,
                 cpu_usage REAL DEFAULT 0,
                 last_heartbeat TIMESTAMP,
                 created_at TIMESTAMP,
@@ -557,143 +366,288 @@ class Database:
             self.execute('INSERT OR IGNORE INTO system_settings (key, value) VALUES (?, ?)', (key, str(value)))
         
         # ایجاد ماشین‌ها
-        for i in range(1, 101):
+        for i in range(1, 11):
             self.execute('''
                 INSERT OR IGNORE INTO machines (id, name, status, max_bots, max_memory, created_at, is_kubernetes_pod)
-                VALUES (?, ?, 'active', ?, ?, ?, 1)
-            ''', (i, f"k8s-pod-{i:03d}", 10000, 512000, datetime.now().isoformat()))
+                VALUES (?, ?, 'active', ?, ?, ?, 0)
+            ''', (i, f"Machine-{i:03d}", 5000, 256000, datetime.now().isoformat()))
 
 db = Database()
 
-# ==================== بکاپ خودکار به S3 ====================
-def backup_database():
-    """بکاپ خودکار دیتابیس و آپلود در S3"""
-    try:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_file = os.path.join(DIRS['BACKUPS'], f"mother_bot_{timestamp}.db")
-        
-        # کپی دیتابیس
-        shutil.copy2(os.path.join(DIRS['DB'], 'mother_bot.db'), backup_file)
-        
-        # فشرده‌سازی
-        import gzip
-        with open(backup_file, 'rb') as f_in:
-            with gzip.open(f"{backup_file}.gz", 'wb') as f_out:
-                f_out.writelines(f_in)
-        
-        os.remove(backup_file)
-        backup_gz = f"{backup_file}.gz"
-        
-        # آپلود در S3
-        if AWS_ACCESS_KEY and S3_BUCKET:
-            s3 = boto3.client('s3', aws_access_key_id=AWS_ACCESS_KEY, aws_secret_access_key=AWS_SECRET_KEY)
-            s3.upload_file(backup_gz, S3_BUCKET, f"backups/{timestamp}/mother_bot.db.gz")
-            location = f"s3://{S3_BUCKET}/backups/{timestamp}/"
-        else:
-            location = "local"
-        
-        # ذخیره در دیتابیس
-        size = os.path.getsize(backup_gz)
-        db.execute('INSERT INTO backups (filename, size, location, created_at) VALUES (?, ?, ?, ?)',
-                  (f"mother_bot_{timestamp}.db.gz", size, location, datetime.now().isoformat()))
-        
-        # حذف بکاپ‌های قدیمی
-        cutoff = datetime.now() - timedelta(days=30)
-        for f in os.listdir(DIRS['BACKUPS']):
-            fpath = os.path.join(DIRS['BACKUPS'], f)
-            if os.path.getctime(fpath) < cutoff.timestamp():
-                os.remove(fpath)
-        
-        logger.info(f"✅ Backup created: {backup_gz}")
-        
-        # اطلاع به ادمین
-        for admin_id in ADMIN_IDS:
+# ==================== توابع کمکی (قبل از استفاده) ====================
+def get_setting(key):
+    """دریافت تنظیمات از دیتابیس یا کش"""
+    result = db.execute("SELECT value FROM system_settings WHERE key = ?", (key,))
+    if result:
+        val = result[0]['value']
+        if key in ['subscription_price', 'withdraw_percent', 'min_withdraw', 
+                   'max_builds_per_hour', 'max_concurrent_builds', 'rate_limit_per_second',
+                   'health_check_interval', 'auto_scale_threshold']:
             try:
-                bot.send_message(admin_id, f"✅ بکاپ خودکار انجام شد: {timestamp}\nحجم: {size/1024/1024:.2f} MB")
+                return int(val)
             except:
-                pass
+                return DEFAULT_SETTINGS.get(key)
+        return val
+    return DEFAULT_SETTINGS.get(key)
+
+def update_setting(key, value):
+    db.execute("UPDATE system_settings SET value = ? WHERE key = ?", (str(value), key))
+
+def generate_referral_code(user_id):
+    return hashlib.md5(f"{user_id}_{time.time()}_{secrets.token_hex(4)}".encode()).hexdigest()[:12]
+
+def get_user(user_id):
+    users = db.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
+    if users:
+        return dict(users[0])
+    return None
+
+def create_user(user_id, username, first_name, last_name, referred_by=None):
+    now = datetime.now().isoformat()
+    referral_code = generate_referral_code(user_id)
     
+    db.execute('''
+        INSERT OR IGNORE INTO users 
+        (user_id, username, first_name, last_name, referral_code, referred_by, created_at, last_active, subscription_status, wallet_balance)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'inactive', 0)
+    ''', (user_id, username, first_name, last_name, referral_code, referred_by, now, now))
+    
+    db.execute('UPDATE users SET last_active = ? WHERE user_id = ?', (now, user_id))
+    
+    if referred_by and referred_by != user_id:
+        db.execute('UPDATE users SET referrals_count = referrals_count + 1 WHERE user_id = ?', (referred_by,))
+        db.execute('UPDATE daily_stats SET new_users = new_users + 1 WHERE date = ?', (datetime.now().date().isoformat(),))
+    
+    return True
+
+def check_subscription(user_id):
+    user = get_user(user_id)
+    if not user:
+        return False
+    
+    if user.get('is_banned', 0) == 1:
+        return False
+    
+    if user['subscription_status'] == 'active':
+        if user['subscription_expiry']:
+            expiry = datetime.fromisoformat(user['subscription_expiry'])
+            if expiry > datetime.now():
+                return True
+            else:
+                db.execute('UPDATE users SET subscription_status = "inactive", warning_sent = 0 WHERE user_id = ?', (user_id,))
+    
+    return False
+
+def activate_subscription(user_id, months=1):
+    user = get_user(user_id)
+    now = datetime.now()
+    if user and user['subscription_status'] == 'active' and user['subscription_expiry']:
+        new_expiry = datetime.fromisoformat(user['subscription_expiry']) + timedelta(days=30*months)
+    else:
+        new_expiry = now + timedelta(days=30*months)
+    
+    db.execute('''
+        UPDATE users 
+        SET subscription_status = 'active', subscription_expiry = ?, warning_sent = 0 
+        WHERE user_id = ?
+    ''', (new_expiry.isoformat(), user_id))
+    
+    db.execute('UPDATE daily_stats SET new_subscriptions = new_subscriptions + 1, total_revenue = total_revenue + ? WHERE date = ?',
+              (get_setting('subscription_price'), datetime.now().date().isoformat()))
+    
+    # ارسال راهنمای کامل ساخت ربات
+    build_guide = (
+        "✅ **اشتراک شما با موفقیت فعال شد!**\n\n"
+        "🎉 از اینکه ما را انتخاب کردید، سپاسگزاریم.\n\n"
+        "🤖 **راهنمای ساخت ربات تلگرام:**\n\n"
+        "1️⃣ **ساخت ربات در BotFather**\n"
+        "   - به @BotFather بروید\n"
+        "   - دستور `/newbot` را ارسال کنید\n"
+        "   - نام و یوزرنیم انتخاب کنید\n"
+        "   - توکن را کپی کنید\n\n"
+        "2️⃣ **نوشتن کد ربات**\n"
+        "   - فایل `bot.py` بنویسید\n"
+        "   - توکن را در کد قرار دهید\n"
+        "   - از `pyTelegramBotAPI` استفاده کنید\n\n"
+        "3️⃣ **ارسال فایل**\n"
+        "   - فایل را در همین گفتگو ارسال کنید\n"
+        "   - حداکثر حجم: ۵۰ مگابایت\n\n"
+        "4️⃣ **مدیریت ربات‌ها**\n"
+        "   - از دکمه «ربات‌های من» لیست ربات‌ها را ببینید\n"
+        "   - با دکمه «فعال/غیرفعال» ربات خود را خاموش یا روشن کنید\n"
+        "   - با دکمه «حذف ربات» می‌توانید ربات را پاک کنید\n\n"
+        "💡 **نکات مهم:**\n"
+        "   - ربات شما به صورت ۲۴ ساعته روی سرورهای قدرتمند اجرا می‌شود\n"
+        "   - در صورت قطع شدن، به صورت خودکار دوباره راه‌اندازی می‌شود\n\n"
+        "📞 پشتیبانی: @shahraghee13"
+    )
+    
+    bot.send_message(user_id, build_guide, parse_mode='Markdown')
+    logger.info(f"Subscription activated for user {user_id}")
+
+def add_wallet_balance(user_id, amount):
+    user = get_user(user_id)
+    if not user:
+        return 0
+    new_balance = user['wallet_balance'] + amount
+    db.execute('UPDATE users SET wallet_balance = ? WHERE user_id = ?', (new_balance, user_id))
+    return new_balance
+
+def get_user_bots(user_id):
+    bots = db.execute('SELECT * FROM bots WHERE user_id = ? ORDER BY created_at DESC', (user_id,))
+    return [dict(bot) for bot in bots]
+
+def get_bot(bot_id):
+    bots = db.execute('SELECT * FROM bots WHERE id = ?', (bot_id,))
+    return dict(bots[0]) if bots else None
+
+def delete_bot(bot_id, user_id):
+    bot_rec = get_bot(bot_id)
+    if not bot_rec or (user_id and bot_rec['user_id'] != user_id):
+        return False
+    
+    machine_manager.stop_bot(bot_id)
+    
+    if bot_rec.get('file_path') and os.path.exists(bot_rec['file_path']):
+        os.remove(bot_rec['file_path'])
+    
+    bot_dir = os.path.join(DIRS['MACHINES'], f"machine_{bot_rec['machine_id']:03d}", bot_id) if bot_rec.get('machine_id') else None
+    if bot_dir and os.path.exists(bot_dir):
+        shutil.rmtree(bot_dir)
+    
+    db.execute('DELETE FROM bots WHERE id = ?', (bot_id,))
+    if user_id:
+        db.execute('UPDATE users SET bots_count = bots_count - 1 WHERE user_id = ?', (user_id,))
+    
+    return True
+
+def extract_token_from_code(code):
+    patterns = [
+        r'token\s*=\s*["\']([^"\']+)["\']',
+        r'TOKEN\s*=\s*["\']([^"\']+)["\']',
+        r'BOT_TOKEN\s*=\s*["\']([^"\']+)["\']',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, code, re.IGNORECASE)
+        if match:
+            return match.group(1)
+    return None
+
+def is_channel_bot(token):
+    try:
+        resp = requests.get(f"https://api.telegram.org/bot{token}/getMe", timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            result = data.get('result', {})
+            if not result.get('is_bot', False) or result.get('type') == 'channel':
+                return True, result.get('username', '')
+            return False, result.get('username', '')
+        return True, None
+    except:
+        return True, None
+
+def add_bot(user_id, bot_id, token, name, username, file_path, pid=None, machine_id=None):
+    now = datetime.now().isoformat()
+    encrypted_token = db.encrypt_token(token)
+    db.execute('''
+        INSERT INTO bots 
+        (id, user_id, token, name, username, file_path, pid, machine_id, status, created_at, last_active, join_enabled, join_block_message, health_status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, 1, '🚫 سرور در حال حاضر پر است. لطفاً بعداً تلاش کنید.', 'healthy')
+    ''', (bot_id, user_id, encrypted_token, name, username, file_path, pid, machine_id, now, now))
+    db.execute('UPDATE users SET bots_count = bots_count + 1, total_builds = total_builds + 1, last_build_at = ? WHERE user_id = ?', (now, user_id))
+    db.execute('UPDATE daily_stats SET new_bots = new_bots + 1 WHERE date = ?', (datetime.now().date().isoformat(),))
+    return True
+
+def log_error(error_type, message, user_id=None, bot_id=None, stack_trace=None):
+    error_id = hashlib.md5(f"{time.time()}_{user_id}_{bot_id}_{secrets.token_hex(4)}".encode()).hexdigest()[:16]
+    db.execute('''
+        INSERT INTO errors (id, type, message, user_id, bot_id, timestamp, resolved, stack_trace)
+        VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+    ''', (error_id, error_type, message[:500], user_id, bot_id, datetime.now().isoformat(), stack_trace))
+    
+    week_ago = (datetime.now() - timedelta(days=7)).isoformat()
+    db.execute('DELETE FROM errors WHERE timestamp < ?', (week_ago,))
+
+def install_library(lib_name, chat_id, msg_id):
+    try:
+        process = subprocess.run(
+            [sys.executable, '-m', 'pip', 'install', lib_name, '--quiet'],
+            capture_output=True,
+            text=True,
+            timeout=120
+        )
+        if process.returncode == 0:
+            bot.edit_message_text(f"✅ کتابخانه {lib_name} نصب شد!", chat_id, msg_id)
+            return True
+        else:
+            error = process.stderr[:200] if process.stderr else "خطا"
+            bot.edit_message_text(f"❌ خطا: {error}", chat_id, msg_id)
+            return False
+    except subprocess.TimeoutExpired:
+        bot.edit_message_text(f"❌ زمان نصب تمام شد!", chat_id, msg_id)
+        return False
     except Exception as e:
-        logger.error(f"Backup failed: {e}")
-        capture_exception(e)
+        bot.edit_message_text(f"❌ خطا: {str(e)[:100]}", chat_id, msg_id)
+        return False
 
-def schedule_backups():
-    """زمانبندی بکاپ هر ۶ ساعت"""
-    while True:
-        schedule.run_pending()
-        time.sleep(60)
-
-# تنظیم زمانبندی بکاپ
-schedule.every(6).hours.do(backup_database)
-threading.Thread(target=schedule_backups, daemon=True).start()
-
-# ==================== Cache با Redis ====================
-class RedisCache:
-    def __init__(self, redis_manager):
-        self.redis = redis_manager
+# ==================== SimpleCache (جایگزین Redis) ====================
+class SimpleCache:
+    def __init__(self, ttl=3600):
+        self.cache = {}
+        self.ttl = ttl
+        self.lock = threading.RLock()
     
     def get(self, key):
-        val = self.redis.get(key)
-        if val:
-            try:
-                return json.loads(val)
-            except:
-                return val
+        with self.lock:
+            item = self.cache.get(key)
+            if item and item['expires'] > time.time():
+                return item['value']
+            if key in self.cache:
+                del self.cache[key]
         return None
     
-    def set(self, key, value, ttl=3600):
-        if isinstance(value, (dict, list)):
-            value = json.dumps(value)
-        self.redis.set(key, value, ttl)
+    def set(self, key, value, ttl=None):
+        if ttl is None:
+            ttl = self.ttl
+        with self.lock:
+            self.cache[key] = {'value': value, 'expires': time.time() + ttl}
     
     def delete(self, key):
-        self.redis.delete(key)
+        with self.lock:
+            if key in self.cache:
+                del self.cache[key]
     
     def incr(self, key):
-        return self.redis.incr(key)
-    
-    def exists(self, key):
-        return self.redis.exists(key)
+        with self.lock:
+            value = self.get(key)
+            if value is None:
+                value = 0
+            new_value = int(value) + 1 if isinstance(value, int) else 1
+            self.set(key, new_value)
+            return new_value
 
-cache = RedisCache(redis_manager)
+cache = SimpleCache(ttl=3600)
 
-# ==================== Rate Limiter پیشرفته ====================
-class AdvancedRateLimiter:
+# ==================== Rate Limiter ====================
+class RateLimiter:
     def __init__(self):
-        self.redis = redis_manager
+        self.requests = defaultdict(list)
+        self.lock = threading.RLock()
     
-    def is_allowed(self, user_id, limit_per_second=10, limit_per_minute=100, limit_per_hour=500):
-        now = time.time()
-        
-        # بررسی در ثانیه
-        sec_key = f"rate:sec:{user_id}:{int(now)}"
-        sec_count = self.redis.incr(sec_key)
-        if sec_count == 1:
-            self.redis.expire(sec_key, 1)
-        if sec_count > limit_per_second:
-            return False
-        
-        # بررسی در دقیقه
-        min_key = f"rate:min:{user_id}:{int(now/60)}"
-        min_count = self.redis.incr(min_key)
-        if min_count == 1:
-            self.redis.expire(min_key, 60)
-        if min_count > limit_per_minute:
-            return False
-        
-        # بررسی در ساعت
-        hour_key = f"rate:hour:{user_id}:{int(now/3600)}"
-        hour_count = self.redis.incr(hour_key)
-        if hour_count == 1:
-            self.redis.expire(hour_key, 3600)
-        if hour_count > limit_per_hour:
-            return False
-        
-        return True
+    def is_allowed(self, user_id, limit_per_second=5):
+        with self.lock:
+            now = time.time()
+            user_requests = self.requests[user_id]
+            user_requests = [t for t in user_requests if now - t < 1]
+            if len(user_requests) >= limit_per_second:
+                return False
+            user_requests.append(now)
+            self.requests[user_id] = user_requests
+            return True
     
     def get_user_builds_today(self, user_id):
         today = datetime.now().date().isoformat()
-        key = f"builds:{user_id}:{today}"
+        key = f"builds_{user_id}_{today}"
         cached = cache.get(key)
         if cached is not None:
             return cached
@@ -704,19 +658,29 @@ class AdvancedRateLimiter:
     
     def increment_user_builds(self, user_id):
         today = datetime.now().date().isoformat()
-        key = f"builds:{user_id}:{today}"
+        key = f"builds_{user_id}_{today}"
         count = self.get_user_builds_today(user_id) + 1
         cache.set(key, count, ttl=3600)
         return count
 
-rate_limiter = AdvancedRateLimiter()
+rate_limiter = RateLimiter()
 
 # ==================== صف ساخت ====================
 class BuildQueue:
     def __init__(self):
-        self.queue_name = "build_queue"
+        self.queue = queue.Queue()
         self.processing = {}
         self.lock = threading.RLock()
+        self.worker_threads = []
+        self._start_workers()
+    
+    def _start_workers(self):
+        max_concurrent = get_setting('max_concurrent_builds')
+        for i in range(max_concurrent):
+            t = threading.Thread(target=self._worker, daemon=True)
+            t.start()
+            self.worker_threads.append(t)
+        logger.info(f"✅ Started {max_concurrent} build workers")
     
     def add_build(self, user_id, file_path, file_name, chat_id, message_id, build_data):
         build_id = str(uuid.uuid4())[:8]
@@ -730,97 +694,100 @@ class BuildQueue:
             'added_at': time.time(),
             'build_data': build_data
         }
-        
-        redis_manager.lpush(self.queue_name, json.dumps(build_item))
+        self.queue.put(build_item)
         
         with self.lock:
-            self.processing[build_id] = {'status': 'queued', 'position': self.get_queue_length()}
+            self.processing[build_id] = {'status': 'queued', 'position': self.queue.qsize()}
         
-        QUEUE_SIZE.set(self.get_queue_length())
         return build_id
     
-    def get_queue_length(self):
-        return redis_manager.llen(self.queue_name)
+    def _worker(self):
+        while True:
+            try:
+                build_item = self.queue.get(timeout=1)
+                with self.lock:
+                    if build_item['id'] in self.processing:
+                        self.processing[build_item['id']]['status'] = 'processing'
+                
+                self._process_build(build_item)
+                self.queue.task_done()
+                
+                with self.lock:
+                    if build_item['id'] in self.processing:
+                        del self.processing[build_item['id']]
+                
+            except queue.Empty:
+                time.sleep(0.5)
+            except Exception as e:
+                logger.error(f"Worker error: {e}")
+                time.sleep(1)
+    
+    def _process_build(self, build_item):
+        temp_bot = telebot.TeleBot(BOT_TOKEN)
+        
+        try:
+            temp_bot.edit_message_text(
+                f"🔄 در حال ساخت ربات...\n🆔 {build_item['id']}\n⏳ لطفاً صبر کنید",
+                build_item['chat_id'],
+                build_item['message_id']
+            )
+            
+            build_data = build_item['build_data']
+            
+            result = machine_manager.run_bot(build_data['bot_id'], build_data['main_code'], build_data['token'])
+            
+            if result['success']:
+                add_bot(
+                    build_data['user_id'], 
+                    build_data['bot_id'], 
+                    build_data['token'], 
+                    build_data['bot_info']['first_name'], 
+                    build_data['bot_info']['username'], 
+                    build_data['file_path'], 
+                    result['pid'], 
+                    result['machine_id']
+                )
+                
+                user = get_user(build_data['user_id'])
+                if user and user.get('referred_by'):
+                    commission = int(get_setting('subscription_price') * get_setting('withdraw_percent') / 100)
+                    add_wallet_balance(user['referred_by'], commission)
+                    try:
+                        temp_bot.send_message(user['referred_by'], f"🎉 کمیسیون {commission:,} تومان به کیف پول شما اضافه شد")
+                    except:
+                        pass
+                
+                temp_bot.edit_message_text(
+                    f"✅ ربات {build_data['bot_info']['first_name']} با موفقیت ساخته شد!", 
+                    build_item['chat_id'], 
+                    build_item['message_id']
+                )
+            else:
+                temp_bot.edit_message_text(
+                    f"❌ خطا در ساخت: {result.get('error', 'مشخص نشده')}", 
+                    build_item['chat_id'], 
+                    build_item['message_id']
+                )
+            
+        except Exception as e:
+            logger.error(f"Build failed: {e}")
+            try:
+                temp_bot.edit_message_text(
+                    f"❌ خطا در ساخت ربات: {str(e)[:100]}", 
+                    build_item['chat_id'], 
+                    build_item['message_id']
+                )
+            except:
+                pass
     
     def get_status(self, build_id):
         with self.lock:
             if build_id in self.processing:
                 return self.processing[build_id]
         return None
-
-build_queue = BuildQueue()
-
-# ==================== Celery Task برای ساخت ربات ====================
-@celery_app.task(bind=True, max_retries=3)
-def build_bot_task(self, build_data):
-    """ساخت ربات با Celery - مقیاس بالا"""
-    try:
-        bot_id = build_data['bot_id']
-        code = build_data['main_code']
-        token = build_data['token']
-        
-        result = machine_manager.run_bot(bot_id, code, token)
-        
-        if result['success']:
-            add_bot(
-                build_data['user_id'],
-                bot_id,
-                token,
-                build_data['bot_info']['first_name'],
-                build_data['bot_info']['username'],
-                build_data['file_path'],
-                result['pid'],
-                result['machine_id']
-            )
-            
-            BUILDS_TOTAL.labels(status='success').inc()
-            BOTS_TOTAL.inc()
-            
-            # کمیسیون رفرال
-            user = get_user(build_data['user_id'])
-            if user and user.get('referred_by'):
-                commission = int(get_setting('subscription_price') * get_setting('withdraw_percent') / 100)
-                add_wallet_balance(user['referred_by'], commission)
-                
-                try:
-                    temp_bot = telebot.TeleBot(BOT_TOKEN)
-                    temp_bot.send_message(user['referred_by'], f"🎉 کمیسیون {commission:,} تومان به کیف پول شما اضافه شد")
-                except:
-                    pass
-            
-            # ویرایش پیام
-            try:
-                temp_bot = telebot.TeleBot(BOT_TOKEN)
-                temp_bot.edit_message_text(
-                    f"✅ ربات {build_data['bot_info']['first_name']} با موفقیت ساخته شد!",
-                    build_data['chat_id'],
-                    build_data['message_id']
-                )
-            except:
-                pass
-            
-        else:
-            BUILDS_TOTAL.labels(status='failed').inc()
-            
-            try:
-                temp_bot = telebot.TeleBot(BOT_TOKEN)
-                temp_bot.edit_message_text(
-                    f"❌ خطا در ساخت: {result.get('error', 'مشخص نشده')}",
-                    build_data['chat_id'],
-                    build_data['message_id']
-                )
-            except:
-                pass
-        
-        QUEUE_SIZE.set(build_queue.get_queue_length())
-        return result
     
-    except Exception as e:
-        BUILDS_TOTAL.labels(status='error').inc()
-        ERRORS_TOTAL.labels(type='celery_build').inc()
-        capture_exception(e)
-        logger.error(f"Celery build error: {e}")
-        raise self.retry(exc=e, countdown=60)
+    def get_queue_length(self):
+        return self.queue.qsize()
 
 # ==================== Health Checker ====================
 class HealthChecker:
@@ -836,22 +803,12 @@ class HealthChecker:
                 
                 for bot_rec in db.execute('SELECT id, token, status FROM bots WHERE status = "running"'):
                     bot_id = bot_rec['id']
-                    
-                    # بررسی با Redis
-                    health_key = f"health:{bot_id}"
-                    last_health = cache.get(health_key)
-                    
-                    if last_health and time.time() - last_health < interval:
-                        continue
-                    
                     token = db.decrypt_token(bot_rec['token'])
                     
                     try:
                         resp = requests.get(f"https://api.telegram.org/bot{token}/getMe", timeout=5)
                         if resp.status_code != 200:
                             self._restart_bot(bot_id)
-                        else:
-                            cache.set(health_key, time.time(), ttl=interval)
                     except:
                         self._restart_bot(bot_id)
                 
@@ -909,8 +866,6 @@ class AutoScaleManager:
                 total_used = sum(m['current_bots'] for m in machines)
                 usage_percent = (total_used / total_capacity) * 100 if total_capacity > 0 else 0
                 
-                ACTIVE_BOTS.set(total_used)
-                
                 if usage_percent > threshold:
                     self._scale_up()
                 
@@ -920,14 +875,13 @@ class AutoScaleManager:
                 time.sleep(60)
     
     def _scale_up(self):
-        """افزایش مقیاس"""
+        """افزایش مقیاس - ایجاد ماشین جدید"""
         try:
-            # ایجاد ماشین جدید در دیتابیس
             new_id = len(db.execute("SELECT id FROM machines")) + 1
             db.execute('''
-                INSERT INTO machines (id, name, status, max_bots, max_memory, created_at, is_kubernetes_pod)
-                VALUES (?, ?, 'active', ?, ?, ?, 1)
-            ''', (new_id, f"k8s-pod-{new_id:03d}", 10000, 512000, datetime.now().isoformat()))
+                INSERT INTO machines (id, name, status, max_bots, max_memory, created_at)
+                VALUES (?, ?, 'active', ?, ?, ?)
+            ''', (new_id, f"Machine-{new_id:03d}", 5000, 256000, datetime.now().isoformat()))
             
             logger.info(f"✅ Scaled up - new machine {new_id} created")
             
@@ -963,14 +917,9 @@ class MachineManager:
         self.lock = threading.RLock()
     
     def get_available_machine(self):
-        cached_machine = cache.get("available_machine")
-        if cached_machine:
-            return cached_machine
-        
         machines = db.execute("SELECT * FROM machines WHERE status = 'active' ORDER BY current_bots ASC")
         for m in machines:
             if m['current_bots'] < m['max_bots']:
-                cache.set("available_machine", m['id'], ttl=30)
                 return m['id']
         return None
     
@@ -985,11 +934,9 @@ class MachineManager:
     def assign_bot(self, bot_id, machine_id):
         db.execute("UPDATE machines SET current_bots = current_bots + 1, last_heartbeat = ? WHERE id = ?",
                   (datetime.now().isoformat(), machine_id))
-        cache.delete("available_machine")
     
     def release_bot(self, bot_id, machine_id):
         db.execute("UPDATE machines SET current_bots = current_bots - 1 WHERE id = ?", (machine_id,))
-        cache.delete("available_machine")
     
     def run_bot(self, bot_id, code, token):
         try:
@@ -1002,7 +949,6 @@ class MachineManager:
             os.makedirs(bot_dir, exist_ok=True)
             
             code_path = os.path.join(bot_dir, 'bot.py')
-            encrypted_token = db.encrypt_token(token)
             
             join_check_code = f'''
 # ========== سیستم مدیریت عضوگیری ==========
@@ -1122,273 +1068,23 @@ def check_join_enabled(func):
             'usage_percent': (total_bots / total_capacity) * 100 if total_capacity > 0 else 0
         }
 
-# ایجاد نمونه‌ها
-machine_manager = MachineManager()
-health_checker = HealthChecker()
-auto_scaler = AutoScaleManager()
-
 # ==================== ربات تلگرام ====================
 bot = telebot.TeleBot(BOT_TOKEN)
 bot.delete_webhook()
 
-# ==================== توابع کمکی ====================
-
-def get_setting(key):
-    cached = cache.get(f"setting_{key}")
-    if cached is not None:
-        return cached
-    result = db.execute("SELECT value FROM system_settings WHERE key = ?", (key,))
-    if result:
-        val = result[0]['value']
-        if key in ['subscription_price', 'withdraw_percent', 'min_withdraw', 
-                   'max_builds_per_hour', 'max_concurrent_builds', 'rate_limit_per_second',
-                   'rate_limit_per_minute', 'rate_limit_per_hour',
-                   'health_check_interval', 'auto_scale_threshold']:
-            try:
-                val = int(val)
-            except:
-                pass
-        cache.set(f"setting_{key}", val, ttl=300)
-        return val
-    return DEFAULT_SETTINGS.get(key)
-
-def update_setting(key, value):
-    db.execute("UPDATE system_settings SET value = ? WHERE key = ?", (str(value), key))
-    cache.delete(f"setting_{key}")
-
-def generate_referral_code(user_id):
-    return hashlib.md5(f"{user_id}_{time.time()}_{secrets.token_hex(4)}".encode()).hexdigest()[:12]
-
-def get_user(user_id):
-    cached = cache.get(f"user_{user_id}")
-    if cached:
-        return cached
-    users = db.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
-    if users:
-        user = dict(users[0])
-        cache.set(f"user_{user_id}", user, ttl=300)
-        return user
-    return None
-
-def create_user(user_id, username, first_name, last_name, referred_by=None):
-    now = datetime.now().isoformat()
-    referral_code = generate_referral_code(user_id)
-    
-    db.execute('''
-        INSERT OR IGNORE INTO users 
-        (user_id, username, first_name, last_name, referral_code, referred_by, created_at, last_active, subscription_status, wallet_balance)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'inactive', 0)
-    ''', (user_id, username, first_name, last_name, referral_code, referred_by, now, now))
-    
-    db.execute('UPDATE users SET last_active = ? WHERE user_id = ?', (now, user_id))
-    
-    if referred_by and referred_by != user_id:
-        db.execute('UPDATE users SET referrals_count = referrals_count + 1 WHERE user_id = ?', (referred_by,))
-        db.execute('UPDATE daily_stats SET new_users = new_users + 1 WHERE date = ?', (datetime.now().date().isoformat(),))
-    
-    USERS_TOTAL.inc()
-    cache.delete(f"user_{user_id}")
-    return True
-
-def check_subscription(user_id):
-    user = get_user(user_id)
-    if not user:
-        return False
-    
-    if user.get('is_banned', 0) == 1:
-        return False
-    
-    if user['subscription_status'] == 'active':
-        if user['subscription_expiry']:
-            expiry = datetime.fromisoformat(user['subscription_expiry'])
-            if expiry > datetime.now():
-                return True
-            else:
-                db.execute('UPDATE users SET subscription_status = "inactive", warning_sent = 0 WHERE user_id = ?', (user_id,))
-                cache.delete(f"user_{user_id}")
-    
-    return False
-
-def activate_subscription(user_id, months=1):
-    user = get_user(user_id)
-    now = datetime.now()
-    if user and user['subscription_status'] == 'active' and user['subscription_expiry']:
-        new_expiry = datetime.fromisoformat(user['subscription_expiry']) + timedelta(days=30*months)
-    else:
-        new_expiry = now + timedelta(days=30*months)
-    
-    db.execute('''
-        UPDATE users 
-        SET subscription_status = 'active', subscription_expiry = ?, warning_sent = 0 
-        WHERE user_id = ?
-    ''', (new_expiry.isoformat(), user_id))
-    cache.delete(f"user_{user_id}")
-    
-    SUBSCRIPTIONS_ACTIVE.inc()
-    
-    db.execute('UPDATE daily_stats SET new_subscriptions = new_subscriptions + 1, total_revenue = total_revenue + ? WHERE date = ?',
-              (get_setting('subscription_price'), datetime.now().date().isoformat()))
-    
-    build_guide = (
-        "✅ **اشتراک شما با موفقیت فعال شد!**\n\n"
-        "🎉 از اینکه ما را انتخاب کردید، سپاسگزاریم.\n\n"
-        "🤖 **راهنمای ساخت ربات تلگرام:**\n\n"
-        "1️⃣ **ساخت ربات در BotFather**\n"
-        "   - به @BotFather بروید\n"
-        "   - دستور `/newbot` را ارسال کنید\n"
-        "   - نام و یوزرنیم انتخاب کنید\n"
-        "   - توکن را کپی کنید\n\n"
-        "2️⃣ **نوشتن کد ربات**\n"
-        "   - فایل `bot.py` بنویسید\n"
-        "   - توکن را در کد قرار دهید\n"
-        "   - از `pyTelegramBotAPI` استفاده کنید\n\n"
-        "3️⃣ **ارسال فایل**\n"
-        "   - فایل را در همین گفتگو ارسال کنید\n"
-        "   - حداکثر حجم: ۵۰ مگابایت\n\n"
-        "4️⃣ **مدیریت ربات‌ها**\n"
-        "   - از دکمه «ربات‌های من» لیست ربات‌ها را ببینید\n"
-        "   - با دکمه «فعال/غیرفعال» ربات خود را خاموش یا روشن کنید\n"
-        "   - با دکمه «حذف ربات» می‌توانید ربات را پاک کنید\n\n"
-        "💡 **نکات مهم:**\n"
-        "   - ربات شما به صورت ۲۴ ساعته روی سرورهای قدرتمند اجرا می‌شود\n"
-        "   - در صورت قطع شدن، به صورت خودکار دوباره راه‌اندازی می‌شود\n\n"
-        "📞 پشتیبانی: @shahraghee13"
-    )
-    
-    bot.send_message(user_id, build_guide, parse_mode='Markdown')
-    logger.info(f"Subscription activated for user {user_id}")
-
-def add_wallet_balance(user_id, amount):
-    user = get_user(user_id)
-    if not user:
-        return 0
-    new_balance = user['wallet_balance'] + amount
-    db.execute('UPDATE users SET wallet_balance = ? WHERE user_id = ?', (new_balance, user_id))
-    cache.delete(f"user_{user_id}")
-    return new_balance
-
-def check_bot_limit(user_id):
-    if not check_subscription(user_id):
-        return False, 0, 0
-    
-    builds_today = rate_limiter.get_user_builds_today(user_id)
-    max_builds = get_setting('max_builds_per_hour')
-    if builds_today >= max_builds:
-        return False, max_builds, builds_today
-    
-    bots = db.execute('SELECT COUNT(*) as count FROM bots WHERE user_id = ?', (user_id,))
-    current_bots = bots[0]['count'] if bots else 0
-    return True, 999999, current_bots
-
-def get_user_bots(user_id):
-    bots = db.execute('SELECT * FROM bots WHERE user_id = ? ORDER BY created_at DESC', (user_id,))
-    return [dict(bot) for bot in bots]
-
-def get_bot(bot_id):
-    bots = db.execute('SELECT * FROM bots WHERE id = ?', (bot_id,))
-    return dict(bots[0]) if bots else None
-
-def delete_bot(bot_id, user_id):
-    bot_rec = get_bot(bot_id)
-    if not bot_rec or (user_id and bot_rec['user_id'] != user_id):
-        return False
-    
-    machine_manager.stop_bot(bot_id)
-    
-    if bot_rec.get('file_path') and os.path.exists(bot_rec['file_path']):
-        os.remove(bot_rec['file_path'])
-    
-    bot_dir = os.path.join(DIRS['MACHINES'], f"machine_{bot_rec['machine_id']:03d}", bot_id)
-    if os.path.exists(bot_dir):
-        shutil.rmtree(bot_dir)
-    
-    db.execute('DELETE FROM bots WHERE id = ?', (bot_id,))
-    if user_id:
-        db.execute('UPDATE users SET bots_count = bots_count - 1 WHERE user_id = ?', (user_id,))
-    
-    cache.delete(f"user_{user_id}")
-    return True
-
-def extract_token_from_code(code):
-    patterns = [
-        r'token\s*=\s*["\']([^"\']+)["\']',
-        r'TOKEN\s*=\s*["\']([^"\']+)["\']',
-        r'BOT_TOKEN\s*=\s*["\']([^"\']+)["\']',
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, code, re.IGNORECASE)
-        if match:
-            return match.group(1)
-    return None
-
-def is_channel_bot(token):
-    try:
-        resp = requests.get(f"https://api.telegram.org/bot{token}/getMe", timeout=10)
-        if resp.status_code == 200:
-            data = resp.json()
-            result = data.get('result', {})
-            if not result.get('is_bot', False) or result.get('type') == 'channel':
-                return True, result.get('username', '')
-            return False, result.get('username', '')
-        return True, None
-    except:
-        return True, None
-
-def add_bot(user_id, bot_id, token, name, username, file_path, pid=None, machine_id=None):
-    now = datetime.now().isoformat()
-    encrypted_token = db.encrypt_token(token)
-    db.execute('''
-        INSERT INTO bots 
-        (id, user_id, token, name, username, file_path, pid, machine_id, status, created_at, last_active, join_enabled, join_block_message, health_status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, 1, '🚫 سرور در حال حاضر پر است. لطفاً بعداً تلاش کنید.', 'healthy')
-    ''', (bot_id, user_id, encrypted_token, name, username, file_path, pid, machine_id, now, now))
-    db.execute('UPDATE users SET bots_count = bots_count + 1, total_builds = total_builds + 1, last_build_at = ? WHERE user_id = ?', (now, user_id))
-    db.execute('UPDATE daily_stats SET new_bots = new_bots + 1 WHERE date = ?', (datetime.now().date().isoformat(),))
-    cache.delete(f"user_{user_id}")
-    return True
-
-def log_error(error_type, message, user_id=None, bot_id=None, stack_trace=None):
-    error_id = hashlib.md5(f"{time.time()}_{user_id}_{bot_id}_{secrets.token_hex(4)}".encode()).hexdigest()[:16]
-    db.execute('''
-        INSERT INTO errors (id, type, message, user_id, bot_id, timestamp, resolved, stack_trace)
-        VALUES (?, ?, ?, ?, ?, ?, 0, ?)
-    ''', (error_id, error_type, message[:500], user_id, bot_id, datetime.now().isoformat(), stack_trace))
-    
-    ERRORS_TOTAL.labels(type=error_type).inc()
-    es_logger.log('ERROR', message, {'type': error_type, 'user_id': user_id, 'bot_id': bot_id})
-    
-    week_ago = (datetime.now() - timedelta(days=7)).isoformat()
-    db.execute('DELETE FROM errors WHERE timestamp < ?', (week_ago,))
-
-def install_library(lib_name, chat_id, msg_id):
-    try:
-        process = subprocess.run(
-            [sys.executable, '-m', 'pip', 'install', lib_name, '--quiet'],
-            capture_output=True,
-            text=True,
-            timeout=120
-        )
-        if process.returncode == 0:
-            bot.edit_message_text(f"✅ کتابخانه {lib_name} نصب شد!", chat_id, msg_id)
-            return True
-        else:
-            error = process.stderr[:200] if process.stderr else "خطا"
-            bot.edit_message_text(f"❌ خطا: {error}", chat_id, msg_id)
-            return False
-    except subprocess.TimeoutExpired:
-        bot.edit_message_text(f"❌ زمان نصب تمام شد!", chat_id, msg_id)
-        return False
-    except Exception as e:
-        bot.edit_message_text(f"❌ خطا: {str(e)[:100]}", chat_id, msg_id)
-        return False
+# ایجاد نمونه‌ها بعد از تعریف کلاس‌ها
+machine_manager = MachineManager()
+build_queue = BuildQueue()
+health_checker = HealthChecker()
+auto_scaler = AutoScaleManager()
 
 # ==================== Rate Limit Decorator ====================
-def rate_limit(limit_per_second=10, limit_per_minute=100, limit_per_hour=500):
+def rate_limit(limit_per_second=5):
     def decorator(func):
         @wraps(func)
         def wrapper(message, *args, **kwargs):
             user_id = message.from_user.id
-            if not rate_limiter.is_allowed(user_id, limit_per_second, limit_per_minute, limit_per_hour):
+            if not rate_limiter.is_allowed(user_id, limit_per_second):
                 bot.reply_to(message, "🚫 لطفاً کمی صبر کنید...")
                 return
             return func(message, *args, **kwargs)
@@ -1584,7 +1280,6 @@ def process_withdraw_holder(message, user, card_number):
     db.execute('INSERT INTO withdraw_requests (user_id, amount, card_number, card_holder, created_at, status) VALUES (?, ?, ?, ?, ?, "pending")',
               (user['user_id'], amount, card_number, card_holder, datetime.now().isoformat()))
     db.execute('UPDATE users SET wallet_balance = 0 WHERE user_id = ?', (user['user_id'],))
-    cache.delete(f"user_{user['user_id']}")
     
     bot.send_message(message.chat.id, f"✅ درخواست {amount:,} تومان ثبت شد")
     
@@ -1642,6 +1337,19 @@ def new_bot(message):
         return
     
     bot.send_message(message.chat.id, "📤 فایل `.py` یا `.zip` ربات خود را ارسال کنید")
+
+def check_bot_limit(user_id):
+    if not check_subscription(user_id):
+        return False, 0, 0
+    
+    builds_today = rate_limiter.get_user_builds_today(user_id)
+    max_builds = get_setting('max_builds_per_hour')
+    if builds_today >= max_builds:
+        return False, max_builds, builds_today
+    
+    bots = db.execute('SELECT COUNT(*) as count FROM bots WHERE user_id = ?', (user_id,))
+    current_bots = bots[0]['count'] if bots else 0
+    return True, 999999, current_bots
 
 # ==================== آپلود فایل ====================
 @bot.message_handler(content_types=['document'])
@@ -1718,7 +1426,6 @@ def handle_build_file(message):
         bot_id = hashlib.md5(f"{user_id}{token}{time.time()}".encode()).hexdigest()[:16]
         
         queue_len = build_queue.get_queue_length()
-        QUEUE_SIZE.set(queue_len)
         bot.edit_message_text(f"🔄 اضافه شد به صف...\n📍 موقعیت: {queue_len + 1}", message.chat.id, status_msg.message_id)
         
         build_data = {
@@ -1732,16 +1439,11 @@ def handle_build_file(message):
             'message_id': status_msg.message_id
         }
         
-        # اضافه به صف Redis
         build_queue.add_build(user_id, file_path, file_name, message.chat.id, status_msg.message_id, build_data)
-        
-        # ارسال به Celery
-        build_bot_task.delay(build_data)
         
     except Exception as e:
         bot.edit_message_text(f"❌ خطا: {str(e)[:100]}", message.chat.id, status_msg.message_id)
         log_error("build_error", str(e), user_id)
-        capture_exception(e)
 
 # ==================== ربات‌های من ====================
 @bot.message_handler(func=lambda m: m.text == '📋 ربات‌های من')
@@ -1895,7 +1597,7 @@ def stats(message):
             f"🤖 کل ربات‌ها: {bots:,}\n"
             f"🟢 ربات فعال: {running:,}\n"
             f"💰 کیف پول کل: {total_wallet:,} تومان\n"
-            f"🖥️ ظرفیت: {machine_stats['available']:,} خالی از {machine_stats['total_capacity']:,}\n"
+            f"🖥️ ظرفیت خالی: {machine_stats['available']:,} از {machine_stats['total_capacity']:,}\n"
             f"📊 مصرف: {machine_stats['usage_percent']:.1f}%\n"
             f"⚡ صف ساخت: {queue_len}\n"
             f"{scaling_rec}")
@@ -2466,20 +2168,20 @@ def process_broadcast(message):
 def monitor_system():
     while True:
         try:
-            for user in db.execute('SELECT user_id, subscription_expiry, subscription_status, warning_sent FROM users WHERE subscription_status = "active"'):
+            # بررسی انقضای اشتراک
+            for user in db.execute('SELECT user_id, subscription_expiry, subscription_status FROM users WHERE subscription_status = "active"'):
                 if user['subscription_expiry']:
                     expiry = datetime.fromisoformat(user['subscription_expiry'])
                     if expiry < datetime.now():
                         db.execute('UPDATE users SET subscription_status = "inactive", warning_sent = 0 WHERE user_id = ?', (user['user_id'],))
-                        bot.send_message(user['user_id'], f"⚠️ اشتراک شما منقضی شد!\n💰 {get_setting('subscription_price_str')}")
+                        try:
+                            bot.send_message(user['user_id'], f"⚠️ اشتراک شما منقضی شد!\n💰 {get_setting('subscription_price_str')}")
+                        except:
+                            pass
             
+            # آمار روزانه
             today = datetime.now().date().isoformat()
             db.execute('INSERT OR IGNORE INTO daily_stats (date, new_users, new_bots, new_subscriptions, total_revenue) VALUES (?, 0, 0, 0, 0)', (today,))
-            
-            # آپدیت متریک‌ها
-            USERS_TOTAL.set(db.execute('SELECT COUNT(*) as count FROM users')[0]['count'])
-            SUBSCRIPTIONS_ACTIVE.set(db.execute('SELECT COUNT(*) as count FROM users WHERE subscription_status = "active"')[0]['count'])
-            BOTS_TOTAL.set(db.execute('SELECT COUNT(*) as count FROM bots')[0]['count'])
             
             time.sleep(60)
         except Exception as e:
@@ -2488,6 +2190,24 @@ def monitor_system():
 
 threading.Thread(target=monitor_system, daemon=True).start()
 
+# ==================== Flask برای Webhook (اختیاری) ====================
+flask_app = Flask(__name__)
+
+@flask_app.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({
+        'status': 'ok', 
+        'timestamp': datetime.now().isoformat(),
+        'active_bots': len(machine_manager.processes),
+        'queue_size': build_queue.get_queue_length()
+    })
+
+def run_flask():
+    flask_app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
+
+# راه‌اندازی Flask در ترد جداگانه
+threading.Thread(target=run_flask, daemon=True).start()
+
 # ==================== اجرا ====================
 if __name__ == "__main__":
     print("=" * 80)
@@ -2495,32 +2215,18 @@ if __name__ == "__main__":
     print("=" * 80)
     print(f"👑 ادمین‌ها: {ADMIN_IDS}")
     print(f"🤖 نام ربات: @{BOT_USERNAME}")
-    print(f"💾 Redis: {REDIS_HOST}:{REDIS_PORT}")
-    print(f"📊 Prometheus Metrics: /metrics")
-    print(f"❤️ Health Check: /health")
-    print(f"🔐 رمزنگاری: فعال")
-    print(f"📦 Celery: {REDIS_URL}")
-    print(f"☁️ S3 Backup: {'فعال' if AWS_ACCESS_KEY else 'غیرفعال'}")
-    print(f"📈 Elasticsearch: {ELASTICSEARCH_HOST}")
+    print(f"💰 قیمت اشتراک: {get_setting('subscription_price_str')}")
+    print(f"⭐ کمیسیون رفرال: {get_setting('withdraw_percent')}%")
+    print(f"🖥️ ماشین‌ها: 10")
+    print(f"⚡ حداکثر ربات: 50,000")
+    print(f"📊 صف ساخت: {get_setting('max_concurrent_builds')} همزمان")
+    print(f"❤️ Health Check: http://localhost:5000/health")
     print("=" * 80)
+    print("✅ ربات در حال اجرا است...")
     
-    # راه‌اندازی Flask server در یک ترد جداگانه
-    def run_flask():
-        flask_app.run(host='0.0.0.0', port=5000, threaded=True)
-    
-    threading.Thread(target=run_flask, daemon=True).start()
-    
-    # راه‌اندازی Webhook یا Polling
-    if WEBHOOK_URL:
-        bot.remove_webhook()
-        time.sleep(1)
-        bot.set_webhook(url=f"{WEBHOOK_URL}/webhook")
-        print(f"✅ Webhook set to {WEBHOOK_URL}/webhook")
-    else:
-        print("⚠️ Running with polling mode")
-        while True:
-            try:
-                bot.infinity_polling(timeout=60)
-            except Exception as e:
-                logger.error(f"Polling error: {e}")
-                time.sleep(5)
+    while True:
+        try:
+            bot.infinity_polling(timeout=60)
+        except Exception as e:
+            logger.error(f"Polling error: {e}")
+            time.sleep(5)
