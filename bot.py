@@ -7,9 +7,9 @@ from datetime import datetime
 import whisper  # برای تبدیل صدا به متن
 
 # ========== تنظیمات (این قسمت را خودت پر کن) ==========
-TELEGRAM_BOT_TOKEN = "توکن_ربات_تلگرام_خود_را_اینجا_بگذارید"
-DEEPSEEK_API_KEY = "کلید_جدید_و_امن_DeepSeek_خود_را_اینجا_بگذارید"
-ADMIN_ID = 123456789  # آیدی عددی تلگرام خودت را اینجا بگذار (با @userinfobot بگیر)
+TELEGRAM_BOT_TOKEN = "8266270866:AAF6m1x4weSUEvzIj1gkbIS_j0yAdxCSs78"
+DEEPSEEK_API_KEY = "sk-aa9f541dd58142feac099506a83023e6"
+ADMIN_ID = 327855654  # آیدی عددی تلگرام خودت را اینجا بگذار (با @userinfobot بگیر)
 # =====================================================
 
 # اتصال به DeepSeek
