@@ -3081,10 +3081,1338 @@ def process_withdraw_address(message, user):
             pass
 
 # ==================== پنل مدیریت ====================
-# (ادامه دارد... به دلیل محدودیت طول، قسمت‌های قبلی پنل مدیریت مانند قبل باقی می‌مانند)
-# تمام قسمت‌های قبلی پنل مدیریت که اضافه شده بودند حفظ می‌شوند
-# و دکمه‌های جدید 🐳 مدیریت داکر و ☸️ مدیریت کوبرنتیز اضافه می‌شوند
+# ==================== پنل مدیریت کامل (ادامه از کد قبلی) ====================
 
+# ==================== تایید فیش ====================
+@bot.message_handler(func=lambda m: m.text == '📸 تایید فیش')
+def admin_receipts(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    receipts = db.execute('SELECT * FROM receipts WHERE status = "pending" ORDER BY created_at')
+    if not receipts:
+        bot.send_message(message.chat.id, "✅ هیچ فیش در انتظار تاییدی وجود ندارد")
+        return
+    
+    for r in receipts:
+        user = get_user(r['user_id'])
+        text = f"📸 **فیش جدید**\n👤 کاربر: {user['first_name'] if user else 'نامشخص'}\n🆔 آیدی: {r['user_id']}\n💰 مبلغ: {r['amount']:,} تومان\n🆔 کد: {r['tx_hash']}"
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton("✅ تایید", callback_data=f"approve_receipt_{r['id']}"),
+            types.InlineKeyboardButton("❌ رد", callback_data=f"reject_receipt_{r['id']}")
+        )
+        if os.path.exists(r['receipt_path']):
+            with open(r['receipt_path'], 'rb') as f:
+                bot.send_photo(message.chat.id, f, caption=text, parse_mode='Markdown', reply_markup=markup)
+        else:
+            bot.send_message(message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('approve_receipt_'))
+def approve_receipt(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    rid = int(call.data.replace('approve_receipt_', ''))
+    r = db.execute('SELECT user_id, tx_hash FROM receipts WHERE id = ?', (rid,))
+    if r:
+        db.execute('UPDATE receipts SET status = "approved", reviewed_by = ?, reviewed_at = ? WHERE id = ?',
+                  (call.from_user.id, datetime.now().isoformat(), rid))
+        activate_subscription(r[0]['user_id'], r[0]['tx_hash'])
+        
+        bot.answer_callback_query(call.id, "✅ فیش تایید شد و اشتراک فعال گردید")
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('reject_receipt_'))
+def reject_receipt(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    rid = int(call.data.replace('reject_receipt_', ''))
+    db.execute('UPDATE receipts SET status = "rejected", reviewed_by = ?, reviewed_at = ? WHERE id = ?',
+              (call.from_user.id, datetime.now().isoformat(), rid))
+    bot.answer_callback_query(call.id, "❌ فیش رد شد")
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+
+# ==================== تایید برداشت ====================
+@bot.message_handler(func=lambda m: m.text == '💰 تایید برداشت')
+def admin_withdraws(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    withdraws = db.execute('SELECT * FROM withdraw_requests WHERE status = "pending" ORDER BY created_at')
+    if not withdraws:
+        bot.send_message(message.chat.id, "✅ هیچ درخواست برداشتی در انتظار تایید نیست")
+        return
+    
+    for w in withdraws:
+        user = get_user(w['user_id'])
+        text = f"💰 **درخواست برداشت**\n👤 کاربر: {user['first_name'] if user else 'نامشخص'}\n🆔 آیدی: {w['user_id']}\n💰 مبلغ: {w['amount']:,} تومان\n💳 آدرس: {w['address']}"
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("✅ تایید واریز شد", callback_data=f"approve_withdraw_{w['id']}"))
+        bot.send_message(message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('approve_withdraw_'))
+def approve_withdraw(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    wid = int(call.data.replace('approve_withdraw_', ''))
+    w = db.execute('SELECT user_id, amount FROM withdraw_requests WHERE id = ?', (wid,))
+    if w:
+        db.execute('UPDATE withdraw_requests SET status = "approved", processed_at = ? WHERE id = ?',
+                  (datetime.now().isoformat(), wid))
+        bot.answer_callback_query(call.id, "✅ برداشت تایید شد")
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+        
+        try:
+            bot.send_message(w[0]['user_id'], f"✅ درخواست برداشت {w[0]['amount']:,} تومان شما تایید و واریز شد.")
+        except:
+            pass
+
+# ==================== تنظیمات سیستم ====================
+@bot.message_handler(func=lambda m: m.text == '⚙️ تنظیمات سیستم')
+def admin_settings(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("💰 قیمت اشتراک", callback_data="admin_set_price"),
+        types.InlineKeyboardButton("🤖 حداکثر ربات", callback_data="admin_set_max_bots"),
+        types.InlineKeyboardButton("📈 محدودیت ساخت", callback_data="admin_set_build_limit"),
+        types.InlineKeyboardButton("💸 درصد کمیسیون", callback_data="admin_set_commission"),
+        types.InlineKeyboardButton("💰 حداقل برداشت", callback_data="admin_set_min_withdraw"),
+        types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back_settings")
+    )
+    bot.send_message(message.chat.id, "⚙️ **تنظیمات سیستم**", parse_mode='Markdown', reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_set_price")
+def admin_set_price(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    msg = bot.send_message(call.message.chat.id, "💰 قیمت اشتراک (تومان):")
+    bot.register_next_step_handler(msg, process_set_price)
+
+def process_set_price(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    try:
+        price = int(message.text.strip())
+        update_setting('subscription_price', price)
+        update_setting('subscription_price_str', f"{price:,} تومان")
+        update_setting('subscription_price_usd', f"${price // 40000} USD")
+        bot.reply_to(message, f"✅ قیمت اشتراک به {price:,} تومان تغییر کرد")
+    except:
+        bot.reply_to(message, "❌ عدد نامعتبر")
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_set_max_bots")
+def admin_set_max_bots(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    msg = bot.send_message(call.message.chat.id, "🤖 حداکثر ربات در هر اشتراک (پیش‌فرض 3):")
+    bot.register_next_step_handler(msg, process_set_max_bots)
+
+def process_set_max_bots(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    try:
+        max_bots = int(message.text.strip())
+        if 1 <= max_bots <= 100:
+            update_setting('max_bots_per_subscription', max_bots)
+            db.execute('UPDATE users SET max_bots = ?', (max_bots,))
+            bot.reply_to(message, f"✅ حداکثر ربات به {max_bots} تغییر کرد")
+        else:
+            bot.reply_to(message, "❌ عدد بین 1 تا 100")
+    except:
+        bot.reply_to(message, "❌ عدد نامعتبر")
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_set_build_limit")
+def admin_set_build_limit(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    msg = bot.send_message(call.message.chat.id, "📈 حداکثر ساخت ربات در ساعت (پیش‌فرض 10):")
+    bot.register_next_step_handler(msg, process_set_build_limit)
+
+def process_set_build_limit(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    try:
+        limit = int(message.text.strip())
+        if 1 <= limit <= 100:
+            update_setting('max_builds_per_hour', limit)
+            bot.reply_to(message, f"✅ محدودیت ساخت به {limit} ربات در ساعت تغییر کرد")
+        else:
+            bot.reply_to(message, "❌ عدد بین 1 تا 100")
+    except:
+        bot.reply_to(message, "❌ عدد نامعتبر")
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_set_commission")
+def admin_set_commission(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    msg = bot.send_message(call.message.chat.id, "💸 درصد کمیسیون معرف (پیش‌فرض 7):")
+    bot.register_next_step_handler(msg, process_set_commission)
+
+def process_set_commission(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    try:
+        percent = int(message.text.strip())
+        if 1 <= percent <= 50:
+            update_setting('withdraw_percent', percent)
+            bot.reply_to(message, f"✅ درصد کمیسیون به {percent}% تغییر کرد")
+        else:
+            bot.reply_to(message, "❌ عدد بین 1 تا 50")
+    except:
+        bot.reply_to(message, "❌ عدد نامعتبر")
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_set_min_withdraw")
+def admin_set_min_withdraw(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    msg = bot.send_message(call.message.chat.id, "💰 حداقل مبلغ برداشت (تومان، پیش‌فرض 2,000,000):")
+    bot.register_next_step_handler(msg, process_set_min_withdraw)
+
+def process_set_min_withdraw(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    try:
+        min_amount = int(message.text.strip())
+        if min_amount >= 100000:
+            update_setting('min_withdraw', min_amount)
+            bot.reply_to(message, f"✅ حداقل برداشت به {min_amount:,} تومان تغییر کرد")
+        else:
+            bot.reply_to(message, "❌ حداقل 100,000 تومان")
+    except:
+        bot.reply_to(message, "❌ عدد نامعتبر")
+
+# ==================== آمار کاربران ====================
+@bot.message_handler(func=lambda m: m.text == '📊 آمار کاربران')
+def admin_user_stats(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    users_count = db.execute('SELECT COUNT(*) as count FROM users')[0]['count']
+    active_subs = db.execute('SELECT COUNT(*) as count FROM users WHERE subscription_status = "active"')[0]['count']
+    banned_users = db.execute('SELECT COUNT(*) as count FROM users WHERE is_banned = 1')[0]['count']
+    total_bots = db.execute('SELECT COUNT(*) as count FROM bots')[0]['count']
+    running_bots = db.execute('SELECT COUNT(*) as count FROM bots WHERE status = "running"')[0]['count']
+    total_wallet = db.execute('SELECT SUM(wallet_balance) as total FROM users')[0]['total'] or 0
+    total_commission = db.execute('SELECT SUM(amount) as total FROM commissions')[0]['total'] or 0
+    
+    today = datetime.now().date().isoformat()
+    daily = db.execute('SELECT * FROM daily_stats WHERE date = ?', (today,))
+    
+    text = (f"📊 **آمار کامل کاربران**\n\n"
+            f"👥 کل کاربران: {users_count:,}\n"
+            f"✅ اشتراک فعال: {active_subs:,}\n"
+            f"🚫 کاربران مسدود: {banned_users:,}\n"
+            f"🤖 کل ربات‌ها: {total_bots:,}\n"
+            f"🟢 ربات فعال: {running_bots:,}\n"
+            f"💰 کیف پول کل: {total_wallet:,} تومان\n"
+            f"💎 کل کمیسیون پرداختی: {total_commission:,} تومان\n\n")
+    
+    if daily:
+        d = daily[0]
+        text += (f"📅 **آمار امروز**\n"
+                f"👥 کاربران جدید: {d['new_users']}\n"
+                f"🤖 ربات‌های جدید: {d['new_bots']}\n"
+                f"✅ اشتراک‌های جدید: {d['new_subscriptions']}\n"
+                f"💰 درآمد امروز: {d['total_revenue']:,} تومان")
+    
+    bot.send_message(message.chat.id, text, parse_mode='Markdown')
+
+# ==================== حذف کاربران ====================
+@bot.message_handler(func=lambda m: m.text == '🗑 حذف کاربران')
+def admin_delete_user(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton("🔍 جستجوی کاربر", callback_data="admin_search_user"),
+        types.InlineKeyboardButton("🗑 حذف کاربر", callback_data="admin_delete_user_by_id"),
+        types.InlineKeyboardButton("🚫 مسدود/رفع مسدود", callback_data="admin_ban_user"),
+        types.InlineKeyboardButton("💰 افزایش موجودی", callback_data="admin_add_balance"),
+        types.InlineKeyboardButton("🎁 فعالسازی اشتراک", callback_data="admin_activate_sub"),
+        types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back_users")
+    )
+    bot.send_message(message.chat.id, "👥 **مدیریت کاربران**", parse_mode='Markdown', reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_search_user")
+def admin_search_user(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    msg = bot.send_message(call.message.chat.id, "🔍 آیدی عددی کاربر را وارد کنید:")
+    bot.register_next_step_handler(msg, process_admin_search)
+
+def process_admin_search(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    try:
+        uid = int(message.text.strip())
+        user = get_user(uid)
+        if user:
+            bots_count = len(get_user_bots(uid))
+            text = (f"👤 **اطلاعات کاربر**\n\n"
+                   f"نام: {user['first_name']}\n"
+                   f"آیدی: {user['user_id']}\n"
+                   f"موجودی: {user['wallet_balance']:,} تومان\n"
+                   f"اشتراک: {'✅ فعال' if check_subscription(uid) else '❌ غیرفعال'}\n"
+                   f"تعداد ربات: {bots_count}\n"
+                   f"دعوت‌ها: {user['referrals_count']}\n"
+                   f"زبان: {'فارسی' if user['language'] == 'fa' else 'انگلیسی'}")
+            bot.reply_to(message, text, parse_mode='Markdown')
+        else:
+            bot.reply_to(message, "❌ کاربر یافت نشد")
+    except:
+        bot.reply_to(message, "❌ آیدی نامعتبر")
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_delete_user_by_id")
+def admin_delete_user_by_id(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    msg = bot.send_message(call.message.chat.id, "🗑 آیدی عددی کاربر را برای حذف وارد کنید:")
+    bot.register_next_step_handler(msg, process_admin_delete_user)
+
+def process_admin_delete_user(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    try:
+        uid = int(message.text.strip())
+        user = get_user(uid)
+        if user:
+            bots = get_user_bots(uid)
+            for bot in bots:
+                delete_bot(bot['id'], uid)
+            db.execute('DELETE FROM users WHERE user_id = ?', (uid,))
+            bot.reply_to(message, f"✅ کاربر {uid} و تمام ربات‌هایش حذف شد")
+        else:
+            bot.reply_to(message, "❌ کاربر یافت نشد")
+    except:
+        bot.reply_to(message, "❌ آیدی نامعتبر")
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_ban_user")
+def admin_ban_user(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    msg = bot.send_message(call.message.chat.id, "🚫 آیدی کاربر برای مسدود/رفع مسدود:")
+    bot.register_next_step_handler(msg, process_ban_user)
+
+def process_ban_user(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    try:
+        uid = int(message.text.strip())
+        user = get_user(uid)
+        if user:
+            new_status = 0 if user['is_banned'] == 1 else 1
+            db.execute('UPDATE users SET is_banned = ? WHERE user_id = ?', (new_status, uid))
+            status_text = "مسدود شد" if new_status == 1 else "رفع مسدود شد"
+            bot.reply_to(message, f"✅ کاربر {uid} {status_text}")
+        else:
+            bot.reply_to(message, "❌ کاربر یافت نشد")
+    except:
+        bot.reply_to(message, "❌ خطا")
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_add_balance")
+def admin_add_balance(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    msg = bot.send_message(call.message.chat.id, "💰 فرمت: `آیدی مبلغ`\nمثال: `123456 100000`")
+    bot.register_next_step_handler(msg, process_add_balance)
+
+def process_add_balance(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    try:
+        parts = message.text.strip().split()
+        uid = int(parts[0])
+        amount = int(parts[1])
+        add_wallet_balance(uid, amount)
+        bot.reply_to(message, f"✅ {amount:,} تومان به کیف پول کاربر {uid} اضافه شد")
+        try:
+            bot.send_message(uid, f"💰 {amount:,} تومان به کیف پول شما اضافه شد")
+        except:
+            pass
+    except:
+        bot.reply_to(message, "❌ فرمت نامعتبر")
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_activate_sub")
+def admin_activate_sub(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    msg = bot.send_message(call.message.chat.id, "🎁 آیدی عددی کاربر را وارد کنید:")
+    bot.register_next_step_handler(msg, process_activate_sub)
+
+def process_activate_sub(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    try:
+        uid = int(message.text.strip())
+        activate_subscription(uid)
+        bot.reply_to(message, f"✅ اشتراک کاربر {uid} فعال شد")
+        try:
+            bot.send_message(uid, "✅ اشتراک شما توسط ادمین فعال شد! اکنون می‌توانید ربات بسازید.")
+        except:
+            pass
+    except:
+        bot.reply_to(message, "❌ خطا")
+
+# ==================== حذف ربات‌های کاربران ====================
+@bot.message_handler(func=lambda m: m.text == '🗑 حذف ربات‌های کاربران')
+def admin_delete_user_bots(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    msg = bot.send_message(message.chat.id, "🗑 آیدی عددی کاربر را برای حذف تمام ربات‌هایش وارد کنید:")
+    bot.register_next_step_handler(msg, process_delete_user_bots)
+
+def process_delete_user_bots(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    try:
+        uid = int(message.text.strip())
+        user = get_user(uid)
+        if user:
+            bots = get_user_bots(uid)
+            deleted = 0
+            for bot in bots:
+                if delete_bot(bot['id'], uid):
+                    deleted += 1
+            bot.reply_to(message, f"✅ {deleted} ربات از کاربر {uid} حذف شد")
+        else:
+            bot.reply_to(message, "❌ کاربر یافت نشد")
+    except:
+        bot.reply_to(message, "❌ آیدی نامعتبر")
+
+# ==================== پیام همگانی ====================
+@bot.message_handler(func=lambda m: m.text == '📢 پیام همگانی')
+def broadcast_prompt(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("📝 متن ساده", callback_data="broadcast_text"),
+        types.InlineKeyboardButton("🖼️ با تصویر", callback_data="broadcast_photo"),
+        types.InlineKeyboardButton("📊 فوروارد", callback_data="broadcast_forward"),
+        types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back_broadcast")
+    )
+    bot.send_message(message.chat.id, "📢 **پیام همگانی** - روش ارسال را انتخاب کنید:", parse_mode='Markdown', reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == "broadcast_text")
+def broadcast_text(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    msg = bot.send_message(call.message.chat.id, "📝 متن پیام همگانی را ارسال کنید:")
+    bot.register_next_step_handler(msg, process_broadcast_text)
+
+def process_broadcast_text(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    text = message.text
+    users = db.execute("SELECT user_id, language FROM users WHERE is_banned = 0")
+    sent = 0
+    failed = 0
+    
+    status_msg = bot.reply_to(message, "🔄 در حال ارسال پیام همگانی...")
+    
+    for user in users:
+        try:
+            if user['language'] == 'fa':
+                msg_text = f"📢 **اعلامیه**\n\n{text}"
+            else:
+                msg_text = f"📢 **Announcement**\n\n{text}"
+            bot.send_message(user['user_id'], msg_text, parse_mode='Markdown')
+            sent += 1
+            time.sleep(0.05)
+        except:
+            failed += 1
+    
+    bot.edit_message_text(f"✅ پیام به {sent} کاربر ارسال شد\n❌ ناموفق: {failed}", 
+                         message.chat.id, status_msg.message_id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "broadcast_photo")
+def broadcast_photo(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    msg = bot.send_message(call.message.chat.id, "🖼️ تصویر و سپس کپشن را ارسال کنید:")
+    bot.register_next_step_handler(msg, process_broadcast_photo)
+
+def process_broadcast_photo(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    if not message.photo:
+        bot.reply_to(message, "❌ لطفاً یک تصویر ارسال کنید")
+        return
+    
+    caption = message.caption or ""
+    file_id = message.photo[-1].file_id
+    
+    users = db.execute("SELECT user_id, language FROM users WHERE is_banned = 0")
+    sent = 0
+    failed = 0
+    
+    status_msg = bot.reply_to(message, "🔄 در حال ارسال پیام همگانی...")
+    
+    for user in users:
+        try:
+            if user['language'] == 'fa':
+                msg_caption = f"📢 **اعلامیه**\n\n{caption}"
+            else:
+                msg_caption = f"📢 **Announcement**\n\n{caption}"
+            bot.send_photo(user['user_id'], file_id, caption=msg_caption, parse_mode='Markdown')
+            sent += 1
+            time.sleep(0.05)
+        except:
+            failed += 1
+    
+    bot.edit_message_text(f"✅ پیام به {sent} کاربر ارسال شد\n❌ ناموفق: {failed}", 
+                         message.chat.id, status_msg.message_id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "broadcast_forward")
+def broadcast_forward(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    msg = bot.send_message(call.message.chat.id, "📊 پیامی که می‌خواهید فوروارد کنید را به ربات بفرستید:")
+    bot.register_next_step_handler(msg, process_broadcast_forward)
+
+def process_broadcast_forward(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    users = db.execute("SELECT user_id FROM users WHERE is_banned = 0")
+    sent = 0
+    failed = 0
+    
+    status_msg = bot.reply_to(message, "🔄 در حال ارسال پیام همگانی...")
+    
+    for user in users:
+        try:
+            bot.forward_message(user['user_id'], message.chat.id, message.message_id)
+            sent += 1
+            time.sleep(0.05)
+        except:
+            failed += 1
+    
+    bot.edit_message_text(f"✅ پیام به {sent} کاربر ارسال شد\n❌ ناموفق: {failed}", 
+                         message.chat.id, status_msg.message_id)
+
+# ==================== بررسی ربات‌های کاربران ====================
+@bot.message_handler(func=lambda m: m.text == '🔍 بررسی ربات‌های کاربران')
+def admin_check_user_bots(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    msg = bot.send_message(message.chat.id, "🔍 آیدی عددی کاربر را برای بررسی ربات‌هایش وارد کنید:")
+    bot.register_next_step_handler(msg, process_check_user_bots)
+
+def process_check_user_bots(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    try:
+        uid = int(message.text.strip())
+        user = get_user(uid)
+        if user:
+            bots = get_user_bots(uid)
+            if not bots:
+                bot.reply_to(message, f"📋 کاربر {uid} هیچ رباتی ندارد")
+                return
+            
+            text = f"📋 **ربات‌های کاربر {user['first_name']} (آیدی: {uid})**\n\n"
+            for b in bots:
+                status = machine_manager.get_status(b['id'])
+                language = b.get('language', 'python')
+                lang_config = LANGUAGES.get(Language(language), LANGUAGES[Language.PYTHON])
+                status_emoji = "🟢" if status.get('running') else "🔴"
+                text += f"{status_emoji} {lang_config.icon} `{b['id'][:8]}...` - {b['name']}\n"
+                if b.get('error_message'):
+                    text += f"   ⚠️ خطا: {b['error_message'][:50]}\n"
+            
+            bot.reply_to(message, text, parse_mode='Markdown')
+        else:
+            bot.reply_to(message, "❌ کاربر یافت نشد")
+    except:
+        bot.reply_to(message, "❌ آیدی نامعتبر")
+
+# ==================== تنظیم آدرس کیف پول ====================
+@bot.message_handler(func=lambda m: m.text == '💳 تنظیم آدرس کیف پول')
+def admin_set_wallet_address(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton("💰 آدرس TRC20 (انگلیسی)", callback_data="set_trc20"),
+        types.InlineKeyboardButton("🏦 شماره کارت (فارسی)", callback_data="set_card"),
+        types.InlineKeyboardButton("👤 نام صاحب کارت", callback_data="set_card_holder"),
+        types.InlineKeyboardButton("🏛 نام بانک", callback_data="set_card_bank"),
+        types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back_wallet")
+    )
+    bot.send_message(message.chat.id, "💳 **تنظیمات پرداخت**", parse_mode='Markdown', reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == "set_trc20")
+def set_trc20(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    msg = bot.send_message(call.message.chat.id, "💰 آدرس کیف پول TRC20 را وارد کنید:")
+    bot.register_next_step_handler(msg, process_set_trc20)
+
+def process_set_trc20(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    address = message.text.strip()
+    update_setting('trc20_address', address)
+    bot.reply_to(message, f"✅ آدرس TRC20 به {address} تغییر کرد")
+
+@bot.callback_query_handler(func=lambda call: call.data == "set_card")
+def set_card(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    msg = bot.send_message(call.message.chat.id, "🏦 شماره کارت (۱۶ رقمی) را وارد کنید:")
+    bot.register_next_step_handler(msg, process_set_card)
+
+def process_set_card(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    card = message.text.strip().replace(" ", "")
+    display = ' '.join([card[i:i+4] for i in range(0, len(card), 4)])
+    update_setting('card_number', card)
+    update_setting('card_number_display', display)
+    bot.reply_to(message, f"✅ شماره کارت به {display} تغییر کرد")
+
+@bot.callback_query_handler(func=lambda call: call.data == "set_card_holder")
+def set_card_holder(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    msg = bot.send_message(call.message.chat.id, "👤 نام صاحب کارت را وارد کنید:")
+    bot.register_next_step_handler(msg, process_set_card_holder)
+
+def process_set_card_holder(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    holder = message.text.strip()
+    update_setting('card_holder', holder)
+    bot.reply_to(message, f"✅ نام صاحب کارت به {holder} تغییر کرد")
+
+@bot.callback_query_handler(func=lambda call: call.data == "set_card_bank")
+def set_card_bank(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    msg = bot.send_message(call.message.chat.id, "🏛 نام بانک را وارد کنید:")
+    bot.register_next_step_handler(msg, process_set_card_bank)
+
+def process_set_card_bank(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    bank = message.text.strip()
+    update_setting('card_bank', bank)
+    bot.reply_to(message, f"✅ نام بانک به {bank} تغییر کرد")
+
+# ==================== عوض کردن متن راهنما ====================
+@bot.message_handler(func=lambda m: m.text == '📝 عوض کردن متن راهنما')
+def admin_set_guide(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🇮🇷 فارسی", callback_data="set_guide_fa"),
+        types.InlineKeyboardButton("🇬🇧 English", callback_data="set_guide_en"),
+        types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back_guide")
+    )
+    bot.send_message(message.chat.id, "📝 انتخاب کنید:", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == "set_guide_fa")
+def set_guide_fa(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    msg = bot.send_message(call.message.chat.id, "📝 متن راهنمای فارسی را وارد کنید:")
+    bot.register_next_step_handler(msg, process_set_guide_fa)
+
+def process_set_guide_fa(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    update_setting('guide_text_fa', message.text)
+    bot.reply_to(message, "✅ متن راهنمای فارسی ذخیره شد")
+
+@bot.callback_query_handler(func=lambda call: call.data == "set_guide_en")
+def set_guide_en(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    msg = bot.send_message(call.message.chat.id, "📝 Enter English guide text:")
+    bot.register_next_step_handler(msg, process_set_guide_en)
+
+def process_set_guide_en(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    update_setting('guide_text_en', message.text)
+    bot.reply_to(message, "✅ English guide saved")
+
+# ==================== عوض کردن متن خوش آمد گویی ====================
+@bot.message_handler(func=lambda m: m.text == '👋 عوض کردن متن خوش آمد گویی')
+def admin_set_welcome(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🇮🇷 فارسی", callback_data="set_welcome_fa"),
+        types.InlineKeyboardButton("🇬🇧 English", callback_data="set_welcome_en"),
+        types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back_welcome")
+    )
+    bot.send_message(message.chat.id, "👋 انتخاب کنید:", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == "set_welcome_fa")
+def set_welcome_fa(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    msg = bot.send_message(call.message.chat.id, "👋 متن خوش آمد گویی فارسی (از {name} استفاده کنید):")
+    bot.register_next_step_handler(msg, process_set_welcome_fa)
+
+def process_set_welcome_fa(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    update_setting('welcome_text_fa', message.text)
+    bot.reply_to(message, "✅ متن خوش آمد گویی فارسی ذخیره شد")
+
+@bot.callback_query_handler(func=lambda call: call.data == "set_welcome_en")
+def set_welcome_en(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    msg = bot.send_message(call.message.chat.id, "👋 Enter English welcome text (use {name}):")
+    bot.register_next_step_handler(msg, process_set_welcome_en)
+
+def process_set_welcome_en(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    update_setting('welcome_text_en', message.text)
+    bot.reply_to(message, "✅ English welcome text saved")
+
+# ==================== عوض کردن متن فعالسازی اشتراک ====================
+@bot.message_handler(func=lambda m: m.text == '✅ عوض کردن متن فعالسازی اشتراک')
+def admin_set_active_text(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🇮🇷 فارسی", callback_data="set_active_fa"),
+        types.InlineKeyboardButton("🇬🇧 English", callback_data="set_active_en"),
+        types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back_active")
+    )
+    bot.send_message(message.chat.id, "✅ انتخاب کنید:", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == "set_active_fa")
+def set_active_fa(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    msg = bot.send_message(call.message.chat.id, "✅ متن فعالسازی اشتراک فارسی:")
+    bot.register_next_step_handler(msg, process_set_active_fa)
+
+def process_set_active_fa(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    update_setting('subscription_active_text_fa', message.text)
+    bot.reply_to(message, "✅ متن فعالسازی اشتراک فارسی ذخیره شد")
+
+@bot.callback_query_handler(func=lambda call: call.data == "set_active_en")
+def set_active_en(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    msg = bot.send_message(call.message.chat.id, "✅ Enter English subscription activation text:")
+    bot.register_next_step_handler(msg, process_set_active_en)
+
+def process_set_active_en(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    update_setting('subscription_active_text_en', message.text)
+    bot.reply_to(message, "✅ English subscription activation text saved")
+
+# ==================== عوض کردن متن خرید اشتراک ====================
+@bot.message_handler(func=lambda m: m.text == '💸 عوض کردن متن خرید اشتراک')
+def admin_set_payment_text(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🇮🇷 فارسی (کارت به کارت)", callback_data="set_payment_fa"),
+        types.InlineKeyboardButton("🇬🇧 English (TRC20)", callback_data="set_payment_en"),
+        types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back_payment")
+    )
+    bot.send_message(message.chat.id, "💸 انتخاب کنید:", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == "set_payment_fa")
+def set_payment_fa(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    msg = bot.send_message(call.message.chat.id, "💸 متن خرید اشتراک فارسی (از {price}، {card}، {holder}، {bank} استفاده کنید):")
+    bot.register_next_step_handler(msg, process_set_payment_fa)
+
+def process_set_payment_fa(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    update_setting('subscription_payment_text_fa', message.text)
+    bot.reply_to(message, "✅ متن خرید اشتراک فارسی ذخیره شد")
+
+@bot.callback_query_handler(func=lambda call: call.data == "set_payment_en")
+def set_payment_en(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    msg = bot.send_message(call.message.chat.id, "💸 Enter English payment text (use {price} and {address}):")
+    bot.register_next_step_handler(msg, process_set_payment_en)
+
+def process_set_payment_en(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    update_setting('subscription_payment_text_en', message.text)
+    bot.reply_to(message, "✅ English payment text saved")
+
+# ==================== ریستارت ربات‌های مرده ====================
+@bot.message_handler(func=lambda m: m.text == '🔄 ریستارت ربات‌های مرده')
+def admin_restart_dead_bots(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    status_msg = bot.reply_to(message, "🔄 در حال بررسی و ریستارت ربات‌های مرده...")
+    restarted = machine_manager.restart_all_dead_bots()
+    bot.edit_message_text(f"✅ {restarted} ربات مرده با موفقیت ریستارت شدند", 
+                         message.chat.id, status_msg.message_id)
+
+# ==================== مدیریت خطاهای ربات ====================
+@bot.message_handler(func=lambda m: m.text == '🐛 مدیریت خطاهای ربات')
+def admin_errors(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("📋 خطاهای حل نشده", callback_data="errors_unresolved"),
+        types.InlineKeyboardButton("🗑 پاک کردن خطاهای قدیمی", callback_data="errors_cleanup"),
+        types.InlineKeyboardButton("📊 آمار خطاها", callback_data="errors_stats"),
+        types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back_errors")
+    )
+    bot.send_message(message.chat.id, "🐛 **مدیریت خطاها**", parse_mode='Markdown', reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == "errors_unresolved")
+def errors_unresolved(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    errors = db.execute('SELECT * FROM errors WHERE resolved = 0 ORDER BY timestamp DESC LIMIT 30')
+    if not errors:
+        bot.send_message(call.message.chat.id, "✅ هیچ خطای حل نشده‌ای وجود ندارد")
+        return
+    
+    for e in errors:
+        text = (f"🐛 **خطا**\n"
+                f"نوع: {e['type']}\n"
+                f"پیام: {e['message'][:150]}\n"
+                f"زمان: {e['timestamp'][:16]}\n"
+                f"کاربر: {e['user_id'] or 'نامشخص'}\n"
+                f"ربات: {e['bot_id'] or 'نامشخص'}")
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("✅ علامت رفع شد", callback_data=f"resolve_error_{e['id']}"))
+        bot.send_message(call.message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('resolve_error_'))
+def resolve_error(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    eid = call.data.replace('resolve_error_', '')
+    db.execute('UPDATE errors SET resolved = 1 WHERE id = ?', (eid,))
+    bot.answer_callback_query(call.id, "✅ خطا به عنوان رفع شده علامت خورد")
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "errors_cleanup")
+def errors_cleanup(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    week_ago = (datetime.now() - timedelta(days=7)).isoformat()
+    db.execute('DELETE FROM errors WHERE timestamp < ?', (week_ago,))
+    bot.answer_callback_query(call.id, "✅ خطاهای قدیمی پاک شدند")
+
+@bot.callback_query_handler(func=lambda call: call.data == "errors_stats")
+def errors_stats(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    total = db.execute('SELECT COUNT(*) as count FROM errors')[0]['count']
+    unresolved = db.execute('SELECT COUNT(*) as count FROM errors WHERE resolved = 0')[0]['count']
+    
+    error_types = db.execute('''
+        SELECT type, COUNT(*) as count FROM errors 
+        GROUP BY type ORDER BY count DESC LIMIT 10
+    ''')
+    
+    text = f"📊 **آمار خطاها**\n\nکل خطاها: {total}\nحل نشده: {unresolved}\n\n**نوع خطاها:**\n"
+    for e in error_types:
+        text += f"- {e['type']}: {e['count']}\n"
+    
+    bot.send_message(call.message.chat.id, text, parse_mode='Markdown')
+
+# ==================== تنظیم ظرفیت کاربران ====================
+@bot.message_handler(func=lambda m: m.text == '⚙️ تنظیم ظرفیت کاربران')
+def admin_set_capacity(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    current = get_setting('max_users_capacity')
+    warning_msg = get_setting('capacity_warning_message')
+    
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton("📊 تغییر ظرفیت", callback_data="set_capacity_value"),
+        types.InlineKeyboardButton("📝 تغییر پیام هشدار", callback_data="set_capacity_warning"),
+        types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back_capacity")
+    )
+    
+    users_count = db.execute('SELECT COUNT(*) as count FROM users')[0]['count']
+    remaining = current - users_count
+    
+    text = (f"⚙️ **تنظیم ظرفیت کاربران**\n\n"
+            f"ظرفیت فعلی: {current:,} کاربر\n"
+            f"کاربران فعلی: {users_count:,}\n"
+            f"ظرفیت خالی: {remaining:,}\n\n"
+            f"📝 پیام هشدار:\n{warning_msg}")
+    
+    bot.send_message(message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == "set_capacity_value")
+def set_capacity_value(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    msg = bot.send_message(call.message.chat.id, "⚙️ ظرفیت جدید را وارد کنید (عدد بین 100 تا 100000):")
+    bot.register_next_step_handler(msg, process_set_capacity_value)
+
+def process_set_capacity_value(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    try:
+        capacity = int(message.text.strip())
+        if 100 <= capacity <= 100000:
+            update_setting('max_users_capacity', capacity)
+            bot.reply_to(message, f"✅ ظرفیت به {capacity} کاربر تغییر کرد")
+        else:
+            bot.reply_to(message, "❌ عدد بین 100 تا 100000")
+    except:
+        bot.reply_to(message, "❌ عدد نامعتبر")
+
+@bot.callback_query_handler(func=lambda call: call.data == "set_capacity_warning")
+def set_capacity_warning(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    msg = bot.send_message(call.message.chat.id, "📝 پیام هشدار ظرفیت کامل (از {link} استفاده کنید):")
+    bot.register_next_step_handler(msg, process_set_capacity_warning)
+
+def process_set_capacity_warning(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    update_setting('capacity_warning_message', message.text)
+    bot.reply_to(message, "✅ پیام هشدار ذخیره شد")
+
+# ==================== مدیریت ماشین‌ها ====================
+@bot.message_handler(func=lambda m: m.text == '🖥️ مدیریت ماشین‌ها')
+def admin_machines(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("📋 لیست ماشین‌ها", callback_data="machines_list"),
+        types.InlineKeyboardButton("📈 افزایش ظرفیت", callback_data="machines_increase"),
+        types.InlineKeyboardButton("📉 کاهش ظرفیت", callback_data="machines_decrease"),
+        types.InlineKeyboardButton("🔄 ریستارت", callback_data="machines_restart"),
+        types.InlineKeyboardButton("❌ غیرفعال", callback_data="machines_disable"),
+        types.InlineKeyboardButton("➕ اضافه کردن سرور", callback_data="machines_add_server"),
+        types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back_machines")
+    )
+    bot.send_message(message.chat.id, "🖥️ **مدیریت ماشین‌ها**", parse_mode='Markdown', reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == "machines_list")
+def machines_list(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    machines = db.execute("SELECT * FROM machines ORDER BY id")
+    text = "🖥️ **لیست ماشین‌ها**\n\n"
+    for m in machines:
+        usage = (m['current_bots'] / m['max_bots']) * 100 if m['max_bots'] > 0 else 0
+        status_emoji = "🟢" if m['status'] == 'active' else "🔴"
+        local_tag = "📍 محلی" if m.get('is_local', 1) == 1 else "🌐 از راه دور"
+        text += f"{status_emoji} **{m['name']}** ({local_tag})\n"
+        text += f"   └ ربات‌ها: {m['current_bots']}/{m['max_bots']} ({usage:.1f}%)\n"
+        if m.get('ip'):
+            text += f"   └ آدرس: {m['ip']}\n"
+        text += "\n"
+    
+    machine_stats = machine_manager.get_stats()
+    text += f"📊 **جمع کل:** {machine_stats['total_bots']}/{machine_stats['total_capacity']} ({machine_stats['usage_percent']:.1f}%)"
+    
+    bot.send_message(call.message.chat.id, text, parse_mode='Markdown')
+
+@bot.callback_query_handler(func=lambda call: call.data == "machines_increase")
+def machines_increase(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    machines = db.execute("SELECT id, name, max_bots FROM machines WHERE status = 'active'")
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for m in machines:
+        markup.add(types.InlineKeyboardButton(f"📈 {m['name']} (فعلی: {m['max_bots']})", callback_data=f"inc_machine_{m['id']}"))
+    bot.send_message(call.message.chat.id, "📈 انتخاب کنید:", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('inc_machine_'))
+def inc_machine(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    machine_id = int(call.data.replace('inc_machine_', ''))
+    msg = bot.send_message(call.message.chat.id, "📈 ظرفیت جدید (حداکثر 50000):")
+    bot.register_next_step_handler(msg, lambda m: process_change_capacity(m, machine_id, 'inc'))
+
+@bot.callback_query_handler(func=lambda call: call.data == "machines_decrease")
+def machines_decrease(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    machines = db.execute("SELECT id, name, max_bots FROM machines WHERE status = 'active'")
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for m in machines:
+        markup.add(types.InlineKeyboardButton(f"📉 {m['name']} (فعلی: {m['max_bots']})", callback_data=f"dec_machine_{m['id']}"))
+    bot.send_message(call.message.chat.id, "📉 انتخاب کنید:", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('dec_machine_'))
+def dec_machine(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    machine_id = int(call.data.replace('dec_machine_', ''))
+    msg = bot.send_message(call.message.chat.id, "📉 ظرفیت جدید (حداقل برابر با تعداد ربات‌های فعلی):")
+    bot.register_next_step_handler(msg, lambda m: process_change_capacity(m, machine_id, 'dec'))
+
+def process_change_capacity(message, machine_id, action):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    try:
+        new_capacity = int(message.text.strip())
+        machine = db.execute("SELECT * FROM machines WHERE id = ?", (machine_id,))
+        if machine:
+            machine = machine[0]
+            current_bots = machine['current_bots']
+            
+            if action == 'dec' and new_capacity < current_bots:
+                bot.reply_to(message, f"❌ ظرفیت نمی‌تواند کمتر از {current_bots} (تعداد ربات‌های فعلی) باشد")
+                return
+            
+            if 100 <= new_capacity <= 50000:
+                machine_manager.update_machine_capacity(machine_id, new_capacity)
+                bot.reply_to(message, f"✅ ظرفیت ماشین {machine['name']} به {new_capacity} تغییر کرد")
+            else:
+                bot.reply_to(message, "❌ عدد بین 100 تا 50000")
+        else:
+            bot.reply_to(message, "❌ ماشین یافت نشد")
+    except:
+        bot.reply_to(message, "❌ عدد نامعتبر")
+
+@bot.callback_query_handler(func=lambda call: call.data == "machines_restart")
+def machines_restart(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    status_msg = bot.send_message(call.message.chat.id, "🔄 در حال ریستارت ربات‌های روی این ماشین...")
+    restarted = machine_manager.restart_all_dead_bots()
+    bot.edit_message_text(f"✅ {restarted} ربات ریستارت شدند", call.message.chat.id, status_msg.message_id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "machines_disable")
+def machines_disable(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    machines = db.execute("SELECT id, name, status FROM machines")
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for m in machines:
+        status_emoji = "🟢" if m['status'] == 'active' else "🔴"
+        markup.add(types.InlineKeyboardButton(f"{status_emoji} {m['name']}", callback_data=f"toggle_machine_{m['id']}"))
+    bot.send_message(call.message.chat.id, "🎛️ انتخاب کنید:", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('toggle_machine_'))
+def toggle_machine(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    machine_id = int(call.data.replace('toggle_machine_', ''))
+    machine = db.execute("SELECT status, name FROM machines WHERE id = ?", (machine_id,))
+    if machine:
+        machine = machine[0]
+        new_status = 'inactive' if machine['status'] == 'active' else 'active'
+        db.execute("UPDATE machines SET status = ? WHERE id = ?", (new_status, machine_id))
+        status_text = "غیرفعال" if new_status == 'inactive' else "فعال"
+        bot.answer_callback_query(call.id, f"✅ ماشین {machine['name']} {status_text} شد")
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+
+# ==================== اضافه کردن سرور جدید ====================
+@bot.message_handler(func=lambda m: m.text == '➕ اضافه کردن سرور جدید')
+def admin_add_server(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    msg = bot.send_message(message.chat.id, "➕ **اضافه کردن سرور جدید**\n\nلطفاً اطلاعات را وارد کنید:\n1️⃣ نام سرور:")
+    bot.register_next_step_handler(msg, process_server_name)
+
+def process_server_name(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    server_name = message.text.strip()
+    msg = bot.send_message(message.chat.id, "2️⃣ آدرس IP:")
+    bot.register_next_step_handler(msg, lambda m: process_server_ip(m, server_name))
+
+def process_server_ip(message, server_name):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    server_ip = message.text.strip()
+    msg = bot.send_message(message.chat.id, "3️⃣ پورت (پیش‌فرض 22):")
+    bot.register_next_step_handler(msg, lambda m: process_server_port(m, server_name, server_ip))
+
+def process_server_port(message, server_name, server_ip):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    try:
+        port = int(message.text.strip()) if message.text.strip() else 22
+    except:
+        port = 22
+    msg = bot.send_message(message.chat.id, "4️⃣ نام کاربری:")
+    bot.register_next_step_handler(msg, lambda m: process_server_username(m, server_name, server_ip, port))
+
+def process_server_username(message, server_name, server_ip, port):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    username = message.text.strip()
+    msg = bot.send_message(message.chat.id, "5️⃣ رمز عبور:")
+    bot.register_next_step_handler(msg, lambda m: process_server_password(m, server_name, server_ip, port, username))
+
+def process_server_password(message, server_name, server_ip, port, username):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    password = message.text.strip()
+    
+    # انتخاب ماشین برای اتصال
+    machines = db.execute("SELECT id, name FROM machines WHERE is_local = 1 OR status = 'active'")
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for m in machines:
+        markup.add(types.InlineKeyboardButton(f"🖥️ {m['name']}", callback_data=f"assign_machine_{m['id']}_{server_name}_{server_ip}_{port}_{username}_{password}"))
+    
+    bot.send_message(message.chat.id, "6️⃣ این سرور به کدام ماشین متصل شود؟", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('assign_machine_'))
+def assign_machine_to_server(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    parts = call.data.replace('assign_machine_', '').split('_')
+    machine_id = int(parts[0])
+    server_name = parts[1]
+    server_ip = parts[2]
+    port = int(parts[3])
+    username = parts[4]
+    password = '_'.join(parts[5:]) if len(parts) > 5 else ""
+    
+    status_msg = bot.send_message(call.message.chat.id, "🔄 در حال اتصال به سرور...")
+    
+    success, msg = remote_manager.add_server(server_name, server_ip, username, password, port, machine_id)
+    
+    if success:
+        bot.edit_message_text(f"✅ سرور با موفقیت اضافه شد!\n\n📊 وضعیت: {msg}", 
+                             call.message.chat.id, status_msg.message_id)
+        
+        db.execute("UPDATE machines SET ip = ?, username = ?, is_local = 0 WHERE id = ?", 
+                  (server_ip, username, machine_id))
+    else:
+        bot.edit_message_text(f"❌ خطا: {msg}", call.message.chat.id, status_msg.message_id)
+
+# ==================== مدیریت داکر ====================
+@bot.message_handler(func=lambda m: m.text == '🐳 مدیریت داکر')
+def admin_docker(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    status = machine_manager.docker_manager.get_status()
+    docker_enabled = get_setting('docker_enabled')
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("✅ فعال کردن داکر" if not docker_enabled else "❌ غیرفعال کردن داکر", 
+                                  callback_data="toggle_docker"),
+        types.InlineKeyboardButton("📊 وضعیت کانتینرها", callback_data="docker_status"),
+        types.InlineKeyboardButton("🧹 پاکسازی", callback_data="docker_cleanup"),
+        types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back_docker")
+    )
+    
+    status_text = f"🐳 **وضعیت داکر**\n\nفعال: {'✅ بله' if docker_enabled else '❌ خیر'}\n\n{status}"
+    bot.send_message(message.chat.id, status_text, parse_mode='Markdown', reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == "toggle_docker")
+def toggle_docker(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    current = get_setting('docker_enabled')
+    new_value = 0 if current else 1
+    update_setting('docker_enabled', new_value)
+    
+    bot.answer_callback_query(call.id, f"داکر {'فعال' if new_value else 'غیرفعال'} شد")
+    bot.edit_message_text(f"✅ داکر {'فعال' if new_value else 'غیرفعال'} شد", 
+                         call.message.chat.id, call.message.message_id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "docker_status")
+def docker_status(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    status = machine_manager.docker_manager.get_status()
+    bot.send_message(call.message.chat.id, f"🐳 **وضعیت کانتینرها**\n\n{status}", parse_mode='Markdown')
+
+@bot.callback_query_handler(func=lambda call: call.data == "docker_cleanup")
+def docker_cleanup(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    status_msg = bot.send_message(call.message.chat.id, "🔄 در حال پاکسازی کانتینرها...")
+    
+    try:
+        result = subprocess.run(['docker', 'system', 'prune', '-f', '--volumes'], 
+                               capture_output=True, text=True, timeout=120)
+        bot.edit_message_text(f"✅ پاکسازی انجام شد\n\n{result.stdout[:500]}", 
+                             call.message.chat.id, status_msg.message_id)
+    except Exception as e:
+        bot.edit_message_text(f"❌ خطا: {str(e)}", call.message.chat.id, status_msg.message_id)
+
+# ==================== مدیریت کوبرنتیز ====================
+@bot.message_handler(func=lambda m: m.text == '☸️ مدیریت کوبرنتیز')
+def admin_kubernetes(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    status = machine_manager.k8s_manager.get_status()
+    k8s_enabled = get_setting('kubernetes_enabled')
+    namespace = get_setting('kubernetes_namespace')
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("✅ فعال کردن" if not k8s_enabled else "❌ غیرفعال کردن", 
+                                  callback_data="toggle_k8s"),
+        types.InlineKeyboardButton("📊 وضعیت پادها", callback_data="k8s_status"),
+        types.InlineKeyboardButton("📝 تنظیم Namespace", callback_data="k8s_namespace"),
+        types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back_k8s")
+    )
+    
+    status_text = f"☸️ **وضعیت کوبرنتیز**\n\nفعال: {'✅ بله' if k8s_enabled else '❌ خیر'}\nNamespace: {namespace}\n\n{status}"
+    bot.send_message(message.chat.id, status_text, parse_mode='Markdown', reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == "toggle_k8s")
+def toggle_k8s(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    current = get_setting('kubernetes_enabled')
+    new_value = 0 if current else 1
+    update_setting('kubernetes_enabled', new_value)
+    
+    bot.answer_callback_query(call.id, f"کوبرنتیز {'فعال' if new_value else 'غیرفعال'} شد")
+    bot.edit_message_text(f"✅ کوبرنتیز {'فعال' if new_value else 'غیرفعال'} شد", 
+                         call.message.chat.id, call.message.message_id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "k8s_status")
+def k8s_status(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    namespace = get_setting('kubernetes_namespace')
+    status = machine_manager.k8s_manager.get_status(namespace)
+    bot.send_message(call.message.chat.id, f"☸️ **وضعیت پادها (Namespace: {namespace})**\n\n{status}", parse_mode='Markdown')
+
+@bot.callback_query_handler(func=lambda call: call.data == "k8s_namespace")
+def k8s_namespace(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    msg = bot.send_message(call.message.chat.id, "📝 Namespace جدید را وارد کنید:")
+    bot.register_next_step_handler(msg, process_k8s_namespace)
+
+def process_k8s_namespace(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    namespace = message.text.strip()
+    update_setting('kubernetes_namespace', namespace)
+    bot.reply_to(message, f"✅ Namespace به {namespace} تغییر کرد")
+
+# ==================== کال‌بک‌های بازگشت ====================
+@bot.callback_query_handler(func=lambda call: call.data == "admin_back_settings")
+def admin_back_settings(call):
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+    admin_settings(call.message)
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_back_users")
+def admin_back_users(call):
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+    admin_delete_user(call.message)
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_back_wallet")
+def admin_back_wallet(call):
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+    admin_set_wallet_address(call.message)
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_back_guide")
+def admin_back_guide(call):
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+    admin_set_guide(call.message)
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_back_welcome")
+def admin_back_welcome(call):
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+    admin_set_welcome(call.message)
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_back_active")
+def admin_back_active(call):
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+    admin_set_active_text(call.message)
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_back_payment")
+def admin_back_payment(call):
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+    admin_set_payment_text(call.message)
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_back_errors")
+def admin_back_errors(call):
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+    admin_errors(call.message)
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_back_capacity")
+def admin_back_capacity(call):
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+    admin_set_capacity(call.message)
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_back_machines")
+def admin_back_machines(call):
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+    admin_machines(call.message)
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_back_docker")
+def admin_back_docker(call):
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+    admin_docker(call.message)
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_back_k8s")
+def admin_back_k8s(call):
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+    admin_kubernetes(call.message)
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_back_broadcast")
+def admin_back_broadcast(call):
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+    broadcast_prompt(call.message)
 # ==================== مدیریت داکر ====================
 @bot.message_handler(func=lambda m: m.text == '🐳 مدیریت داکر')
 def admin_docker(message):
