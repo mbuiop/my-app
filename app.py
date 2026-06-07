@@ -178,10 +178,6 @@ BOT_USERNAME = "ROBTTSAZE_bot"
 # تنظیمات پیش‌فرض
 DEFAULT_SETTINGS = {
     'trc20_address': TRC20_ADDRESS,
-    'card_number': "5892101187322777",
-    'card_number_display': "5892 1011 8732 2777",
-    'card_holder': "مرتضی نیکخو خنجری",
-    'card_bank': "بانک ملی - سپهر",
     'subscription_price': 2000000,
     'subscription_price_str': "۲,۰۰۰,۰۰۰ تومان",
     'subscription_price_usd': "50 USD",
@@ -198,6 +194,51 @@ DEFAULT_SETTINGS = {
     'backup_interval': 3600,
     'state_save_interval': 60
 }
+
+# ==================== دکمه‌های منو ====================
+MENU_BUTTONS_FA = [
+    '🤖 ساخت ربات جدید',
+    '📋 ربات‌های من',
+    '🔄 فعال/غیرفعال',
+    '🗑 حذف ربات',
+    '💰 کیف پول و اشتراک',
+    '📚 راهنما',
+    '👥 دعوت دوستان',
+    '💸 درخواست برداشت',
+    '📦 کتابخانه',
+    '📊 آمار',
+    '📞 پشتیبانی',
+    '⚡ وضعیت صف',
+    '📈 مصرف من',
+    '🌐 زبان / Language'
+]
+
+MENU_BUTTONS_EN = [
+    '🤖 New Bot',
+    '📋 My Bots',
+    '🔄 Start/Stop',
+    '🗑 Delete Bot',
+    '💰 Wallet & Subscription',
+    '📚 Guide',
+    '👥 Invite Friends',
+    '💸 Withdraw',
+    '📦 Library',
+    '📊 Stats',
+    '📞 Support',
+    '⚡ Queue Status',
+    '📈 My Usage',
+    '🌐 Language / زبان'
+]
+
+ADMIN_BUTTONS_FA = [
+    '👑 پنل مدیریت',
+    '📢 پیام همگانی'
+]
+
+ADMIN_BUTTONS_EN = [
+    '👑 Admin Panel',
+    '📢 Broadcast'
+]
 
 # ==================== متن‌های چند زبانه ====================
 TEXTS = {
@@ -271,7 +312,10 @@ TEXTS = {
         'approve': "✅ تایید",
         'reject': "❌ رد",
         'approved': "✅ تایید شد",
-        'rejected': "❌ رد شد"
+        'rejected': "❌ رد شد",
+        'language_changed': "✅ زبان به فارسی تغییر کرد",
+        'language_changed_en': "✅ Language changed to English",
+        'send_file': "📤 فایل `.py` یا `.zip` خود را ارسال کنید"
     },
     'en': {
         'welcome': "🚀 Welcome {name}!",
@@ -343,7 +387,10 @@ TEXTS = {
         'approve': "✅ Approve",
         'reject': "❌ Reject",
         'approved': "✅ Approved",
-        'rejected': "❌ Rejected"
+        'rejected': "❌ Rejected",
+        'language_changed': "✅ Language changed to Persian",
+        'language_changed_en': "✅ زبان به انگلیسی تغییر کرد",
+        'send_file': "📤 Send your `.py` or `.zip` file"
     }
 }
 
@@ -397,31 +444,6 @@ class StateManager:
     
     def get_bot_state(self, bot_id):
         return self.state.get('active_bots', {}).get(bot_id)
-    
-    def restore_bots(self, machine_manager):
-        """بازیابی ربات‌ها پس از ریستارت سرور"""
-        try:
-            # بازیابی از دیتابیس
-            running_bots = db.execute('SELECT id, token, file_path, name FROM bots WHERE status = "running"')
-            restored = 0
-            for bot_rec in running_bots:
-                bot_id = bot_rec['id']
-                token = db.decrypt_token(bot_rec['token'])
-                if token and os.path.exists(bot_rec['file_path']):
-                    with open(bot_rec['file_path'], 'r', encoding='utf-8', errors='ignore') as f:
-                        code = f.read()
-                    result = machine_manager.run_bot(bot_id, code, token, restore=True)
-                    if result.get('success'):
-                        restored += 1
-                        logger.info(f"✅ Restored bot: {bot_rec['name']}")
-                    else:
-                        db.execute('UPDATE bots SET status = "stopped" WHERE id = ?', (bot_id,))
-            
-            logger.info(f"✅ Restored {restored} bots after crash")
-            return restored
-        except Exception as e:
-            logger.error(f"Bot restoration failed: {e}")
-            return 0
 
 state_manager = StateManager()
 
@@ -459,7 +481,6 @@ class Database:
             backup_path = os.path.join(DIRS['BACKUPS'], backup_name)
             shutil.copy2(os.path.join(DIRS['DB'], 'mother_bot.db'), backup_path)
             
-            # حذف بکاپ‌های قدیمی (فقط 50 تا آخرین)
             backups = sorted([f for f in os.listdir(DIRS['BACKUPS']) if f.endswith('.db')])
             for old in backups[:-50]:
                 os.remove(os.path.join(DIRS['BACKUPS'], old))
@@ -492,7 +513,6 @@ class Database:
         return encrypted_token
     
     def _init_tables(self):
-        # کاربران
         self.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -521,7 +541,6 @@ class Database:
             )
         ''')
         
-        # ربات‌ها
         self.execute('''
             CREATE TABLE IF NOT EXISTS bots (
                 id TEXT PRIMARY KEY,
@@ -549,7 +568,6 @@ class Database:
             )
         ''')
         
-        # ماشین‌ها
         self.execute('''
             CREATE TABLE IF NOT EXISTS machines (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -568,7 +586,6 @@ class Database:
             )
         ''')
         
-        # فیش‌ها
         self.execute('''
             CREATE TABLE IF NOT EXISTS receipts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -583,7 +600,6 @@ class Database:
             )
         ''')
         
-        # درخواست‌های برداشت
         self.execute('''
             CREATE TABLE IF NOT EXISTS withdraw_requests (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -596,7 +612,6 @@ class Database:
             )
         ''')
         
-        # کمیسیون‌ها
         self.execute('''
             CREATE TABLE IF NOT EXISTS commissions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -609,7 +624,6 @@ class Database:
             )
         ''')
         
-        # تراکنش‌های رمزارز
         self.execute('''
             CREATE TABLE IF NOT EXISTS crypto_transactions (
                 id TEXT PRIMARY KEY,
@@ -623,7 +637,6 @@ class Database:
             )
         ''')
         
-        # خطاها
         self.execute('''
             CREATE TABLE IF NOT EXISTS errors (
                 id TEXT PRIMARY KEY,
@@ -637,7 +650,6 @@ class Database:
             )
         ''')
         
-        # تنظیمات سیستم
         self.execute('''
             CREATE TABLE IF NOT EXISTS system_settings (
                 key TEXT PRIMARY KEY,
@@ -646,7 +658,6 @@ class Database:
             )
         ''')
         
-        # آمار روزانه
         self.execute('''
             CREATE TABLE IF NOT EXISTS daily_stats (
                 date TEXT PRIMARY KEY,
@@ -660,7 +671,6 @@ class Database:
             )
         ''')
         
-        # فعالیت‌های کاربران (امنیت)
         self.execute('''
             CREATE TABLE IF NOT EXISTS user_activities (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -672,7 +682,6 @@ class Database:
             )
         ''')
         
-        # لاگ امنیتی
         self.execute('''
             CREATE TABLE IF NOT EXISTS security_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -684,7 +693,6 @@ class Database:
             )
         ''')
         
-        # بکاپ‌ها
         self.execute('''
             CREATE TABLE IF NOT EXISTS backups (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -696,14 +704,12 @@ class Database:
             )
         ''')
         
-        # تنظیمات پیش‌فرض
         for key, value in DEFAULT_SETTINGS.items():
             self.execute('''
                 INSERT OR IGNORE INTO system_settings (key, value, updated_at) 
                 VALUES (?, ?, ?)
             ''', (key, str(value), datetime.now().isoformat()))
         
-        # ایجاد ماشین‌ها
         for i in range(1, 11):
             self.execute('''
                 INSERT OR IGNORE INTO machines (id, name, status, max_bots, max_memory, created_at, is_kubernetes_pod)
@@ -830,7 +836,6 @@ def activate_subscription(user_id, tx_hash=None, months=1):
     db.execute('UPDATE daily_stats SET new_subscriptions = new_subscriptions + 1, total_revenue = total_revenue + ? WHERE date = ?',
               (get_setting('subscription_price'), datetime.now().date().isoformat()))
     
-    # اضافه کردن کمیسیون به معرف
     if user and user.get('referred_by'):
         commission_percent = get_setting('withdraw_percent')
         price = get_setting('subscription_price')
@@ -848,7 +853,6 @@ def activate_subscription(user_id, tx_hash=None, months=1):
         except:
             pass
     
-    # ارسال راهنما
     guide_text = get_text(user_id, 'build_guide')
     bot.send_message(user_id, guide_text)
     logger.info(f"Subscription activated for user {user_id}")
@@ -1309,14 +1313,25 @@ class MachineManager:
         self.port_counter = 8000
         self.processes = {}
         self.lock = threading.RLock()
-        # بازیابی ربات‌ها پس از ریستارت
         self._restore_bots_after_crash()
     
     def _restore_bots_after_crash(self):
-        """بازیابی ربات‌ها پس از ریستارت سرور"""
         try:
             logger.info("🔄 Checking for bots to restore after crash...")
-            restored = state_manager.restore_bots(self)
+            running_bots = db.execute('SELECT id, token, file_path, name FROM bots WHERE status = "running"')
+            restored = 0
+            for bot_rec in running_bots:
+                bot_id = bot_rec['id']
+                token = db.decrypt_token(bot_rec['token'])
+                if token and os.path.exists(bot_rec['file_path']):
+                    with open(bot_rec['file_path'], 'r', encoding='utf-8', errors='ignore') as f:
+                        code = f.read()
+                    result = self.run_bot(bot_id, code, token, restore=True)
+                    if result.get('success'):
+                        restored += 1
+                        logger.info(f"✅ Restored bot: {bot_rec['name']}")
+                    else:
+                        db.execute('UPDATE bots SET status = "stopped" WHERE id = ?', (bot_id,))
             logger.info(f"✅ Restored {restored} bots after crash")
         except Exception as e:
             logger.error(f"Bot restoration failed: {e}")
@@ -1490,55 +1505,48 @@ build_queue = BuildQueue()
 health_checker = HealthChecker()
 auto_scaler = AutoScaleManager()
 
-# ==================== منوی اصلی ====================
+# ==================== منوی اصلی (رفع شده) ====================
 def get_main_menu(user_id):
+    """دریافت منوی اصلی بر اساس زبان کاربر"""
+    try:
+        user = get_user(user_id)
+        lang = user['language'] if user else 'fa'
+    except:
+        lang = 'fa'
+    
     is_admin = user_id in ADMIN_IDS
-    lang = get_user_language(user_id)
     
     markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
     
     if lang == 'fa':
-        buttons = [
-            types.KeyboardButton('🤖 ساخت ربات جدید'),
-            types.KeyboardButton('📋 ربات‌های من'),
-            types.KeyboardButton('🔄 فعال/غیرفعال'),
-            types.KeyboardButton('🗑 حذف ربات'),
-            types.KeyboardButton('💰 کیف پول و اشتراک'),
-            types.KeyboardButton('📚 راهنما'),
-            types.KeyboardButton('👥 دعوت دوستان'),
-            types.KeyboardButton('💸 درخواست برداشت'),
-            types.KeyboardButton('📦 کتابخانه'),
-            types.KeyboardButton('📊 آمار'),
-            types.KeyboardButton('📞 پشتیبانی'),
-            types.KeyboardButton('⚡ وضعیت صف'),
-            types.KeyboardButton('📈 مصرف من'),
-            types.KeyboardButton('🌐 زبان / Language')
-        ]
+        buttons = MENU_BUTTONS_FA.copy()
+        if is_admin:
+            buttons.extend(ADMIN_BUTTONS_FA)
     else:
-        buttons = [
-            types.KeyboardButton('🤖 New Bot'),
-            types.KeyboardButton('📋 My Bots'),
-            types.KeyboardButton('🔄 Start/Stop'),
-            types.KeyboardButton('🗑 Delete Bot'),
-            types.KeyboardButton('💰 Wallet & Subscription'),
-            types.KeyboardButton('📚 Guide'),
-            types.KeyboardButton('👥 Invite Friends'),
-            types.KeyboardButton('💸 Withdraw'),
-            types.KeyboardButton('📦 Library'),
-            types.KeyboardButton('📊 Stats'),
-            types.KeyboardButton('📞 Support'),
-            types.KeyboardButton('⚡ Queue Status'),
-            types.KeyboardButton('📈 My Usage'),
-            types.KeyboardButton('🌐 زبان / Language')
-        ]
-    
-    if is_admin:
-        admin_btn = '👑 Admin Panel' if lang == 'en' else '👑 پنل مدیریت'
-        broadcast_btn = '📢 Broadcast' if lang == 'en' else '📢 پیام همگانی'
-        buttons.extend([types.KeyboardButton(admin_btn), types.KeyboardButton(broadcast_btn)])
+        buttons = MENU_BUTTONS_EN.copy()
+        if is_admin:
+            buttons.extend(ADMIN_BUTTONS_EN)
     
     markup.add(*buttons)
     return markup
+
+# ==================== به‌روزرسانی منو پس از تغییر زبان ====================
+def update_user_menu(chat_id, user_id):
+    """به‌روزرسانی منوی کاربر پس از تغییر زبان"""
+    try:
+        new_menu = get_main_menu(user_id)
+        bot.send_message(chat_id, get_text(user_id, 'language_changed' if get_user_language(user_id) == 'fa' else 'language_changed_en'),
+                        reply_markup=new_menu)
+    except Exception as e:
+        logger.error(f"Menu update error: {e}")
+        # اگر خطا خورد، دوباره تلاش کن
+        time.sleep(1)
+        try:
+            new_menu = get_main_menu(user_id)
+            bot.send_message(chat_id, get_text(user_id, 'language_changed' if get_user_language(user_id) == 'fa' else 'language_changed_en'),
+                            reply_markup=new_menu)
+        except:
+            pass
 
 # ==================== دکوریتور Rate Limit ====================
 def rate_limit(limit_per_second=5):
@@ -1547,7 +1555,7 @@ def rate_limit(limit_per_second=5):
         def wrapper(message, *args, **kwargs):
             user_id = message.from_user.id
             if not rate_limiter.is_allowed(user_id, limit_per_second):
-                bot.reply_to(message, get_text(user_id, 'error', error=get_text(user_id, 'rate_limit_exceeded')))
+                bot.reply_to(message, get_text(user_id, 'error', error="Please wait..."))
                 return
             return func(message, *args, **kwargs)
         return wrapper
@@ -1617,7 +1625,7 @@ def copy_link_callback(call):
     link = f"https://t.me/{BOT_USERNAME}?start={code}"
     bot.answer_callback_query(call.id, get_text(call.from_user.id, 'link_copied'), show_alert=True)
 
-# ==================== زبان ====================
+# ==================== زبان (رفع شده) ====================
 @bot.message_handler(func=lambda m: m.text in ['🌐 زبان / Language', '🌐 Language / زبان'])
 def change_language(message):
     user_id = message.from_user.id
@@ -1630,13 +1638,43 @@ def change_language(message):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('lang_'))
 def set_language(call):
-    lang = call.data.replace('lang_', '')
-    db.execute("UPDATE users SET language = ? WHERE user_id = ?", (lang, call.from_user.id))
-    
-    msg = "✅ Language set to English" if lang == 'en' else "✅ زبان به فارسی تغییر کرد"
-    bot.answer_callback_query(call.id, msg)
-    bot.delete_message(call.message.chat.id, call.message.message_id)
-    cmd_start(call.message)
+    try:
+        lang = call.data.replace('lang_', '')
+        user_id = call.from_user.id
+        
+        # به‌روزرسانی زبان در دیتابیس
+        db.execute("UPDATE users SET language = ? WHERE user_id = ?", (lang, user_id))
+        
+        # پاسخ به کاربر
+        msg = "✅ Language set to English" if lang == 'en' else "✅ زبان به فارسی تغییر کرد"
+        bot.answer_callback_query(call.id, msg)
+        
+        # حذف پیام انتخاب زبان
+        try:
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+        except:
+            pass
+        
+        # ارسال پیام تایید با منوی جدید
+        success_msg = get_text(user_id, 'language_changed_en' if lang == 'en' else 'language_changed')
+        
+        # گرفتن منوی جدید بر اساس زبان تازه
+        new_menu = get_main_menu(user_id)
+        
+        # ارسال پیام با منوی جدید
+        bot.send_message(call.message.chat.id, success_msg, reply_markup=new_menu)
+        
+        # به‌روزرسانی منوی اصلی کاربر (اختیاری)
+        update_user_menu(call.message.chat.id, user_id)
+        
+    except Exception as e:
+        logger.error(f"Language change error: {e}")
+        # در صورت خطا، دوباره تلاش کن
+        try:
+            new_menu = get_main_menu(user_id)
+            bot.send_message(call.message.chat.id, "✅ Language updated", reply_markup=new_menu)
+        except:
+            pass
 
 # ==================== کیف پول و اشتراک ====================
 @bot.message_handler(func=lambda m: m.text in ['💰 کیف پول و اشتراک', '💰 Wallet & Subscription'])
@@ -1991,7 +2029,7 @@ def library_menu(message):
     lang = get_user_language(message.from_user.id)
     markup = types.InlineKeyboardMarkup(row_width=2)
     
-    popular = list(POPULAR_LIBRARIES.items())[:20] if 'POPULAR_LIBRARIES' in dir() else []
+    popular = list(POPULAR_LIBRARIES.items())[:20]
     for name, lib in popular:
         markup.add(types.InlineKeyboardButton(f"📦 {name}", callback_data=f"lib_{lib}"))
     
@@ -2234,7 +2272,6 @@ def approve_receipt(call):
                   (call.from_user.id, datetime.now().isoformat(), rid))
         activate_subscription(r[0]['user_id'], r[0]['tx_hash'])
         
-        # به‌روزرسانی max_bots کاربر
         max_bots = get_setting('max_bots_per_subscription')
         db.execute('UPDATE users SET max_bots = ? WHERE user_id = ?', (max_bots, r[0]['user_id']))
         
@@ -2446,7 +2483,6 @@ POPULAR_LIBRARIES = {
 def system_monitor():
     while True:
         try:
-            # بررسی انقضای اشتراک
             for user in db.execute('SELECT user_id, subscription_expiry FROM users WHERE subscription_status = "active"'):
                 if user['subscription_expiry']:
                     expiry = datetime.fromisoformat(user['subscription_expiry'])
@@ -2454,7 +2490,6 @@ def system_monitor():
                         db.execute('UPDATE users SET subscription_status = "inactive" WHERE user_id = ?', (user['user_id'],))
                         logger.info(f"Subscription expired for user {user['user_id']}")
             
-            # آمار روزانه
             today = datetime.now().date().isoformat()
             db.execute('INSERT OR IGNORE INTO daily_stats (date, new_users, new_bots, new_subscriptions, total_revenue) VALUES (?, 0, 0, 0, 0)', (today,))
             
