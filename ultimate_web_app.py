@@ -3,8 +3,7 @@
 
 """
 ╔═══════════════════════════════════════════════════════════════════════════════╗
-║   ULTIMATE BOT BUILDER - نسخه کامل با پنل مدیریت و همه امکانات                ║
-║   تمام قابلیت‌های ربات تلگرام + رابط وب حرفه‌ای                              ║
+║   ULTIMATE BOT BUILDER - نسخه نهایی با پنل مدیریت کامل                        ║
 ╚═══════════════════════════════════════════════════════════════════════════════╝
 """
 
@@ -41,7 +40,7 @@ def install_package(package):
 for pkg in ['flask', 'flask-cors', 'requests']:
     install_package(pkg)
 
-from flask import Flask, request, jsonify, session, redirect, url_for, send_from_directory
+from flask import Flask, request, jsonify, session, redirect, url_for
 from flask_cors import CORS
 import requests
 
@@ -76,13 +75,6 @@ DEFAULT_SETTINGS = {
     'max_users_capacity': 10000,
     'max_concurrent_builds': 20,
     'guide_text_fa': '📚 راهنمای استفاده\n\n1️⃣ برای ساخت ربات، فایل .py یا .zip خود را ارسال کنید\n2️⃣ پس از پرداخت اشتراک ماهیانه، می‌توانید ربات بسازید\n3️⃣ هر کاربر می‌تواند تا ۳ ربات بسازد\n4️⃣ با دعوت دوستان، ۷٪ کمیسیون دریافت کنید\n5️⃣ پس از رسیدن به ۲ میلیون تومان، می‌توانید برداشت کنید',
-    'guide_text_en': '📚 User Guide\n\n1️⃣ Send your .py or .zip file\n2️⃣ After subscription payment, you can build bots\n3️⃣ Each user can build up to 3 bots\n4️⃣ Invite friends and get 7% commission\n5️⃣ Withdraw after reaching 2,000,000 Toman',
-    'welcome_text_fa': '🚀 خوش آمدید {name}!\nبه ربات سازنده ربات خوش آمدید.',
-    'welcome_text_en': '🚀 Welcome {name}!\nWelcome to the bot builder bot.',
-    'subscription_active_text_fa': '✅ اشتراک شما با موفقیت فعال شد!\nاکنون می‌توانید ربات خود را بسازید.',
-    'subscription_active_text_en': '✅ Your subscription has been activated!\nYou can now build your bot.',
-    'subscription_payment_text_fa': '💳 برای فعالسازی {price} را به شماره کارت زیر واریز:\n`{card_number}`\n🏦 نام دارنده: {card_holder}\n🏦 بانک: {card_bank}\n\n📸 پس از واریز، تصویر تراکنش را ارسال کنید',
-    'subscription_payment_text_en': '💳 To activate, send {price} to:\n`{address}`\n🌐 Network: TRC20 (USDT)\n\n📸 Send transaction screenshot after payment',
     'admin_password': '123456',
 }
 
@@ -108,7 +100,6 @@ class Database:
             return []
     
     def _init_tables(self):
-        # کاربران
         self.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -133,7 +124,6 @@ class Database:
             )
         ''')
         
-        # ربات‌ها
         self.execute('''
             CREATE TABLE IF NOT EXISTS bots (
                 id TEXT PRIMARY KEY,
@@ -150,7 +140,6 @@ class Database:
             )
         ''')
         
-        # فیش‌ها
         self.execute('''
             CREATE TABLE IF NOT EXISTS receipts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -165,7 +154,6 @@ class Database:
             )
         ''')
         
-        # درخواست‌های برداشت
         self.execute('''
             CREATE TABLE IF NOT EXISTS withdraw_requests (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -178,7 +166,6 @@ class Database:
             )
         ''')
         
-        # کمیسیون‌ها
         self.execute('''
             CREATE TABLE IF NOT EXISTS commissions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -191,7 +178,6 @@ class Database:
             )
         ''')
         
-        # تنظیمات
         self.execute('''
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
@@ -199,11 +185,9 @@ class Database:
             )
         ''')
         
-        # تنظیمات پیش‌فرض
         for key, value in DEFAULT_SETTINGS.items():
             self.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', (key, str(value)))
         
-        # ادمین پیش‌فرض
         admin = self.execute("SELECT id FROM users WHERE username = ?", ('admin',))
         if not admin:
             password_hash = hashlib.md5('admin123'.encode()).hexdigest()
@@ -275,18 +259,12 @@ def activate_subscription(user_id, tx_hash=None):
         WHERE id = ?
     ''', (new_expiry.isoformat(), user_id))
     
-    # کمیسیون معرف
     if user and user.get('referred_by'):
         commission_percent = get_setting('withdraw_percent')
         price = get_setting('subscription_price')
         commission = int(price * commission_percent / 100)
         db.execute('UPDATE users SET wallet_balance = wallet_balance + ?, total_commission = total_commission + ? WHERE id = ?',
                   (commission, commission, user['referred_by']))
-        
-        db.execute('''
-            INSERT INTO commissions (user_id, from_user, amount, reason, created_at, paid)
-            VALUES (?, ?, ?, 'referral_subscription', ?, 1)
-        ''', (user['referred_by'], user_id, commission, now.isoformat()))
     
     return True
 
@@ -379,7 +357,6 @@ def timeout_handler(signum, frame):
 signal.signal(signal.SIGALRM, timeout_handler)
 signal.alarm(60)
 
-_BLOCKED = ['os.system', 'subprocess', 'eval', 'exec']
 print(f"🔒 Bot {bot_id[:8]} started in sandbox")
 # ==================== کد اصلی ====================
 '''
@@ -453,50 +430,37 @@ app.secret_key = secrets.token_hex(32)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 CORS(app)
 
-# ==================== HTML صفحات ====================
+# ==================== HTML ====================
 
 HTML_LOGIN = '''<!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>ورود | ساخت ربات تلگرام</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        *{font-family:'Vazirmatn','Tahoma',sans-serif;touch-action:manipulation}
+        *{font-family:'Vazirmatn','Tahoma',sans-serif}
         body{background:linear-gradient(135deg,#667eea,#764ba2);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
         .login-card{background:white;border-radius:32px;padding:40px;max-width:450px;width:100%;box-shadow:0 25px 50px -12px rgba(0,0,0,0.25)}
         .btn-login{background:linear-gradient(135deg,#667eea,#764ba2);border:none;border-radius:14px;padding:14px;width:100%;color:white;font-weight:600}
         .form-control{border-radius:14px;padding:12px;font-size:16px}
-        input,button{font-size:16px !important}
     </style>
 </head>
 <body>
     <div class="login-card">
         <div class="text-center mb-4">
             <i class="fas fa-robot" style="font-size:64px;color:#667eea"></i>
-            <h2 class="mt-3">ساخت ربات تلگرام</h2>
-            <p class="text-muted">ورود به پنل کاربری</p>
+            <h2>ساخت ربات تلگرام</h2>
         </div>
         <div id="errorMsg" class="alert alert-danger" style="display:none"></div>
         <form id="loginForm">
-            <div class="mb-3">
-                <input type="text" id="username" class="form-control" placeholder="نام کاربری" required autofocus>
-            </div>
-            <div class="mb-3">
-                <input type="password" id="password" class="form-control" placeholder="رمز عبور" required>
-            </div>
-            <button type="submit" class="btn-login">
-                <i class="fas fa-sign-in-alt me-2"></i> ورود
-            </button>
+            <div class="mb-3"><input type="text" id="username" class="form-control" placeholder="نام کاربری" required autofocus></div>
+            <div class="mb-3"><input type="password" id="password" class="form-control" placeholder="رمز عبور" required></div>
+            <button type="submit" class="btn-login">ورود</button>
         </form>
-        <div class="text-center mt-4">
-            <a href="/register" class="text-decoration-none">ثبت نام نکرده‌اید؟ عضویت</a>
-        </div>
-        <div class="text-center mt-3">
-            <small class="text-muted">🔒 امنیت بالا | ایزوله‌سازی کامل</small>
-        </div>
+        <div class="text-center mt-4"><a href="/register">ثبت نام</a></div>
     </div>
     <script>
         document.getElementById('loginForm').onsubmit = async (e) => {
@@ -534,18 +498,17 @@ HTML_REGISTER = '''<!DOCTYPE html>
     <div class="register-card">
         <div class="text-center mb-4">
             <i class="fas fa-user-plus" style="font-size:64px;color:#667eea"></i>
-            <h2 class="mt-3">ثبت نام</h2>
+            <h2>ثبت نام</h2>
         </div>
         <div id="errorMsg" class="alert alert-danger" style="display:none"></div>
         <form id="registerForm">
             <div class="mb-3"><input type="text" id="username" class="form-control" placeholder="نام کاربری" required></div>
             <div class="mb-3"><input type="password" id="password" class="form-control" placeholder="رمز عبور" required minlength="6"></div>
             <div class="mb-3"><input type="text" id="full_name" class="form-control" placeholder="نام کامل" required></div>
-            <div class="mb-3"><input type="email" id="email" class="form-control" placeholder="ایمیل (اختیاری)"></div>
-            <div class="mb-3"><input type="text" id="referral_code" class="form-control" placeholder="کد معرف (اختیاری)"></div>
-            <button type="submit" class="btn-register"><i class="fas fa-check-circle me-2"></i> ثبت نام</button>
+            <div class="mb-3"><input type="text" id="referral_code" class="form-control" placeholder="کد معرف"></div>
+            <button type="submit" class="btn-register">ثبت نام</button>
         </form>
-        <div class="text-center mt-4"><a href="/login" class="text-decoration-none">قبلاً ثبت نام کرده‌اید؟ ورود</a></div>
+        <div class="text-center mt-4"><a href="/login">ورود</a></div>
     </div>
     <script>
         document.getElementById('registerForm').onsubmit = async (e) => {
@@ -555,7 +518,7 @@ HTML_REGISTER = '''<!DOCTYPE html>
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
                     username: username.value, password: password.value, full_name: full_name.value,
-                    email: email.value, referral_code: referral_code.value
+                    referral_code: referral_code.value
                 })
             });
             const data = await res.json();
@@ -582,17 +545,14 @@ HTML_INDEX = '''<!DOCTYPE html>
         .sidebar .nav-link:hover,.sidebar .nav-link.active{background:rgba(102,126,234,0.3);color:white}
         .sidebar .nav-link i{margin-left:10px;width:24px}
         .main-content{margin-right:280px;padding:20px;min-height:100vh}
-        .card{background:white;border:none;border-radius:20px;box-shadow:0 2px 10px rgba(0,0,0,0.05);transition:transform 0.2s}
-        .card:hover{transform:translateY(-2px)}
+        .card{background:white;border:none;border-radius:20px;box-shadow:0 2px 10px rgba(0,0,0,0.05)}
         .stat-card{background:linear-gradient(135deg,#667eea,#764ba2);border-radius:20px;padding:20px;color:white}
         .btn-primary{background:linear-gradient(135deg,#667eea,#764ba2);border:none;border-radius:12px;padding:10px 20px}
-        .btn-danger{background:linear-gradient(135deg,#f093fb,#f5576c);border:none;border-radius:12px}
         .status-badge{display:inline-block;padding:4px 12px;border-radius:20px;font-size:0.75rem;font-weight:600}
         .status-running{background:#d4edda;color:#155724}
         .status-stopped{background:#f8d7da;color:#721c24}
         .code-area{font-family:'Courier New',monospace;background:#1e1e2e;color:#fff;padding:16px;border-radius:12px;font-size:13px}
-        .toast-notify{position:fixed;bottom:20px;left:20px;right:20px;background:#333;color:white;padding:14px 20px;border-radius:16px;text-align:center;z-index:1100;display:none;animation:slideUp 0.3s ease}
-        @keyframes slideUp{from{transform:translateY(100px);opacity:0}to{transform:translateY(0);opacity:1}}
+        .toast-notify{position:fixed;bottom:20px;left:20px;right:20px;background:#333;color:white;padding:14px 20px;border-radius:16px;text-align:center;z-index:1100;display:none}
         .loader{display:inline-block;width:20px;height:20px;border:3px solid #f3f3f3;border-top:3px solid #667eea;border-radius:50%;animation:spin 1s linear infinite}
         @keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
         .menu-toggle{display:none;position:fixed;top:15px;right:15px;z-index:1001;background:#667eea;color:white;border:none;border-radius:12px;padding:10px 15px}
@@ -603,6 +563,8 @@ HTML_INDEX = '''<!DOCTYPE html>
             .menu-toggle{display:block}
         }
         .admin-badge{background:#ff4757;color:white;padding:2px 8px;border-radius:20px;font-size:11px;margin-right:10px}
+        .admin-panel-btn{background:#ff4757;color:white;border:none}
+        .admin-panel-btn:hover{background:#ff6b81;color:white}
     </style>
 </head>
 <body>
@@ -744,7 +706,7 @@ bot.infinity_polling()"></textarea>
     <div id="page-referrals" class="page-content" style="display:none">
         <div class="card p-4 text-center">
             <i class="fas fa-share-alt fa-3x text-primary"></i>
-            <h4 class="mt-3">دعوت از دوستان</h4>
+            <h4>دعوت از دوستان</h4>
             <p>با دعوت دوستان، <strong>7% کمیسیون</strong> دریافت کنید</p>
             <div class="bg-light p-3 rounded"><code id="refLink"></code></div>
             <button class="btn btn-primary mt-3" onclick="copyReferralLink()">کپی لینک دعوت</button>
@@ -769,7 +731,7 @@ bot.infinity_polling()"></textarea>
         </div>
     </div>
 
-    <!-- پنل مدیریت -->
+    <!-- صفحه پنل مدیریت -->
     <div id="page-admin" class="page-content" style="display:none">
         <div class="card p-4 mb-4">
             <h4><i class="fas fa-chart-line me-2"></i>آمار سیستم</h4>
@@ -797,8 +759,6 @@ bot.infinity_polling()"></textarea>
                     <input type="text" id="adminCardHolder" class="form-control mb-2">
                     <label>بانک</label>
                     <input type="text" id="adminCardBank" class="form-control mb-2">
-                    <label>آدرس TRC20</label>
-                    <input type="text" id="adminTrc20" class="form-control mb-2">
                 </div>
                 <div class="col-md-6">
                     <label>قیمت اشتراک (تومان)</label>
@@ -821,9 +781,37 @@ bot.infinity_polling()"></textarea>
     </div>
 </div>
 
+<!-- دکمه شناور پنل مدیریت (فقط برای ادمین) -->
+<div id="adminFloatBtn" style="position:fixed;bottom:20px;left:20px;z-index:999;display:none">
+    <button class="btn btn-danger rounded-circle" style="width:60px;height:60px;border-radius:50%;box-shadow:0 4px 15px rgba(0,0,0,0.2)" onclick="showAdminPanel()">
+        <i class="fas fa-shield-alt" style="font-size:24px"></i>
+    </button>
+</div>
+
+<!-- مودال رمز ادمین -->
+<div class="modal fade" id="adminPasswordModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5><i class="fas fa-shield-alt me-2"></i>ورود به پنل مدیریت</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p>برای ورود به پنل مدیریت، رمز عبور را وارد کنید:</p>
+                <input type="password" id="adminPasswordInput" class="form-control" placeholder="رمز عبور پنل مدیریت">
+                <div id="adminPasswordError" class="text-danger mt-2" style="display:none">رمز عبور اشتباه است!</div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" data-bs-dismiss="modal">انصراف</button>
+                <button class="btn btn-danger" onclick="checkAdminPassword()">ورود به پنل</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- مودال برداشت -->
 <div class="modal fade" id="withdrawModal" tabindex="-1">
-    <div class="modal-dialog">
+    <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">
             <div class="modal-header"><h5>درخواست برداشت</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
             <div class="modal-body">
@@ -832,7 +820,10 @@ bot.infinity_polling()"></textarea>
                 <label>آدرس کیف پول (TRC20)</label>
                 <input type="text" id="withdrawAddress" class="form-control" placeholder="آدرس TRC20 خود را وارد کنید">
             </div>
-            <div class="modal-footer"><button class="btn btn-secondary" data-bs-dismiss="modal">انصراف</button><button class="btn btn-primary" onclick="submitWithdraw()">ثبت درخواست</button></div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" data-bs-dismiss="modal">انصراف</button>
+                <button class="btn btn-primary" onclick="submitWithdraw()">ثبت درخواست</button>
+            </div>
         </div>
     </div>
 </div>
@@ -843,24 +834,27 @@ bot.infinity_polling()"></textarea>
 <script>
 let currentUser = null;
 let isAdmin = false;
-let adminAuthModal = null;
 
 function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open')}
 function showToast(msg,isError){let t=document.getElementById('toast');t.textContent=msg;t.style.background=isError?'#dc3545':'#10b981';t.style.display='block';setTimeout(()=>t.style.display='none',3000)}
 
-async function checkAdminAuth(){
-    if(!isAdmin) return;
-    const pwd = prompt('برای ورود به پنل مدیریت، رمز عبور را وارد کنید:');
+function showAdminPanel(){
+    document.getElementById('adminPasswordModal').style.display='block';
+    var modal = new bootstrap.Modal(document.getElementById('adminPasswordModal'));
+    modal.show();
+}
+
+function checkAdminPassword(){
+    let pwd = document.getElementById('adminPasswordInput').value;
     if(pwd === '123456'){
+        bootstrap.Modal.getInstance(document.getElementById('adminPasswordModal')).hide();
         showPage('admin');
     } else {
-        showToast('رمز عبور اشتباه است', true);
-        showPage('dashboard');
+        document.getElementById('adminPasswordError').style.display='block';
     }
 }
 
 function showPage(page){
-    if(page === 'admin' && !isAdmin){ checkAdminAuth(); return; }
     document.querySelectorAll('.page-content').forEach(p=>p.style.display='none')
     document.getElementById(`page-${page}`).style.display='block'
     if(page==='dashboard'){loadDashboard()}
@@ -875,6 +869,9 @@ async function loadDashboard(){
         let u=await(await fetch('/api/user')).json()
         currentUser=u
         isAdmin=u.is_admin===1
+        if(isAdmin){
+            document.getElementById('adminFloatBtn').style.display='block';
+        }
         let s=await(await fetch('/api/stats')).json()
         let r=await(await fetch('/api/referrals')).json()
         document.getElementById('statsCards').innerHTML=`
@@ -1022,7 +1019,7 @@ async function loadAdminPanel(){
     let receipts=await(await fetch('/api/admin/receipts')).json()
     document.getElementById('receiptsList').innerHTML=receipts.map(r=>`
         <div class="border rounded p-3 mb-2 d-flex justify-content-between align-items-center">
-            <div><strong>کاربر ${r.user_id}</strong><br>مبلغ: ${r.amount.toLocaleString()} تومان<br><small>${r.created_at}</small></div>
+            <div><strong>کاربر ${r.user_id}</strong><br>مبلغ: ${(r.amount||0).toLocaleString()} تومان<br><small>${r.created_at}</small></div>
             <div><button class="btn btn-sm btn-success me-1" onclick="approveReceipt(${r.id})">تایید</button><button class="btn btn-sm btn-danger" onclick="rejectReceipt(${r.id})">رد</button></div>
         </div>
     `).join('')||'<p class="text-muted">فیشی در انتظار تایید نیست</p>'
@@ -1030,21 +1027,20 @@ async function loadAdminPanel(){
     let withdraws=await(await fetch('/api/admin/withdraws')).json()
     document.getElementById('withdrawsList').innerHTML=withdraws.map(w=>`
         <div class="border rounded p-3 mb-2 d-flex justify-content-between align-items-center">
-            <div><strong>کاربر ${w.user_id}</strong><br>مبلغ: ${w.amount.toLocaleString()} تومان<br>آدرس: ${w.address}</div>
+            <div><strong>کاربر ${w.user_id}</strong><br>مبلغ: ${(w.amount||0).toLocaleString()} تومان<br>آدرس: ${w.address}</div>
             <div><button class="btn btn-sm btn-success" onclick="approveWithdraw(${w.id})">تایید واریز شد</button></div>
         </div>
     `).join('')||'<p class="text-muted">درخواستی در انتظار تایید نیست</p>'
     
     let users=await(await fetch('/api/admin/users')).json()
-    document.getElementById('usersList').innerHTML=`<table class="table"><thead><tr><th>کاربر</th><th>موجودی</th><th>اشتراک</th><th>ربات‌ها</th><th>عملیات</th></tr></thead><tbody>${
-        users.map(u=>`<tr><td>${u.full_name||u.username}</td><td>${u.wallet_balance.toLocaleString()}</td><td>${u.subscription_active?'✅':'❌'}</td><td>${u.bots_count}</td><td><button class="btn btn-sm btn-danger" onclick="banUser(${u.id})">مسدود</button></td></tr>`).join('')
-    }</tbody></table>`
+    document.getElementById('usersList').innerHTML=`<div class="table-responsive"><table class="table table-sm"><thead><tr><th>کاربر</th><th>موجودی</th><th>اشتراک</th><th>ربات‌ها</th><th>عملیات</th></tr></thead><tbody>${
+        users.map(u=>`<tr><td>${u.full_name||u.username}</td><td>${(u.wallet_balance||0).toLocaleString()}</td><td>${u.subscription_active?'✅':'❌'}</td><td>${u.bots_count||0}</td><td><button class="btn btn-sm btn-danger" onclick="banUser(${u.id})">مسدود</button></td></tr>`).join('')
+    }</tbody></table></div>`
     
     let settings=await(await fetch('/api/admin/settings')).json()
     document.getElementById('adminCardNumber').value=settings.card_number||''
     document.getElementById('adminCardHolder').value=settings.card_holder||''
     document.getElementById('adminCardBank').value=settings.card_bank||''
-    document.getElementById('adminTrc20').value=settings.trc20_address||''
     document.getElementById('adminPrice').value=settings.subscription_price||2000000
     document.getElementById('adminCommission').value=settings.withdraw_percent||7
     document.getElementById('adminMinWithdraw').value=settings.min_withdraw||2000000
@@ -1056,7 +1052,6 @@ async function saveAdminSettings(){
         card_number:document.getElementById('adminCardNumber').value,
         card_holder:document.getElementById('adminCardHolder').value,
         card_bank:document.getElementById('adminCardBank').value,
-        trc20_address:document.getElementById('adminTrc20').value,
         subscription_price:parseInt(document.getElementById('adminPrice').value),
         withdraw_percent:parseInt(document.getElementById('adminCommission').value),
         min_withdraw:parseInt(document.getElementById('adminMinWithdraw').value),
@@ -1099,7 +1094,7 @@ loadDashboard()
 </body>
 </html>'''
 
-# ==================== مسیرها ====================
+# ==================== مسیرهای Flask ====================
 @app.route('/')
 def index():
     if 'user_id' in session:
@@ -1117,9 +1112,7 @@ def register_page():
 @app.route('/api/login', methods=['POST'])
 def api_login():
     data = request.get_json()
-    username = data.get('username', '')
-    password = data.get('password', '')
-    user = authenticate(username, password)
+    user = authenticate(data.get('username', ''), data.get('password', ''))
     if user:
         session['user_id'] = user['id']
         session['username'] = user['username']
@@ -1132,7 +1125,7 @@ def api_register():
     data = request.get_json()
     success, msg = create_user(
         data.get('username'), data.get('password'), data.get('full_name'),
-        data.get('email'), None, data.get('referral_code')
+        None, None, data.get('referral_code')
     )
     if success:
         return jsonify({'success': True})
@@ -1367,7 +1360,6 @@ def api_referrals():
 
 @app.route('/api/guide')
 def api_guide():
-    lang = 'fa'
     return jsonify({'guide_text': get_setting('guide_text_fa')})
 
 @app.route('/api/stats')
@@ -1558,7 +1550,6 @@ def api_admin_settings():
             'card_number': get_setting('card_number_display'),
             'card_holder': get_setting('card_holder'),
             'card_bank': get_setting('card_bank'),
-            'trc20_address': get_setting('trc20_address'),
             'subscription_price': get_setting('subscription_price'),
             'withdraw_percent': get_setting('withdraw_percent'),
             'min_withdraw': get_setting('min_withdraw'),
@@ -1569,7 +1560,6 @@ def api_admin_settings():
     update_setting('card_number_display', data.get('card_number', ''))
     update_setting('card_holder', data.get('card_holder', ''))
     update_setting('card_bank', data.get('card_bank', ''))
-    update_setting('trc20_address', data.get('trc20_address', ''))
     update_setting('subscription_price', data.get('subscription_price', 2000000))
     update_setting('subscription_price_str', f"{data.get('subscription_price', 2000000):,} تومان")
     update_setting('withdraw_percent', data.get('withdraw_percent', 7))
@@ -1589,7 +1579,6 @@ def api_admin_broadcast():
     message = data.get('message', '')
     users = db.execute('SELECT id FROM users WHERE is_banned = 0')
     sent = 0
-    # در اینجا می‌توانید ایمیل یا نوتیفیکیشن ارسال کنید
     for u in users:
         sent += 1
     return jsonify({'sent': sent})
@@ -1597,25 +1586,16 @@ def api_admin_broadcast():
 # ==================== اجرا ====================
 if __name__ == '__main__':
     print("=" * 70)
-    print("🚀 سامانه کامل ساخت ربات تلگرام - نسخه نهایی با پنل مدیریت")
+    print("🚀 سامانه کامل ساخت ربات تلگرام - نسخه نهایی")
     print("=" * 70)
-    print(f"📍 آدرس سایت: http://localhost:8080")
+    print(f"📍 آدرس: http://localhost:8080")
     print(f"👤 ادمین: admin / admin123")
-    print(f"🔑 رمز پنل مدیریت: 123456")
-    print(f"🔒 ایزوله‌سازی ربات‌ها: فعال")
-    print(f"📱 بدون زوم در موبایل")
+    print(f"🔑 رمز ورود به پنل مدیریت: 123456")
     print("=" * 70)
-    print("✅ تمام قابلیت‌های ربات تلگرام در سایت موجود است:")
-    print("   - ساخت ربات با کد یا آپلود فایل (ZIP/PY)")
-    print("   - مدیریت ربات‌ها (شروع/توقف/حذف)")
-    print("   - سیستم اشتراک و کیف پول")
-    print("   - سیستم معرف دوستان با کمیسیون 7%")
-    print("   - درخواست برداشت")
-    print("   - پنل مدیریت کامل با رمز 123456")
-    print("   - تایید فیش‌ها و برداشت‌ها")
-    print("   - تنظیم آدرس کیف پول و شماره کارت")
-    print("   - تغییر متون راهنما")
-    print("   - ارسال پیام همگانی")
+    print("✅ نحوه ورود به پنل مدیریت:")
+    print("   1. با حساب admin وارد سایت شوید")
+    print("   2. در پایین سمت چپ صفحه، دکمه قرمز رنگ با آیکون سپر را ببینید")
+    print("   3. روی آن کلیک کنید")
+    print("   4. رمز 123456 را وارد کنید")
     print("=" * 70)
-    
     app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False, threaded=True)
