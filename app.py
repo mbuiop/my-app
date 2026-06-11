@@ -123,7 +123,7 @@ DEFAULT_SETTINGS = {
     'welcome_text_en': "🚀 Welcome {name}!\nWelcome to the bot builder bot.",
     'subscription_active_text_fa': "✅ اشتراک شما با موفقیت فعال شد!\nاکنون می‌توانید ربات خود را بسازید.",
     'subscription_active_text_en': "✅ Your subscription has been activated!\nYou can now build your bot.",
-    'subscription_payment_text_fa': "💳 برای فعالسازی {price} را به آدرس زیر واریز:\n`{address}`\n🌐 شبکه: TRC20 (USDT)\n\n📸 پس از واریز، تصویر تراکنش را ارسال کنید",
+    'subscription_payment_text_fa': "💳 برای فعالسازی {price} را به کارت زیر واریز:\n`{address}`\n👤 {holder}\n🏦 {bank}\n\n📸 پس از واریز، تصویر تراکنش را ارسال کنید",
     'subscription_payment_text_en': "💳 To activate, send {price} to:\n`{address}`\n🌐 Network: TRC20 (USDT)\n\n📸 Send transaction screenshot after payment",
     'max_builds_per_hour': 10,
     'max_concurrent_builds': 20,
@@ -359,7 +359,7 @@ class Database:
             return []
     
     def encrypt_token(self, token):
-        return token  # ساده برای حال حاضر
+        return token
     
     def decrypt_token(self, encrypted_token):
         return encrypted_token
@@ -593,10 +593,14 @@ def generate_referral_code(user_id):
     return hashlib.md5(f"{user_id}_{time.time()}_{secrets.token_hex(4)}".encode()).hexdigest()[:12]
 
 def get_user(user_id):
-    users = db.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
-    if users:
-        return dict(users[0])
-    return None
+    try:
+        users = db.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
+        if users:
+            return dict(users[0])
+        return None
+    except Exception as e:
+        logger.error(f"get_user error for {user_id}: {e}")
+        return None
 
 def create_user(user_id, username, first_name, last_name, referred_by=None, language='fa'):
     now = datetime.now().isoformat()
@@ -610,20 +614,24 @@ def create_user(user_id, username, first_name, last_name, referred_by=None, lang
     if users_count >= max_capacity:
         return False, "capacity_full"
     
-    db.execute('''
-        INSERT OR IGNORE INTO users 
-        (user_id, username, first_name, last_name, referral_code, referred_by, 
-         created_at, last_active, subscription_status, wallet_balance, language, max_bots)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'inactive', 0, ?, ?)
-    ''', (user_id, username, first_name, last_name, referral_code, referred_by, 
-          now, now, language, max_bots))
-    
-    db.execute('UPDATE users SET last_active = ? WHERE user_id = ?', (now, user_id))
-    
-    if referred_by and referred_by != user_id:
-        db.execute('UPDATE users SET referrals_count = referrals_count + 1 WHERE user_id = ?', (referred_by,))
-    
-    return True, "ok"
+    try:
+        db.execute('''
+            INSERT OR IGNORE INTO users 
+            (user_id, username, first_name, last_name, referral_code, referred_by, 
+             created_at, last_active, subscription_status, wallet_balance, language, max_bots)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'inactive', 0, ?, ?)
+        ''', (user_id, username, first_name, last_name, referral_code, referred_by, 
+              now, now, language, max_bots))
+        
+        db.execute('UPDATE users SET last_active = ? WHERE user_id = ?', (now, user_id))
+        
+        if referred_by and referred_by != user_id:
+            db.execute('UPDATE users SET referrals_count = referrals_count + 1 WHERE user_id = ?', (referred_by,))
+        
+        return True, "ok"
+    except Exception as e:
+        logger.error(f"Error creating user {user_id}: {e}")
+        return False, str(e)
 
 def check_subscription(user_id):
     user = get_user(user_id)
@@ -673,7 +681,6 @@ def activate_subscription(user_id, tx_hash=None, months=1):
         WHERE user_id = ?
     ''', (new_expiry.isoformat(), now.isoformat(), tx_hash, user_id))
     
-    # ارسال پیام فعالسازی به زبان کاربر
     lang = get_user_language(user_id)
     if lang == 'fa':
         active_text = get_setting('subscription_active_text_fa')
@@ -1006,7 +1013,6 @@ class MachineManager:
         self._restore_bots_after_crash()
     
     def _restore_bots_after_crash(self):
-        """بازیابی ربات‌ها پس از کرش سرور"""
         try:
             logger.info("🔄 Checking for bots to restore after crash...")
             running_bots = db.execute('SELECT id, token, file_path, name FROM bots WHERE status = "running"')
@@ -1173,7 +1179,6 @@ def check_join_enabled(func):
         return {'running': False}
     
     def restart_all_dead_bots(self):
-        """ریستارت کردن تمام ربات‌های مرده"""
         dead_bots = db.execute('SELECT id, token, file_path FROM bots WHERE status = "running"')
         restarted = 0
         for bot_rec in dead_bots:
@@ -1203,7 +1208,6 @@ def check_join_enabled(func):
         }
     
     def update_machine_capacity(self, machine_id, max_bots):
-        """به‌روزرسانی ظرفیت ماشین"""
         db.execute("UPDATE machines SET max_bots = ? WHERE id = ?", (max_bots, machine_id))
         return True
 
@@ -1213,21 +1217,17 @@ class RemoteServerManager:
         self.servers = {}
     
     def add_server(self, name, ip, username, password, port=22, machine_id=None):
-        """اضافه کردن سرور جدید"""
-        # تست اتصال
         try:
             ssh = paramiko.SSHClient()
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             ssh.connect(ip, port=port, username=username, password=password, timeout=10)
             ssh.close()
             
-            # ذخیره در دیتابیس
             db.execute('''
                 INSERT INTO remote_servers (name, ip, port, username, password, machine_id, status, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, 'connected', ?)
             ''', (name, ip, port, username, password, machine_id, datetime.now().isoformat()))
             
-            # به‌روزرسانی ماشین مربوطه
             if machine_id:
                 db.execute('''
                     UPDATE machines SET ip = ?, username = ?, password = ?, is_local = 0 WHERE id = ?
@@ -1238,7 +1238,6 @@ class RemoteServerManager:
             return False, f"خطا در اتصال: {str(e)}"
     
     def deploy_to_server(self, machine_id, bot_code, bot_id):
-        """استقرار ربات روی سرور از راه دور"""
         machine = db.execute("SELECT * FROM machines WHERE id = ?", (machine_id,))
         if not machine:
             return False, "ماشین یافت نشد"
@@ -1253,7 +1252,6 @@ class RemoteServerManager:
             ssh.connect(machine['ip'], port=machine.get('port', 22), 
                        username=machine['username'], password=machine['password'], timeout=10)
             
-            # ایجاد دایرکتوری
             sftp = ssh.open_sftp()
             remote_dir = f"/root/mother_bot/machines/machine_{machine_id:03d}/{bot_id}"
             try:
@@ -1261,14 +1259,12 @@ class RemoteServerManager:
             except:
                 pass
             
-            # آپلود فایل
             remote_file = f"{remote_dir}/bot.py"
             with sftp.open(remote_file, 'w') as f:
                 f.write(bot_code)
             
             sftp.close()
             
-            # اجرای ربات
             cmd = f"cd {remote_dir} && nohup python3 bot.py > /dev/null 2>&1 &"
             ssh.exec_command(cmd)
             ssh.close()
@@ -1333,9 +1329,8 @@ class HealthChecker:
 
 # ==================== ربات تلگرام ====================
 bot = telebot.TeleBot(BOT_TOKEN)
-bot.delete_webhook()
+bot.remove_webhook()
 
-# ایجاد نمونه‌ها
 machine_manager = MachineManager()
 remote_manager = RemoteServerManager()
 build_queue = BuildQueue()
@@ -1343,7 +1338,6 @@ health_checker = HealthChecker()
 
 # ==================== منوی اصلی ====================
 def get_main_menu(user_id):
-    """دریافت منوی اصلی بر اساس زبان کاربر (پنل مدیریت فقط فارسی)"""
     user = get_user(user_id)
     lang = user['language'] if user else 'fa'
     is_admin = user_id in ADMIN_IDS
@@ -1355,7 +1349,6 @@ def get_main_menu(user_id):
     else:
         buttons = MENU_BUTTONS_EN.copy()
     
-    # اضافه کردن دکمه‌های مدیریت (فقط فارسی)
     if is_admin:
         for btn in ADMIN_BUTTONS:
             buttons.append(btn)
@@ -1384,68 +1377,133 @@ def cmd_start(message):
     first_name = message.from_user.first_name or ""
     username = message.from_user.username or ""
     
+    logger.info(f"Start command received from user {user_id}, username: {username}")
+    
     args = message.text.split()
-    preferred_lang = 'fa'
-    if len(args) > 1 and args[1] == 'en':
-        preferred_lang = 'en'
+    referrer_id = None
     
-    referred_by = None
-    if len(args) > 1 and args[1] not in ['fa', 'en']:
-        code = args[1]
-        users = db.execute('SELECT user_id FROM users WHERE referral_code = ?', (code,))
-        if users and users[0]['user_id'] != user_id:
-            referred_by = users[0]['user_id']
-            try:
-                bot.send_message(referred_by, get_text(referred_by, 'welcome', name=first_name))
-            except:
-                pass
+    # پردازش آرگومان‌های start (رفرال کد یا زبان)
+    if len(args) > 1:
+        arg = args[1]
+        logger.info(f"Start argument: {arg}")
+        
+        # بررسی اینکه آیا آرگومان یک کد رفرال است
+        if arg not in ['fa', 'en'] and len(arg) >= 8:
+            # این یک کد رفرال است
+            users = db.execute('SELECT user_id FROM users WHERE referral_code = ?', (arg,))
+            if users and users[0]['user_id'] != user_id:
+                referrer_id = users[0]['user_id']
+                logger.info(f"Referrer found: {referrer_id}")
     
-    result, msg = create_user(user_id, username, first_name, message.from_user.last_name or "", referred_by, preferred_lang)
+    # بررسی اینکه کاربر از قبل وجود دارد یا نه
+    existing_user = get_user(user_id)
     
-    if not result:
-        if msg == "capacity_full":
+    if existing_user:
+        logger.info(f"User {user_id} already exists, updating last_active")
+        db.execute('UPDATE users SET last_active = ? WHERE user_id = ?', 
+                   (datetime.now().isoformat(), user_id))
+        user = existing_user
+    else:
+        logger.info(f"Creating new user {user_id}")
+        
+        # بررسی ظرفیت
+        users_count = db.execute('SELECT COUNT(*) as count FROM users')[0]['count']
+        max_capacity = get_setting('max_users_capacity')
+        
+        if users_count >= max_capacity:
             capacity_msg = get_setting('capacity_warning_message')
             bot.send_message(message.chat.id, capacity_msg)
             return
+        
+        now = datetime.now().isoformat()
+        referral_code = generate_referral_code(user_id)
+        max_bots = get_setting('max_bots_per_subscription')
+        
+        try:
+            db.execute('''
+                INSERT INTO users 
+                (user_id, username, first_name, last_name, referral_code, referred_by, 
+                 created_at, last_active, subscription_status, wallet_balance, language, max_bots)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'inactive', 0, 'fa', ?)
+            ''', (user_id, username, first_name, message.from_user.last_name or "", 
+                  referral_code, referrer_id, now, now, max_bots))
+            
+            # افزایش تعداد معرف‌های کاربر معرف
+            if referrer_id and referrer_id != user_id:
+                db.execute('UPDATE users SET referrals_count = referrals_count + 1 WHERE user_id = ?', 
+                          (referrer_id,))
+                
+                # ارسال پیام به کاربر معرف
+                try:
+                    referrer_lang = get_user_language(referrer_id)
+                    if referrer_lang == 'fa':
+                        msg = f"🎉 کاربر جدید با لینک دعوت شما وارد شد!\n👤 {first_name}"
+                    else:
+                        msg = f"🎉 New user joined with your invite link!\n👤 {first_name}"
+                    bot.send_message(referrer_id, msg)
+                except Exception as e:
+                    logger.error(f"Error sending referrer message: {e}")
+            
+            user = get_user(user_id)
+            
+        except Exception as e:
+            logger.error(f"Error creating user {user_id}: {e}")
+            bot.send_message(message.chat.id, f"❌ خطا در ثبت نام: {str(e)[:100]}")
+            return
     
-    user = get_user(user_id)
-    referral_link = f"https://t.me/{BOT_USERNAME}?start={user['referral_code']}"
+    if not user:
+        logger.error(f"User {user_id} not found after creation")
+        bot.send_message(message.chat.id, "❌ خطا در دریافت اطلاعات کاربر")
+        return
+    
+    # محاسبه اطلاعات
     remaining_bots = get_remaining_bots(user_id)
     max_bots = get_setting('max_bots_per_subscription')
     is_subscribed = check_subscription(user_id)
-    lang = user['language']
+    lang = user.get('language', 'fa')
     
-    # متن خوش آمدگویی از تنظیمات
-    if lang == 'fa':
-        welcome_text = get_setting('welcome_text_fa').format(name=first_name)
-    else:
-        welcome_text = get_setting('welcome_text_en').format(name=first_name)
+    referral_link = f"https://t.me/{BOT_USERNAME}?start={user['referral_code']}"
     
-    if lang == 'fa':
-        text = (f"{welcome_text}\n\n"
-                f"👤 شناسه: `{user_id}`\n"
-                f"🎁 کد معرف: `{user['referral_code']}`\n"
-                f"🔗 لینک دعوت: `{referral_link}`\n"
-                f"📊 دعوت‌ها: {user['referrals_count']}\n"
-                f"💰 موجودی: {user['wallet_balance']:,} تومان\n"
-                f"💳 وضعیت: {'✅ فعال' if is_subscribed else '❌ غیرفعال'}\n"
-                f"🤖 ربات‌های باقیمانده: {remaining_bots}/{max_bots}")
-    else:
-        text = (f"{welcome_text}\n\n"
-                f"👤 ID: `{user_id}`\n"
-                f"🎁 Referral Code: `{user['referral_code']}`\n"
-                f"🔗 Invite Link: `{referral_link}`\n"
-                f"📊 Referrals: {user['referrals_count']}\n"
-                f"💰 Balance: {user['wallet_balance']:,} Toman\n"
-                f"💳 Status: {'✅ Active' if is_subscribed else '❌ Inactive'}\n"
-                f"🤖 Remaining Bots: {remaining_bots}/{max_bots}")
+    # متن خوش آمدگویی
+    try:
+        if lang == 'fa':
+            welcome_text = get_setting('welcome_text_fa').format(name=first_name)
+            text = (f"{welcome_text}\n\n"
+                    f"👤 شناسه: `{user_id}`\n"
+                    f"🎁 کد معرف: `{user['referral_code']}`\n"
+                    f"🔗 لینک دعوت: `{referral_link}`\n"
+                    f"📊 دعوت‌ها: {user.get('referrals_count', 0)}\n"
+                    f"💰 موجودی: {user.get('wallet_balance', 0):,} تومان\n"
+                    f"💳 وضعیت: {'✅ فعال' if is_subscribed else '❌ غیرفعال'}\n"
+                    f"🤖 ربات‌های باقیمانده: {remaining_bots}/{max_bots}")
+        else:
+            welcome_text = get_setting('welcome_text_en').format(name=first_name)
+            text = (f"{welcome_text}\n\n"
+                    f"👤 ID: `{user_id}`\n"
+                    f"🎁 Referral Code: `{user['referral_code']}`\n"
+                    f"🔗 Invite Link: `{referral_link}`\n"
+                    f"📊 Referrals: {user.get('referrals_count', 0)}\n"
+                    f"💰 Balance: {user.get('wallet_balance', 0):,} Toman\n"
+                    f"💳 Status: {'✅ Active' if is_subscribed else '❌ Inactive'}\n"
+                    f"🤖 Remaining Bots: {remaining_bots}/{max_bots}")
+    except Exception as e:
+        logger.error(f"Error formatting welcome text: {e}")
+        text = f"🚀 خوش آمدید {first_name}!\nبرای شروع از منو استفاده کنید."
     
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton(get_text(user_id, 'copy_link'), 
                                           callback_data=f"copy_link_{user['referral_code']}"))
     
-    bot.send_message(message.chat.id, text, parse_mode='Markdown', 
-                    reply_markup=get_main_menu(user_id))
+    # ارسال پیام با منو
+    try:
+        bot.send_message(message.chat.id, text, parse_mode='Markdown', 
+                        reply_markup=get_main_menu(user_id))
+        logger.info(f"Welcome message sent to user {user_id}")
+    except Exception as e:
+        logger.error(f"Error sending welcome message to {user_id}: {e}")
+        # ارسال نسخه ساده بدون Markdown
+        bot.send_message(message.chat.id, text.replace('`', ''), 
+                        reply_markup=get_main_menu(user_id))
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('copy_link_'))
 def copy_link_callback(call):
@@ -1499,7 +1557,6 @@ def wallet(message):
     max_bots = get_setting('max_bots_per_subscription')
     
     if lang == 'fa':
-        # فارسی: کارت به کارت
         text = (f"💰 **کیف پول و اشتراک**\n\n"
                 f"👤 {user['first_name']}\n"
                 f"💳 وضعیت: {'✅ فعال' if is_subscribed else '❌ غیرفعال'}\n"
@@ -1510,11 +1567,12 @@ def wallet(message):
         
         payment_text = get_setting('subscription_payment_text_fa').format(
             price=get_setting('subscription_price_str'),
-            address=get_setting('trc20_address')
+            address=get_setting('card_number_display'),
+            holder=get_setting('card_holder'),
+            bank=get_setting('card_bank')
         )
         text += payment_text
     else:
-        # انگلیسی: TRC20
         text = (f"💰 **Wallet & Subscription**\n\n"
                 f"👤 {user['first_name']}\n"
                 f"💳 Status: {'✅ Active' if is_subscribed else '❌ Inactive'}\n"
@@ -1586,6 +1644,10 @@ def handle_transaction_receipt(message):
 def invite(message):
     user_id = message.from_user.id
     user = get_user(user_id)
+    if not user:
+        bot.send_message(message.chat.id, get_text(user_id, 'error', error="Start with /start"))
+        return
+    
     lang = user['language']
     
     referral_link = f"https://t.me/{BOT_USERNAME}?start={user['referral_code']}"
@@ -1611,7 +1673,7 @@ def invite(message):
                                           callback_data=f"copy_link_{user['referral_code']}"))
     bot.send_message(message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
 
-# ==================== ساخت ربات جدید (با پشتیبانی از پوشه) ====================
+# ==================== ساخت ربات جدید ====================
 @bot.message_handler(func=lambda m: m.text in ['🤖 ساخت ربات جدید', '🤖 New Bot'])
 def new_bot(message):
     user_id = message.from_user.id
@@ -1631,18 +1693,15 @@ def new_bot(message):
     bot.send_message(message.chat.id, get_text(user_id, 'send_file'))
 
 def extract_zip_with_structure(zip_path, extract_to):
-    """استخراج فایل zip با حفظ ساختار پوشه‌ها"""
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
         zip_ref.extractall(extract_to)
     
-    # پیدا کردن فایل اصلی پایتون
     main_code = ""
     main_file = None
     
     for root, dirs, files in os.walk(extract_to):
         for file in files:
             if file.endswith('.py'):
-                # اولویت با فایل‌های نام‌گذاری شده خاص
                 if file in ['main.py', 'bot.py', 'app.py', 'run.py']:
                     main_file = os.path.join(root, file)
                     break
@@ -1726,7 +1785,6 @@ def handle_build_file(message):
         rate_limiter.increment_user_builds(user_id)
         bot_id = hashlib.md5(f"{user_id}{token}{time.time()}".encode()).hexdigest()[:16]
         
-        # ذخیره مسیر پوشه اگر zip بوده
         if folder_path:
             final_folder = os.path.join(DIRS['FILES'], str(user_id), f"bot_{bot_id}")
             shutil.move(folder_path, final_folder)
@@ -2039,8 +2097,11 @@ def support(message):
 def withdraw_request(message):
     user_id = message.from_user.id
     user = get_user(user_id)
-    lang = get_user_language(user_id)
+    if not user:
+        bot.send_message(message.chat.id, get_text(user_id, 'error', error="Start with /start"))
+        return
     
+    lang = get_user_language(user_id)
     min_withdraw = get_setting('min_withdraw')
     
     if user['wallet_balance'] < min_withdraw:
@@ -2072,7 +2133,22 @@ def process_withdraw_address(message, user):
         except:
             pass
 
-# ==================== پنل مدیریت (فقط فارسی - تمام دکمه‌ها) ====================
+# ==================== پیام پاسخ به پیام‌های نامشخص ====================
+@bot.message_handler(func=lambda m: True)
+def handle_unknown(message):
+    """پاسخ به پیام‌هایی که توسط هندلرهای دیگر پردازش نشده‌اند"""
+    user_id = message.from_user.id
+    logger.info(f"Unknown message from {user_id}: {message.text}")
+    
+    # فقط به متن‌های ساده پاسخ بده (نه به فایل‌ها، عکس‌ها و...)
+    if message.text and not message.text.startswith('/'):
+        bot.send_message(
+            message.chat.id, 
+            get_text(user_id, 'error', error="Command not recognized. Please use menu buttons."),
+            reply_markup=get_main_menu(user_id)
+        )
+
+# ==================== پنل مدیریت (فقط فارسی) ====================
 
 @bot.message_handler(func=lambda m: m.text == '👑 پنل مدیریت')
 def admin_panel(message):
@@ -2245,7 +2321,6 @@ def process_admin_delete_user(message):
         uid = int(message.text.strip())
         user = get_user(uid)
         if user:
-            # حذف تمام ربات‌های کاربر
             bots = get_user_bots(uid)
             for bot in bots:
                 delete_bot(bot['id'], uid)
@@ -2497,7 +2572,7 @@ def admin_set_payment_text(message):
 def set_payment_fa(call):
     if call.from_user.id not in ADMIN_IDS:
         return
-    msg = bot.send_message(call.message.chat.id, "💸 متن خرید اشتراک فارسی (از {price} و {address} استفاده کنید):")
+    msg = bot.send_message(call.message.chat.id, "💸 متن خرید اشتراک فارسی (از {price} و {address} و {holder} و {bank} استفاده کنید):")
     bot.register_next_step_handler(msg, process_set_payment_fa)
 
 def process_set_payment_fa(message):
@@ -2579,11 +2654,9 @@ def process_set_capacity(message):
         if 100 <= capacity <= 100000:
             update_setting('max_users_capacity', capacity)
             
-            # به‌روزرسانی متن هشدار
             warning_text = get_setting('capacity_warning_message')
             bot.reply_to(message, f"✅ ظرفیت به {capacity} کاربر تغییر کرد")
             
-            # نمایش ظرفیت فعلی
             current_users = db.execute('SELECT COUNT(*) as count FROM users')[0]['count']
             remaining = capacity - current_users
             bot.send_message(message.chat.id, f"📊 کاربران فعلی: {current_users}\n📊 ظرفیت خالی: {remaining}")
@@ -2592,7 +2665,7 @@ def process_set_capacity(message):
     except:
         bot.reply_to(message, "❌ عدد نامعتبر")
 
-# ==================== مدیریت ماشین‌ها (با 5 دکمه) ====================
+# ==================== مدیریت ماشین‌ها ====================
 @bot.message_handler(func=lambda m: m.text == '🖥️ مدیریت ماشین‌ها')
 def admin_machines(message):
     if message.from_user.id not in ADMIN_IDS:
@@ -2698,7 +2771,6 @@ def machines_restart(call):
     if call.from_user.id not in ADMIN_IDS:
         return
     bot.send_message(call.message.chat.id, "🔄 در حال ریستارت ربات‌های روی این ماشین...")
-    # ریستارت ربات‌های مرده
     restarted = machine_manager.restart_all_dead_bots()
     bot.send_message(call.message.chat.id, f"✅ {restarted} ربات ریستارت شدند")
 
@@ -2773,7 +2845,6 @@ def process_server_password(message, server_name, server_ip, port, username):
         return
     password = message.text.strip()
     
-    # انتخاب ماشین برای اتصال
     machines = db.execute("SELECT id, name FROM machines WHERE is_local = 1 OR status = 'active'")
     markup = types.InlineKeyboardMarkup(row_width=1)
     for m in machines:
@@ -2802,7 +2873,6 @@ def assign_machine_to_server(call):
         bot.edit_message_text(f"✅ سرور با موفقیت اضافه شد!\n\n📊 وضعیت: {msg}", 
                              call.message.chat.id, status_msg.message_id)
         
-        # به‌روزرسانی ماشین
         db.execute("UPDATE machines SET ip = ?, username = ?, is_local = 0 WHERE id = ?", 
                   (server_ip, username, machine_id))
     else:
@@ -2957,7 +3027,6 @@ def process_broadcast_text(message):
     
     for user in users:
         try:
-            # ارسال به زبان کاربر
             if user['language'] == 'fa':
                 msg_text = f"📢 **اعلامیه**\n\n{text}"
             else:
@@ -3034,7 +3103,6 @@ def back_to_main(message):
 def system_monitor():
     while True:
         try:
-            # بررسی انقضای اشتراک
             for user in db.execute('SELECT user_id, subscription_expiry FROM users WHERE subscription_status = "active"'):
                 if user['subscription_expiry']:
                     expiry = datetime.fromisoformat(user['subscription_expiry'])
@@ -3042,7 +3110,6 @@ def system_monitor():
                         db.execute('UPDATE users SET subscription_status = "inactive" WHERE user_id = ?', (user['user_id'],))
                         logger.info(f"Subscription expired for user {user['user_id']}")
             
-            # آمار روزانه
             today = datetime.now().date().isoformat()
             db.execute('INSERT OR IGNORE INTO daily_stats (date, new_users, new_bots, new_subscriptions, total_revenue) VALUES (?, 0, 0, 0, 0)', (today,))
             
