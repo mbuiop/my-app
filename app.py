@@ -1227,44 +1227,7 @@ def check_join_enabled(func):
     return wrapper
 # ===========================================
 '''
-            
-            with open(code_path, 'w', encoding='utf-8') as f:
-                f.write(join_check_code + "\n" + code)
-            
-            log_file = os.path.join(DIRS['LOGS'], f"bot_{bot_id}.log")
-            
-            process = subprocess.Popen(
-                [sys.executable, code_path],
-                stdout=open(log_file, 'a'),
-                stderr=subprocess.STDOUT,
-                cwd=bot_dir,
-                start_new_session=True
-            )
-            
-            time.sleep(2)
-            
-            if process.poll() is None:
-                with self.lock:
-                    self.processes[bot_id] = {
-                        'process': process,
-                        'pid': process.pid,
-                        'machine_id': machine_id,
-                        'port': port,
-                        'dir': bot_dir,
-                        'start_time': time.time()
-                    }
-                self.assign_bot(bot_id, machine_id)
-                
-                if not restore:
-                    db.execute("UPDATE bots SET status = 'running', machine_id = ?, pid = ?, last_active = ? WHERE id = ?",
-                              (machine_id, process.pid, datetime.now().isoformat(), bot_id))
-                
-                return {'success': True, 'pid': process.pid, 'machine_id': machine_id}
-            else:
-                return {'success': False, 'error': 'خطا در اجرای ربات' if not restore else 'Failed to start'}
-        except Exception as e:
-            return {'success': False, 'error': str(e)[:100]}
-    
+
     def stop_bot(self, bot_id):
         with self.lock:
             if bot_id in self.processes:
