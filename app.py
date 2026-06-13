@@ -1185,7 +1185,7 @@ class MachineManager:
     def update_machine_capacity(self, machine_id, max_bots):
         db.execute("UPDATE machines SET max_bots = ? WHERE id = ?", (max_bots, machine_id))
             
-            join_check_code = f'''
+        join_check_code = f'''
 # ========== سیستم مدیریت عضوگیری ==========
 import sqlite3, os, time, threading
 from functools import wraps
