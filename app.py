@@ -332,40 +332,68 @@ TEXTS = {
 # ==================== دیتابیس ====================
 class Database:
     def __init__(self):
+        self.db_type = "sqlite"
+        self.pool = None
         self.conn = None
-        self._init_db()
+        self._connect()
         self._init_tables()
     
-    def _init_db(self):
+    def _connect(self):
+        # اول سعی کن PostgreSQL وصل بشی
+        try:
+            self.pool = SimpleConnectionPool(
+                minconn=1,
+                maxconn=50,
+                host="localhost",  # اینارو بعدا عوض کن
+                port=5432,
+                database="motherbot",
+                user="postgres",
+                password="your_password"
+            )
+            self.db_type = "postgres"
+            print("✅ PostgreSQL connected")
+            return
+        except:
+            print("⚠️ PostgreSQL not available, using SQLite")
+        
+        # اگه نشد SQLite
         db_path = os.path.join(DIRS['DB'], 'mother_bot.db')
-        self.conn = sqlite3.connect(
-            db_path,
-            timeout=60,
-            check_same_thread=False
-        )
+        os.makedirs(DIRS['DB'], exist_ok=True)
+        self.conn = sqlite3.connect(db_path, timeout=60, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.execute("PRAGMA cache_size=-500000")
-        self.conn.execute("PRAGMA page_size=8192")
+        self.db_type = "sqlite"
+        print("✅ SQLite connected")
     
     def execute(self, query, params=()):
-        try:
-            cursor = self.conn.execute(query, params)
+        if self.db_type == "postgres":
+            # PostgreSQL
+            conn = self.pool.getconn()
+            try:
+                pg_query = query.replace('?', '%s')
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(pg_query, params)
+                    if query.strip().upper().startswith('SELECT'):
+                        return [dict(row) for row in cur.fetchall()]
+                    conn.commit()
+                    return []
+            finally:
+                self.pool.putconn(conn)
+        else:
+            # SQLite
+            if params:
+                cursor = self.conn.execute(query, params)
+            else:
+                cursor = self.conn.execute(query)
             self.conn.commit()
-            return cursor.fetchall()
-        except Exception as e:
-            logger.error(f"DB error: {e}")
+            if query.strip().upper().startswith('SELECT'):
+                return [dict(row) for row in cursor.fetchall()]
             return []
     
-    def encrypt_token(self, token):
-        return token  # ساده برای حال حاضر
-    
-    def decrypt_token(self, encrypted_token):
-        return encrypted_token
-    
     def _init_tables(self):
-        # کاربران
+        # جدول users
         self.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -392,7 +420,7 @@ class Database:
             )
         ''')
         
-        # ربات‌ها
+        # جدول bots
         self.execute('''
             CREATE TABLE IF NOT EXISTS bots (
                 id TEXT PRIMARY KEY,
@@ -410,16 +438,15 @@ class Database:
                 last_active TIMESTAMP,
                 last_restore_point TIMESTAMP,
                 join_enabled INTEGER DEFAULT 1,
-                join_block_message TEXT DEFAULT '🚫 سرور در حال حاضر پر است. لطفاً بعداً تلاش کنید.',
+                join_block_message TEXT,
                 health_status TEXT DEFAULT 'healthy',
                 last_health_check TIMESTAMP,
                 restart_count INTEGER DEFAULT 0,
-                error_message TEXT,
-                FOREIGN KEY(user_id) REFERENCES users(user_id) ON DELETE CASCADE
+                error_message TEXT
             )
         ''')
         
-        # ماشین‌ها
+        # جدول machines
         self.execute('''
             CREATE TABLE IF NOT EXISTS machines (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -442,7 +469,7 @@ class Database:
             )
         ''')
         
-        # فیش‌ها
+        # جدول receipts
         self.execute('''
             CREATE TABLE IF NOT EXISTS receipts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -457,7 +484,7 @@ class Database:
             )
         ''')
         
-        # درخواست‌های برداشت
+        # جدول withdraw_requests
         self.execute('''
             CREATE TABLE IF NOT EXISTS withdraw_requests (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -470,7 +497,7 @@ class Database:
             )
         ''')
         
-        # کمیسیون‌ها
+        # جدول commissions
         self.execute('''
             CREATE TABLE IF NOT EXISTS commissions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -479,11 +506,11 @@ class Database:
                 amount INTEGER,
                 reason TEXT,
                 created_at TIMESTAMP,
-                paid BOOLEAN DEFAULT 0
+                paid INTEGER DEFAULT 0
             )
         ''')
         
-        # خطاها
+        # جدول errors
         self.execute('''
             CREATE TABLE IF NOT EXISTS errors (
                 id TEXT PRIMARY KEY,
@@ -492,12 +519,12 @@ class Database:
                 user_id INTEGER,
                 bot_id TEXT,
                 timestamp TIMESTAMP,
-                resolved BOOLEAN DEFAULT 0,
+                resolved INTEGER DEFAULT 0,
                 stack_trace TEXT
             )
         ''')
         
-        # تنظیمات سیستم
+        # جدول system_settings
         self.execute('''
             CREATE TABLE IF NOT EXISTS system_settings (
                 key TEXT PRIMARY KEY,
@@ -506,7 +533,7 @@ class Database:
             )
         ''')
         
-        # آمار روزانه
+        # جدول daily_stats
         self.execute('''
             CREATE TABLE IF NOT EXISTS daily_stats (
                 date TEXT PRIMARY KEY,
@@ -520,7 +547,7 @@ class Database:
             )
         ''')
         
-        # سرورهای از راه دور
+        # جدول remote_servers
         self.execute('''
             CREATE TABLE IF NOT EXISTS remote_servers (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -542,13 +569,19 @@ class Database:
                 VALUES (?, ?, ?)
             ''', (key, str(value), datetime.now().isoformat()))
         
-        # ایجاد ماشین محلی
+        # ماشین محلی
         existing = self.execute("SELECT COUNT(*) as count FROM machines WHERE is_local = 1")
         if existing and existing[0]['count'] == 0:
             self.execute('''
                 INSERT INTO machines (id, name, status, max_bots, max_memory, created_at, is_local)
                 VALUES (1, 'سرور اصلی', 'active', 5000, 256000, ?, 1)
             ''', (datetime.now().isoformat(),))
+    
+    def encrypt_token(self, token):
+        return token
+    
+    def decrypt_token(self, encrypted_token):
+        return encrypted_token
 
 db = Database()
 
