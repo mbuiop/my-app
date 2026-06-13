@@ -1039,9 +1039,8 @@ class MachineManager:
         self._restore_bots_after_crash()
     
     def _restore_bots_after_crash(self):
-        """بازیابی ربات‌ها پس از کرش سرور"""
         try:
-            logger.info("🔄 Checking for bots to restore after crash...")
+            logger.info("🔄 Checking for bots to restore...")
             running_bots = db.execute('SELECT id, token, file_path, name FROM bots WHERE status = "running"')
             restored = 0
             for bot_rec in running_bots:
@@ -1053,19 +1052,21 @@ class MachineManager:
                     result = self.run_bot(bot_id, code, token, restore=True)
                     if result.get('success'):
                         restored += 1
-                        logger.info(f"✅ Restored bot: {bot_rec['name']}")
                     else:
                         db.execute('UPDATE bots SET status = "stopped" WHERE id = ?', (bot_id,))
-            logger.info(f"✅ Restored {restored} bots after crash")
+            logger.info(f"✅ Restored {restored} bots")
         except Exception as e:
-            logger.error(f"Bot restoration failed: {e}")
+            logger.error(f"Restore failed: {e}")
     
     def get_available_machine(self):
-        machines = db.execute("SELECT * FROM machines WHERE status = 'active' ORDER BY current_bots ASC")
-        for m in machines:
-            if m['current_bots'] < m['max_bots']:
-                return m['id']
-        return None
+        machines = db.execute("""
+            SELECT id, current_bots, max_bots, cpu_usage, memory_used
+            FROM machines 
+            WHERE status = 'active' AND current_bots < max_bots
+            ORDER BY cpu_usage ASC, memory_used ASC, current_bots ASC
+            LIMIT 1
+        """)
+        return machines[0]['id'] if machines else None
     
     def get_available_port(self):
         with self.lock:
@@ -1086,15 +1087,105 @@ class MachineManager:
         try:
             machine_id = self.get_available_machine()
             if not machine_id:
-                return {'success': False, 'error': 'همه ماشین‌ها پر هستند' if not restore else 'No machine available'}
+                return {'success': False, 'error': 'همه ماشین‌ها پر هستند'}
             
             port = self.get_available_port()
             bot_dir = os.path.join(DIRS['MACHINES'], f"machine_{machine_id:03d}", bot_id)
             os.makedirs(bot_dir, exist_ok=True)
-            
             code_path = os.path.join(bot_dir, 'bot.py')
             
-            join_check_code = f'''
+            with open(code_path, 'w', encoding='utf-8') as f:
+                f.write(code)
+            
+            log_file = os.path.join(DIRS['LOGS'], f"bot_{bot_id}.log")
+            
+            process = subprocess.Popen(
+                [sys.executable, code_path],
+                stdout=open(log_file, 'a'),
+                stderr=subprocess.STDOUT,
+                cwd=bot_dir,
+                start_new_session=True
+            )
+            
+            time.sleep(2)
+            
+            if process.poll() is None:
+                with self.lock:
+                    self.processes[bot_id] = {
+                        'process': process,
+                        'pid': process.pid,
+                        'machine_id': machine_id,
+                        'port': port,
+                        'dir': bot_dir,
+                        'start_time': time.time()
+                    }
+                self.assign_bot(bot_id, machine_id)
+                if not restore:
+                    db.execute("UPDATE bots SET status = 'running', machine_id = ?, pid = ?, last_active = ? WHERE id = ?",
+                              (machine_id, process.pid, datetime.now().isoformat(), bot_id))
+                return {'success': True, 'pid': process.pid, 'machine_id': machine_id}
+            else:
+                return {'success': False, 'error': 'خطا در اجرای ربات'}
+        except Exception as e:
+            return {'success': False, 'error': str(e)[:100]}
+    
+    def stop_bot(self, bot_id):
+        with self.lock:
+            if bot_id in self.processes:
+                try:
+                    info = self.processes[bot_id]
+                    os.kill(info['pid'], signal.SIGTERM)
+                    time.sleep(1)
+                    self.release_bot(bot_id, info['machine_id'])
+                    del self.processes[bot_id]
+                    db.execute("UPDATE bots SET status = 'stopped' WHERE id = ?", (bot_id,))
+                    return True
+                except:
+                    pass
+        return False
+    
+    def get_status(self, bot_id):
+        with self.lock:
+            if bot_id in self.processes:
+                info = self.processes[bot_id]
+                try:
+                    os.kill(info['pid'], 0)
+                    return {'running': True, 'pid': info['pid'], 'machine_id': info['machine_id']}
+                except:
+                    del self.processes[bot_id]
+                    self.release_bot(bot_id, info['machine_id'])
+                    db.execute("UPDATE bots SET status = 'stopped' WHERE id = ?", (bot_id,))
+        return {'running': False}
+    
+    def restart_all_dead_bots(self):
+        dead_bots = db.execute('SELECT id, token, file_path FROM bots WHERE status = "running"')
+        restarted = 0
+        for bot_rec in dead_bots:
+            bot_id = bot_rec['id']
+            if not self.get_status(bot_id).get('running'):
+                if bot_rec['token'] and os.path.exists(bot_rec['file_path']):
+                    with open(bot_rec['file_path'], 'r', encoding='utf-8', errors='ignore') as f:
+                        code = f.read()
+                    if self.run_bot(bot_id, code, bot_rec['token']).get('success'):
+                        restarted += 1
+        return restarted
+    
+    def get_stats(self):
+        machines = db.execute("SELECT * FROM machines WHERE status = 'active'")
+        machine_list = list(machines)
+        total_bots = sum(m['current_bots'] for m in machine_list)
+        total_capacity = sum(m['max_bots'] for m in machine_list)
+        return {
+            'total': len(machine_list),
+            'total_bots': total_bots,
+            'total_capacity': total_capacity,
+            'usage_percent': (total_bots / total_capacity) * 100 if total_capacity > 0 else 0
+        }
+    
+    def update_machine_capacity(self, machine_id, max_bots):
+        db.execute("UPDATE machines SET max_bots = ? WHERE id = ?", (max_bots, machine_id))
+            
+        join_check_code = f'''
 # ========== سیستم مدیریت عضوگیری ==========
 import sqlite3, os, time, threading
 from functools import wraps
