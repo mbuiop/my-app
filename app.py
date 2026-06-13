@@ -1084,140 +1084,139 @@ class MachineManager:
     def release_bot(self, bot_id, machine_id):
         db.execute("UPDATE machines SET current_bots = current_bots - 1 WHERE id = ?", (machine_id,))
     
-    def def run_bot(self, bot_id, code, token, restore=False):
-    try:
-        machine_id = self.get_available_machine()
-        if not machine_id:
-            return {'success': False, 'error': 'همه ماشین‌ها پر هستند'}
-        
-        bot_dir = os.path.join(DIRS['MACHINES'], f"machine_{machine_id:03d}", bot_id)
-        os.makedirs(bot_dir, exist_ok=True)
-        
-        code_path = os.path.join(bot_dir, 'bot.py')
-        with open(code_path, 'w', encoding='utf-8') as f:
-            f.write(code)
-        
-        # تلاش برای اجرا با Docker
+    def run_bot(self, bot_id, code, token, restore=False):
         try:
-            import docker
-            client = docker.from_env()
-            client.ping()
+            machine_id = self.get_available_machine()
+            if not machine_id:
+                return {'success': False, 'error': 'همه ماشین‌ها پر هستند'}
             
-            container = client.containers.run(
-                image='python:3.10-slim',
-                command=f'python /app/bot.py',
-                volumes={bot_dir: {'bind': '/app', 'mode': 'ro'}},
-                mem_limit='256m',
-                nano_cpus=int(0.5 * 1e9),
-                detach=True,
-                remove=False,
-                name=f"bot_{bot_id}"
-            )
+            bot_dir = os.path.join(DIRS['MACHINES'], f"machine_{machine_id:03d}", bot_id)
+            os.makedirs(bot_dir, exist_ok=True)
             
-            time.sleep(2)
-            container.reload()
+            code_path = os.path.join(bot_dir, 'bot.py')
+            with open(code_path, 'w', encoding='utf-8') as f:
+                f.write(code)
             
-            if container.status == 'running':
-                with self.lock:
-                    self.containers[bot_id] = {
-                        'container': container,
-                        'machine_id': machine_id,
-                        'start_time': time.time()
-                    }
-                self.assign_bot(bot_id, machine_id)
-                if not restore:
-                    db.execute("UPDATE bots SET status = 'running', machine_id = ?, last_active = ? WHERE id = ?",
-                              (machine_id, datetime.now().isoformat(), bot_id))
-                return {'success': True, 'pid': container.id[:12], 'machine_id': machine_id}
-            else:
-                container.remove()
+            # تلاش برای اجرا با Docker
+            try:
+                import docker
+                client = docker.from_env()
+                client.ping()
                 
-        except Exception as e:
-            print(f"Docker failed: {e}, using subprocess")
-            
-            # Fallback به subprocess
-            log_file = os.path.join(DIRS['LOGS'], f"bot_{bot_id}.log")
-            process = subprocess.Popen(
-                [sys.executable, code_path],
-                stdout=open(log_file, 'a'),
-                stderr=subprocess.STDOUT,
-                cwd=bot_dir,
-                start_new_session=True
-            )
-            time.sleep(2)
-            
-            if process.poll() is None:
-                with self.lock:
-                    self.processes[bot_id] = {
-                        'process': process,
-                        'pid': process.pid,
-                        'machine_id': machine_id,
-                        'start_time': time.time()
-                    }
-                self.assign_bot(bot_id, machine_id)
-                if not restore:
-                    db.execute("UPDATE bots SET status = 'running', machine_id = ?, pid = ?, last_active = ? WHERE id = ?",
-                              (machine_id, process.pid, datetime.now().isoformat(), bot_id))
+                container = client.containers.run(
+                    image='python:3.10-slim',
+                    command=f'python /app/bot.py',
+                    volumes={bot_dir: {'bind': '/app', 'mode': 'ro'}},
+                    mem_limit='256m',
+                    nano_cpus=int(0.5 * 1e9),
+                    detach=True,
+                    remove=False,
+                    name=f"bot_{bot_id}"
+                )
+                
+                time.sleep(2)
+                container.reload()
+                
+                if container.status == 'running':
+                    with self.lock:
+                        self.containers[bot_id] = {
+                            'container': container,
+                            'machine_id': machine_id,
+                            'start_time': time.time()
+                        }
+                    self.assign_bot(bot_id, machine_id)
+                    if not restore:
+                        db.execute("UPDATE bots SET status = 'running', machine_id = ?, last_active = ? WHERE id = ?",
+                                  (machine_id, datetime.now().isoformat(), bot_id))
+                    return {'success': True, 'pid': container.id[:12], 'machine_id': machine_id}
+                else:
+                    container.remove()
+                    
+            except Exception as e:
+                print(f"Docker failed: {e}, using subprocess")
+                
+                # Fallback به subprocess
+                log_file = os.path.join(DIRS['LOGS'], f"bot_{bot_id}.log")
+                process = subprocess.Popen(
+                    [sys.executable, code_path],
+                    stdout=open(log_file, 'a'),
+                    stderr=subprocess.STDOUT,
+                    cwd=bot_dir,
+                    start_new_session=True
+                )
+                time.sleep(2)
+                
+                if process.poll() is None:
+                    with self.lock:
+                        self.processes[bot_id] = {
+                            'process': process,
+                            'pid': process.pid,
+                            'machine_id': machine_id,
+                            'start_time': time.time()
+                        }
+                    self.assign_bot(bot_id, machine_id)
+                    if not restore:
+                        db.execute("UPDATE bots SET status = 'running', machine_id = ?, pid = ?, last_active = ? WHERE id = ?",
+                                  (machine_id, process.pid, datetime.now().isoformat(), bot_id))
                 return {'success': True, 'pid': process.pid, 'machine_id': machine_id}
             else:
                 return {'success': False, 'error': 'خطا در اجرای ربات'}
-                
-    except Exception as e:
-        return {'success': False, 'error': str(e)[:100]}
+        except Exception as e:
+            return {'success': False, 'error': str(e)[:100]}
     
     def stop_bot(self, bot_id):
-    with self.lock:
-        # توقف کانتینر Docker
-        if hasattr(self, 'containers') and bot_id in self.containers:
-            try:
-                self.containers[bot_id]['container'].stop(timeout=5)
-                self.containers[bot_id]['container'].remove()
-                self.release_bot(bot_id, self.containers[bot_id]['machine_id'])
-                del self.containers[bot_id]
-                db.execute("UPDATE bots SET status = 'stopped' WHERE id = ?", (bot_id,))
-                return True
-            except:
-                pass
-        
-        # توقف subprocess
-        if bot_id in self.processes:
-            try:
-                info = self.processes[bot_id]
-                os.kill(info['pid'], signal.SIGTERM)
-                time.sleep(1)
-                self.release_bot(bot_id, info['machine_id'])
-                del self.processes[bot_id]
-                db.execute("UPDATE bots SET status = 'stopped' WHERE id = ?", (bot_id,))
-                return True
-            except:
-                pass
-    return False
-    
-    def get_status(self, bot_id):
-    with self.lock:
-        # چک کانتینر Docker
-        if hasattr(self, 'containers') and bot_id in self.containers:
-            try:
-                self.containers[bot_id]['container'].reload()
-                if self.containers[bot_id]['container'].status == 'running':
-                    return {'running': True}
-                else:
+        with self.lock:
+            # توقف کانتینر Docker
+            if hasattr(self, 'containers') and bot_id in self.containers:
+                try:
+                    self.containers[bot_id]['container'].stop(timeout=5)
+                    self.containers[bot_id]['container'].remove()
+                    self.release_bot(bot_id, self.containers[bot_id]['machine_id'])
                     del self.containers[bot_id]
-            except:
-                if bot_id in self.containers:
-                    del self.containers[bot_id]
-        
-        # چک subprocess
-        if bot_id in self.processes:
-            try:
-                os.kill(self.processes[bot_id]['pid'], 0)
-                return {'running': True}
-            except:
-                if bot_id in self.processes:
-                    self.release_bot(bot_id, self.processes[bot_id]['machine_id'])
+                    db.execute("UPDATE bots SET status = 'stopped' WHERE id = ?", (bot_id,))
+                    return True
+                except:
+                    pass
+            
+            # توقف subprocess
+            if bot_id in self.processes:
+                try:
+                    info = self.processes[bot_id]
+                    os.kill(info['pid'], signal.SIGTERM)
+                    time.sleep(1)
+                    self.release_bot(bot_id, info['machine_id'])
                     del self.processes[bot_id]
                     db.execute("UPDATE bots SET status = 'stopped' WHERE id = ?", (bot_id,))
-    return {'running': False}
+                    return True
+                except:
+                    pass
+        return False
+    
+    def get_status(self, bot_id):
+        with self.lock:
+            # چک کانتینر Docker
+            if hasattr(self, 'containers') and bot_id in self.containers:
+                try:
+                    self.containers[bot_id]['container'].reload()
+                    if self.containers[bot_id]['container'].status == 'running':
+                        return {'running': True}
+                    else:
+                        del self.containers[bot_id]
+                except:
+                    if bot_id in self.containers:
+                        del self.containers[bot_id]
+            
+            # چک subprocess
+            if bot_id in self.processes:
+                try:
+                    os.kill(self.processes[bot_id]['pid'], 0)
+                    return {'running': True}
+                except:
+                    if bot_id in self.processes:
+                        self.release_bot(bot_id, self.processes[bot_id]['machine_id'])
+                        del self.processes[bot_id]
+                        db.execute("UPDATE bots SET status = 'stopped' WHERE id = ?", (bot_id,))
+        return {'running': False}
     
     def restart_all_dead_bots(self):
         dead_bots = db.execute('SELECT id, token, file_path FROM bots WHERE status = "running"')
@@ -1246,117 +1245,6 @@ class MachineManager:
     
     def update_machine_capacity(self, machine_id, max_bots):
         db.execute("UPDATE machines SET max_bots = ? WHERE id = ?", (max_bots, machine_id))
-            
-        join_check_code = f'''
-# ========== سیستم مدیریت عضوگیری ==========
-import sqlite3, os, time, threading
-from functools import wraps
-
-DB_PATH = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'database', 'mother_bot.db')
-CHECK_INTERVAL = 30
-join_enabled_cache = True
-block_message_cache = "🚫 سرور پر است"
-
-def update_cache():
-    global join_enabled_cache, block_message_cache
-    try:
-        conn = sqlite3.connect(DB_PATH, timeout=3)
-        cursor = conn.cursor()
-        cursor.execute("SELECT join_enabled, join_block_message FROM bots WHERE id = ?", ("{bot_id}",))
-        result = cursor.fetchone()
-        conn.close()
-        if result:
-            join_enabled_cache = result[0] == 1
-            block_message_cache = result[1] if result[1] else "🚫 سرور پر است"
-    except:
-        pass
-
-def cache_updater():
-    while True:
-        update_cache()
-        time.sleep(CHECK_INTERVAL)
-
-threading.Thread(target=cache_updater, daemon=True).start()
-update_cache()
-
-def check_join_enabled(func):
-    @wraps(func)
-    def wrapper(message, *args, **kwargs):
-        if not join_enabled_cache:
-            bot.reply_to(message, block_message_cache)
-            return
-        return func(message, *args, **kwargs)
-    return wrapper
-# ===========================================
-'''
-            
-            with open(code_path, 'w', encoding='utf-8') as f:
-                f.write(join_check_code + "\n" + code)
-            
-            log_file = os.path.join(DIRS['LOGS'], f"bot_{bot_id}.log")
-            
-            process = subprocess.Popen(
-                [sys.executable, code_path],
-                stdout=open(log_file, 'a'),
-                stderr=subprocess.STDOUT,
-                cwd=bot_dir,
-                start_new_session=True
-            )
-            
-            time.sleep(2)
-            
-            if process.poll() is None:
-                with self.lock:
-                    self.processes[bot_id] = {
-                        'process': process,
-                        'pid': process.pid,
-                        'machine_id': machine_id,
-                        'port': port,
-                        'dir': bot_dir,
-                        'start_time': time.time()
-                    }
-                self.assign_bot(bot_id, machine_id)
-                
-                if not restore:
-                    db.execute("UPDATE bots SET status = 'running', machine_id = ?, pid = ?, last_active = ? WHERE id = ?",
-                              (machine_id, process.pid, datetime.now().isoformat(), bot_id))
-                
-                return {'success': True, 'pid': process.pid, 'machine_id': machine_id}
-            else:
-                return {'success': False, 'error': 'خطا در اجرای ربات' if not restore else 'Failed to start'}
-        except Exception as e:
-            return {'success': False, 'error': str(e)[:100]}
-    
-    def stop_bot(self, bot_id):
-        with self.lock:
-            if bot_id in self.processes:
-                try:
-                    info = self.processes[bot_id]
-                    os.kill(info['pid'], signal.SIGTERM)
-                    time.sleep(1)
-                    self.release_bot(bot_id, info['machine_id'])
-                    del self.processes[bot_id]
-                    db.execute("UPDATE bots SET status = 'stopped', last_active = ? WHERE id = ?",
-                              (datetime.now().isoformat(), bot_id))
-                    return True
-                except:
-                    pass
-        return False
-    
-    def get_status(self, bot_id):
-        with self.lock:
-            if bot_id in self.processes:
-                info = self.processes[bot_id]
-                try:
-                    os.kill(info['pid'], 0)
-                    return {'running': True, 'pid': info['pid'], 'machine_id': info['machine_id'],
-                            'uptime': time.time() - info['start_time']}
-                except:
-                    if bot_id in self.processes:
-                        del self.processes[bot_id]
-                        self.release_bot(bot_id, info['machine_id'])
-                        db.execute("UPDATE bots SET status = 'stopped' WHERE id = ?", (bot_id,))
-        return {'running': False}
     
     def restart_all_dead_bots(self):
         """ریستارت کردن تمام ربات‌های مرده"""
