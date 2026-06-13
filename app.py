@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-ربات مادر نهایی - نسخه 10.0 نهایی با رفع تمام مشکلات
+ربات مادر نهایی - نسخه 11.0 نهایی با رفع کامل خطاها
 """
 
 import telebot
@@ -24,7 +24,6 @@ import logging
 from datetime import datetime, timedelta
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-import secrets
 
 # ==================== تنظیمات پایه ====================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -58,25 +57,25 @@ TRIAL_HOURS = 24
 GUIDE_TEXT = """📚 راهنمای کامل ربات مادر
 
 1️⃣ ساخت ربات:
-   • ابتدا اشتراک خود را فعال کنید یا از تست ۲۴ ساعته استفاده کنید
-   • فایل .py یا .zip خود را آپلود کنید
-   • توکن ربات باید داخل کد باشد
+   - ابتدا اشتراک خود را فعال کنید یا از تست 24 ساعته استفاده کنید
+   - فایل .py یا .zip خود را آپلود کنید
+   - توکن ربات باید داخل کد باشد
 
 2️⃣ انواع اشتراک:
-   • ماهانه: 2,000,000 تومان
-   • سه ماهه: 5,000,000 تومان
-   • تست رایگان: 24 ساعت (فقط یک بار)
+   - ماهانه: 2,000,000 تومان
+   - سه ماهه: 5,000,000 تومان
+   - تست رايگان: 24 ساعت (فقط یک بار)
 
 3️⃣ سیستم رفرال:
-   • هر نفر 7% پورسانت خرید
-   • لینک اختصاصی خود را به اشتراک بگذارید
+   - هر نفر 7 درصد پورسانت خرید
+   - لینک اختصاصی خود را به اشتراک بگذارید
 
 4️⃣ برداشت وجه:
-   • حداقل مبلغ برداشت: 2,000,000 تومان
-   • از طریق بخش برداشت اقدام کنید
+   - حداقل مبلغ برداشت: 2,000,000 تومان
+   - از طریق بخش برداشت اقدام کنید
 
 5️⃣ پشتیبانی:
-   • @shahraghee13
+   - @shahraghee13
 """
 
 # ==================== لاگینگ ====================
@@ -100,7 +99,6 @@ def get_db():
 
 # ایجاد تمام جداول
 with get_db() as conn:
-    # جدول کاربران
     conn.execute('''
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
@@ -122,7 +120,6 @@ with get_db() as conn:
         )
     ''')
     
-    # جدول ربات‌ها
     conn.execute('''
         CREATE TABLE IF NOT EXISTS bots (
             id TEXT PRIMARY KEY,
@@ -140,7 +137,6 @@ with get_db() as conn:
         )
     ''')
     
-    # جدول فیش‌های واریزی
     conn.execute('''
         CREATE TABLE IF NOT EXISTS receipts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -157,7 +153,6 @@ with get_db() as conn:
         )
     ''')
     
-    # جدول اشتراک‌ها
     conn.execute('''
         CREATE TABLE IF NOT EXISTS subscriptions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -172,7 +167,6 @@ with get_db() as conn:
         )
     ''')
     
-    # جدول تست 24 ساعته
     conn.execute('''
         CREATE TABLE IF NOT EXISTS trial_usage (
             user_id INTEGER PRIMARY KEY,
@@ -184,7 +178,6 @@ with get_db() as conn:
         )
     ''')
     
-    # جدول کمیسیون‌ها
     conn.execute('''
         CREATE TABLE IF NOT EXISTS commissions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -197,7 +190,6 @@ with get_db() as conn:
         )
     ''')
     
-    # جدول درخواست‌های برداشت
     conn.execute('''
         CREATE TABLE IF NOT EXISTS withdraw_requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -208,14 +200,6 @@ with get_db() as conn:
             created_at TIMESTAMP,
             processed_at TIMESTAMP,
             FOREIGN KEY(user_id) REFERENCES users(user_id)
-        )
-    ''')
-    
-    # جدول تنظیمات
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT
         )
     ''')
     
@@ -232,7 +216,7 @@ class SecurityManager:
                 errors.append(f"کد خطرناک: {item}")
         return len(errors) == 0, errors
 
-# ==================== کلاس مدیریت داکر (ساده شده) ====================
+# ==================== کلاس اجرای ربات ====================
 class BotRunner:
     @staticmethod
     def run_bot(bot_id, code, token):
@@ -316,16 +300,14 @@ class SubscriptionManager:
     
     @staticmethod
     def can_use_trial(user_id):
-        """بررسی آیا کاربر می‌تواند از تست 24 ساعته استفاده کند"""
         with get_db() as conn:
             row = conn.execute('SELECT used_before FROM trial_usage WHERE user_id = ?', (user_id,)).fetchone()
             if row and row['used_before'] == 1:
-                return False, "شما قبلاً از تست ۲۴ ساعته استفاده کرده‌اید!"
+                return False, "شما قبلاً از تست 24 ساعته استفاده کرده اید"
             return True, "میتوانید استفاده کنید"
     
     @staticmethod
     def activate_trial(user_id):
-        """فعال کردن تست 24 ساعته"""
         with get_db() as conn:
             now = datetime.now()
             conn.execute('''
@@ -337,7 +319,6 @@ class SubscriptionManager:
     
     @staticmethod
     def is_trial_active(user_id):
-        """بررسی آیا تست 24 ساعته فعال است"""
         with get_db() as conn:
             row = conn.execute('''
                 SELECT start_time FROM trial_usage 
@@ -356,19 +337,15 @@ class SubscriptionManager:
     
     @staticmethod
     def can_create_bot(user_id):
-        """بررسی مجوز ساخت ربات"""
-        # اول چک کن اشتراک فعال داره؟
         if SubscriptionManager.has_active_subscription(user_id):
             return True, 'subscription'
         
-        # بعد چک کن تست 24 ساعته فعال داره؟
         if SubscriptionManager.is_trial_active(user_id):
             return True, 'trial'
         
-        # هیچکدام
         return False, None
 
-# ==================== کلاس مدیریت رفرال و کمیسیون ====================
+# ==================== کلاس مدیریت رفرال ====================
 class ReferralManager:
     
     @staticmethod
@@ -386,7 +363,6 @@ class ReferralManager:
     
     @staticmethod
     def process_purchase_commission(buyer_id, paid_amount):
-        """پرداخت 7% کمیسیون به رفرال دهنده"""
         with get_db() as conn:
             buyer = conn.execute('SELECT referred_by FROM users WHERE user_id = ?', (buyer_id,)).fetchone()
             
@@ -395,28 +371,20 @@ class ReferralManager:
                 commission = int(paid_amount * REFERRAL_COMMISSION_PERCENT / 100)
                 
                 if commission > 0:
-                    # اضافه کردن به جدول کمیسیون
                     conn.execute('''
                         INSERT INTO commissions (user_id, amount, reason, from_user_id, created_at)
                         VALUES (?, ?, ?, ?, ?)
-                    ''', (referrer_id, commission, f'پورسانت {REFERRAL_COMMISSION_PERCENT}% از خرید کاربر {buyer_id}', buyer_id, datetime.now().isoformat()))
+                    ''', (referrer_id, commission, f"پورسانت {REFERRAL_COMMISSION_PERCENT} درصد از خرید کاربر {buyer_id}", buyer_id, datetime.now().isoformat()))
                     
-                    # اضافه کردن به کیف پول
                     conn.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (commission, referrer_id))
-                    
-                    # افزایش آمار رفرال
                     conn.execute('UPDATE users SET verified_referrals = verified_referrals + 1 WHERE user_id = ?', (referrer_id,))
                     
                     conn.commit()
                     
-                    # اطلاع به رفرال دهنده
                     try:
                         bot.send_message(
                             referrer_id,
-                            f"🎉 {commission:,} تومان پورسانت به کیف پول شما اضافه شد!\n"
-                            f"👤 خریدار: {buyer_id}\n"
-                            f"💰 مبلغ خرید: {paid_amount:,} تومان\n"
-                            f"📊 درصد: {REFERRAL_COMMISSION_PERCENT}%"
+                            f"🎉 {commission:,} تومان پورسانت به کیف پول شما اضافه شد!\n\n👤 خریدار: {buyer_id}\n💰 مبلغ خرید: {paid_amount:,} تومان\n📊 درصد: {REFERRAL_COMMISSION_PERCENT}%"
                         )
                     except:
                         pass
@@ -456,15 +424,12 @@ class WithdrawManager:
                 try:
                     bot.send_message(
                         admin_id,
-                        f"💰 درخواست برداشت جدید\n"
-                        f"👤 کاربر: {user_id}\n"
-                        f"💰 مبلغ: {amount:,} تومان\n"
-                        f"💳 کارت: {card_number}"
+                        f"💰 درخواست برداشت جدید\n\n👤 کاربر: {user_id}\n💰 مبلغ: {amount:,} تومان\n💳 کارت: {card_number}"
                     )
                 except:
                     pass
             
-            return True, "درخواست برداشت ثبت شد. پس از بررسی، مبلغ به کارت شما واریز می‌شود."
+            return True, "درخواست برداشت ثبت شد. پس از بررسی، مبلغ به کارت شما واریز می شود."
     
     @staticmethod
     def get_withdraw_requests(status='pending'):
@@ -490,7 +455,7 @@ class WithdrawManager:
                 try:
                     bot.send_message(
                         request['user_id'],
-                        f"✅ درخواست برداشت شما تایید شد!\n💰 مبلغ: {request['amount']:,} تومان\n💳 به کارت {request['card_number']} واریز شد."
+                        f"✅ درخواست برداشت شما تایید شد!\n\n💰 مبلغ: {request['amount']:,} تومان\n💳 به کارت {request['card_number']} واریز شد."
                     )
                 except:
                     pass
@@ -501,14 +466,13 @@ class WithdrawManager:
                     WHERE id = ?
                 ''', (datetime.now().isoformat(), request_id))
                 
-                # برگردوندن موجودی
                 conn.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', 
                             (request['amount'], request['user_id']))
                 
                 try:
                     bot.send_message(
                         request['user_id'],
-                        f"❌ درخواست برداشت شما رد شد.\n💰 مبلغ {request['amount']:,} تومان به کیف پول شما برگشت."
+                        f"❌ درخواست برداشت شما رد شد.\n\n💰 مبلغ {request['amount']:,} تومان به کیف پول شما برگشت."
                     )
                 except:
                     pass
@@ -615,14 +579,6 @@ def get_user_bots(user_id):
     except:
         return []
 
-def get_bot(bot_id):
-    try:
-        with get_db() as conn:
-            bot_info = conn.execute('SELECT * FROM bots WHERE id = ?', (bot_id,)).fetchone()
-            return dict(bot_info) if bot_info else None
-    except:
-        return None
-
 def update_bot_status(bot_id, status):
     try:
         with get_db() as conn:
@@ -656,17 +612,33 @@ def delete_bot_from_db(bot_id, user_id):
     except:
         return False
 
+def safe_send_message(chat_id, text, reply_markup=None):
+    """ارسال ایمن پیام بدون parse_mode"""
+    try:
+        return bot.send_message(chat_id, text, reply_markup=reply_markup)
+    except Exception as e:
+        logger.error(f"خطا در ارسال پیام: {e}")
+        return None
+
+def safe_edit_message(text, chat_id, message_id, reply_markup=None):
+    """ویرایش ایمن پیام بدون parse_mode"""
+    try:
+        return bot.edit_message_text(text, chat_id, message_id, reply_markup=reply_markup)
+    except Exception as e:
+        logger.error(f"خطا در ویرایش پیام: {e}")
+        return None
+
 # ==================== منوی اصلی ====================
 def get_main_menu(is_admin=False):
     markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
     
     buttons = [
         types.KeyboardButton('🤖 ساخت ربات جدید'),
-        types.KeyboardButton('📋 ربات‌های من'),
-        types.KeyboardButton('🔄 فعال/غیرفعال کردن'),
+        types.KeyboardButton('📋 ربات هاي من'),
+        types.KeyboardButton('🔄 فعال/غيرفعال کردن'),
         types.KeyboardButton('🗑 حذف ربات'),
-        types.KeyboardButton('💰 کیف پول و رفرال'),
-        types.KeyboardButton('🎁 اشتراک و تست ۲۴ ساعته'),
+        types.KeyboardButton('💰 کيف پول و رفرال'),
+        types.KeyboardButton('🎁 اشتراک و تست 24 ساعته'),
         types.KeyboardButton('💳 برداشت وجه'),
         types.KeyboardButton('📚 راهنما'),
         types.KeyboardButton('📦 نصب کتابخانه'),
@@ -700,7 +672,7 @@ def cmd_start(message):
                     try:
                         bot.send_message(
                             referred_by,
-                            f"🎉 یک نفر با لینک رفرال شما وارد شد!\n👤 {first_name}\n🆔 {user_id}"
+                            f"🎉 يک نفر با لينک رفرال شما وارد شد!\n\n👤 {first_name}\n🆔 {user_id}"
                         )
                     except:
                         pass
@@ -717,20 +689,20 @@ def cmd_start(message):
     markup = get_main_menu(is_admin)
     
     welcome_text = (
-        f"🚀 به ربات مادر نهایی خوش آمدید {first_name}!\n\n"
-        f"👤 آیدی شما: {user_id}\n"
+        f"🚀 به ربات مادر نهايي خوش آمديد {first_name}!\n\n"
+        f"👤 آيدي شما: {user_id}\n"
         f"🎁 کد رفرال شما: {user['referral_code']}\n"
-        f"🔗 لینک دعوت: {referral_link}\n\n"
-        f"💰 موجودی کیف پول: {balance:,} تومان\n\n"
-        f"💡 هر خرید از لینک شما = ۷٪ پورسانت\n"
-        f"🎁 تست ۲۴ ساعته رایگان (فقط یک بار)\n"
-        f"📤 برای ساخت ربات از گزینه «ساخت ربات جدید» استفاده کنید"
+        f"🔗 لينک دعوت: {referral_link}\n\n"
+        f"💰 موجودي کيف پول: {balance:,} تومان\n\n"
+        f"💡 هر خريد از لينک شما = 7 درصد پورسانت\n"
+        f"🎁 تست 24 ساعته رايگان (فقط يک بار)\n"
+        f"📤 برای ساخت ربات از گزينه «ساخت ربات جديد» استفاده کنيد"
     )
     
-    bot.send_message(message.chat.id, welcome_text, reply_markup=markup)
+    safe_send_message(message.chat.id, welcome_text, reply_markup=markup)
 
-# ==================== اشتراک و تست ۲۴ ساعته ====================
-@bot.message_handler(func=lambda m: m.text == '🎁 اشتراک و تست ۲۴ ساعته')
+# ==================== اشتراک و تست 24 ساعته ====================
+@bot.message_handler(func=lambda m: m.text == '🎁 اشتراک و تست 24 ساعته')
 def subscription_menu(message):
     user_id = message.from_user.id
     
@@ -738,31 +710,31 @@ def subscription_menu(message):
     trial_active = SubscriptionManager.is_trial_active(user_id)
     can_trial, trial_msg = SubscriptionManager.can_use_trial(user_id)
     
-    text = f"🎁 **مدیریت اشتراک و تست**\n\n"
-    text += f"📊 وضعیت فعلی:\n"
+    text = f"🎁 مديريت اشتراک و تست\n\n"
+    text += f"وضعيت فعلي:\n"
     text += f"{'✅ اشتراک فعال' if has_sub else '❌ بدون اشتراک فعال'}\n"
-    text += f"{'✅ تست ۲۴ ساعته فعال' if trial_active else '❌ تست فعال نیست'}\n\n"
-    text += f"💰 **قیمت اشتراک:**\n"
-    text += f"• ماهانه: {PRICE_PER_MONTH:,} تومان\n"
-    text += f"• سه ماهه: {PRICE_3_MONTHS:,} تومان (تخفیف ویژه)\n\n"
-    text += f"🎁 **تست رایگان ۲۴ ساعته:**\n"
-    text += f"• بدون پرداخت هزینه\n"
-    text += f"• فقط یک بار قابل استفاده\n"
-    text += f"• بعد از ۲۴ ساعت ربات متوقف می‌شود\n"
-    text += f"• {trial_msg}\n\n"
-    text += f"💳 شماره کارت: `{CARD_NUMBER}`\n"
+    text += f"{'✅ تست 24 ساعته فعال' if trial_active else '❌ تست فعال نيست'}\n\n"
+    text += f"💰 قيمت اشتراک:\n"
+    text += f"- ماهانه: {PRICE_PER_MONTH:,} تومان\n"
+    text += f"- سه ماهه: {PRICE_3_MONTHS:,} تومان (تخفيف ويژه)\n\n"
+    text += f"🎁 تست رايگان 24 ساعته:\n"
+    text += f"- بدون پرداخت هزينه\n"
+    text += f"- فقط يک بار قابل استفاده\n"
+    text += f"- بعد از 24 ساعت ربات متوقف مي شود\n"
+    text += f"- {trial_msg}\n\n"
+    text += f"💳 شماره کارت: {CARD_NUMBER}\n"
     text += f"🏦 به نام: {CARD_HOLDER}"
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("💰 خرید ماهانه", callback_data="buy_monthly"),
-        types.InlineKeyboardButton("💰 خرید سه ماهه", callback_data="buy_3months")
+        types.InlineKeyboardButton("💰 خريد ماهانه", callback_data="buy_monthly"),
+        types.InlineKeyboardButton("💰 خريد سه ماهه", callback_data="buy_3months")
     )
     
     if can_trial and not trial_active:
-        markup.add(types.InlineKeyboardButton("🎁 فعال‌سازی تست ۲۴ ساعته", callback_data="activate_trial"))
+        markup.add(types.InlineKeyboardButton("🎁 فعال سازي تست 24 ساعته", callback_data="activate_trial"))
     
-    bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
+    safe_send_message(message.chat.id, text, reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data in ['buy_monthly', 'buy_3months'])
 def buy_subscription(call):
@@ -774,16 +746,17 @@ def buy_subscription(call):
         plan = '3months'
     
     text = (
-        f"💰 **خرید اشتراک {plan}**\n\n"
+        f"💰 خريد اشتراک {plan}\n\n"
         f"مبلغ: {amount:,} تومان\n"
-        f"شماره کارت: `{CARD_NUMBER}`\n"
+        f"شماره کارت: {CARD_NUMBER}\n"
         f"به نام: {CARD_HOLDER}\n\n"
-        f"📸 پس از واریز، تصویر فیش را همراه با ذکر نوع اشتراک ارسال کنید\n"
-        f"💡 مثال کپشن: خرید اشتراک {plan}\n\n"
-        f"🆔 کد پیگیری شما: {hashlib.md5(f'{call.from_user.id}_{time.time()}'.encode()).hexdigest()[:8].upper()}"
+        f"پس از واريز، تصوير فيش را همراه با ذکر نوع اشتراک ارسال کنيد\n"
+        f"مثال: خريد اشتراک {plan}\n\n"
+        f"کد پيگيري شما: {hashlib.md5(f'{call.from_user.id}_{time.time()}'.encode()).hexdigest()[:8].upper()}"
     )
     
-    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown")
+    safe_edit_message(text, call.message.chat.id, call.message.message_id)
+    bot.answer_callback_query(call.id)
 
 @bot.callback_query_handler(func=lambda call: call.data == 'activate_trial')
 def activate_trial(call):
@@ -795,55 +768,54 @@ def activate_trial(call):
         return
     
     if SubscriptionManager.is_trial_active(user_id):
-        bot.answer_callback_query(call.id, "❌ تست ۲۴ ساعته در حال حاضر فعال است!")
+        bot.answer_callback_query(call.id, "تست 24 ساعته در حال حاضر فعال است")
         return
     
     SubscriptionManager.activate_trial(user_id)
     
-    bot.edit_message_text(
-        f"🎁 **تست ۲۴ ساعته فعال شد!**\n\n"
-        f"✅ می‌توانید یک ربات بسازید\n"
-        f"⏰ زمان باقی‌مانده: {TRIAL_HOURS} ساعت\n"
-        f"💡 برای استفاده دائمی، اشتراک تهیه کنید\n\n"
-        f"🤖 از گزینه «ساخت ربات جدید» استفاده کنید.",
-        call.message.chat.id,
-        call.message.message_id,
-        parse_mode="Markdown"
+    text = (
+        f"🎁 تست 24 ساعته فعال شد!\n\n"
+        f"✅ مي توانيد يک ربات بسازيد\n"
+        f"⏰ زمان باقي مانده: {TRIAL_HOURS} ساعت\n"
+        f"💡 برای استفاده دايمي، اشتراک تهيه کنيد\n\n"
+        f"🤖 از گزينه «ساخت ربات جديد» استفاده کنيد."
     )
+    
+    safe_edit_message(text, call.message.chat.id, call.message.message_id)
+    bot.answer_callback_query(call.id)
 
 # ==================== کیف پول و رفرال ====================
-@bot.message_handler(func=lambda m: m.text == '💰 کیف پول و رفرال')
+@bot.message_handler(func=lambda m: m.text == '💰 کيف پول و رفرال')
 def wallet_ref(message):
     user_id = message.from_user.id
     user = get_user(user_id)
     
     if not user:
-        bot.send_message(message.chat.id, "❌ لطفاً /start را بزنید")
+        safe_send_message(message.chat.id, "لطفاً /start را بزنيد")
         return
     
     referral_link = ReferralManager.get_referral_link(user_id)
     balance = ReferralManager.get_balance(user_id)
     
-    # دریافت کل کمیسیون‌ها
     with get_db() as conn:
         commissions = conn.execute('SELECT SUM(amount) as total FROM commissions WHERE user_id = ?', (user_id,)).fetchone()
         total_commission = commissions['total'] if commissions['total'] else 0
     
-    text = f"💰 **کیف پول و سیستم رفرال**\n\n"
+    text = f"💰 کيف پول و سيستم رفرال\n\n"
     text += f"👤 کاربر: {user['first_name']}\n"
-    text += f"🆔 آیدی: {user_id}\n\n"
-    text += f"💳 **موجودی قابل برداشت:** {balance:,} تومان\n"
-    text += f"📊 **کل پورسانت دریافتی:** {total_commission:,} تومان\n\n"
-    text += f"🎁 **لینک رفرال شما:**\n`{referral_link}`\n\n"
-    text += f"📊 **آمار رفرال:**\n"
-    text += f"• کلیک‌ها: {user['referrals_count']}\n"
-    text += f"• خریدهای موفق: {user['verified_referrals']}\n\n"
-    text += f"💰 **پورسانت:**\n"
-    text += f"• هر خرید از لینک شما = {REFERRAL_COMMISSION_PERCENT}% به کیف پول شما\n"
-    text += f"• پورسانت بلافاصله بعد از خرید واریز می‌شود\n\n"
-    text += f"💡 هر ۵ خرید موفق = ۱ ربات اضافه"
+    text += f"🆔 آيدي: {user_id}\n\n"
+    text += f"💳 موجودي قابل برداشت: {balance:,} تومان\n"
+    text += f"📊 کل پورسانت دريافتي: {total_commission:,} تومان\n\n"
+    text += f"🎁 لينک رفرال شما:\n{referral_link}\n\n"
+    text += f"📊 آمار رفرال:\n"
+    text += f"- کليک ها: {user['referrals_count']}\n"
+    text += f"- خريدهاي موفق: {user['verified_referrals']}\n\n"
+    text += f"💰 پورسانت:\n"
+    text += f"- هر خريد از لينک شما = {REFERRAL_COMMISSION_PERCENT} درصد به کيف پول شما\n"
+    text += f"- پورسانت بلافاصله بعد از خريد واريز مي شود\n\n"
+    text += f"💡 هر 5 خريد موفق = 1 ربات اضافه"
     
-    bot.send_message(message.chat.id, text, parse_mode="Markdown")
+    safe_send_message(message.chat.id, text)
 
 # ==================== برداشت وجه ====================
 @bot.message_handler(func=lambda m: m.text == '💳 برداشت وجه')
@@ -852,15 +824,15 @@ def withdraw_menu(message):
     balance = ReferralManager.get_balance(user_id)
     
     text = (
-        f"💳 **برداشت وجه**\n\n"
-        f"💰 موجودی قابل برداشت: {balance:,} تومان\n"
+        f"💳 برداشت وجه\n\n"
+        f"💰 موجودي قابل برداشت: {balance:,} تومان\n"
         f"📌 حداقل مبلغ برداشت: {MIN_WITHDRAW_AMOUNT:,} تومان\n\n"
-        f"⚠️ لطفاً مبلغ و شماره کارت خود را به صورت زیر ارسال کنید:\n\n"
-        f"`مبلغ|شماره کارت`\n\n"
-        f"مثال: `2000000|6037991234567890`"
+        f"لطفاً مبلغ و شماره کارت خود را به صورت زير ارسال کنيد:\n\n"
+        f"مبلغ|شماره کارت\n\n"
+        f"مثال: 2000000|6037991234567890"
     )
     
-    bot.send_message(message.chat.id, text, parse_mode="Markdown")
+    safe_send_message(message.chat.id, text)
     bot.register_next_step_handler(message, process_withdraw)
 
 def process_withdraw(message):
@@ -869,26 +841,25 @@ def process_withdraw(message):
     try:
         parts = message.text.split('|')
         if len(parts) != 2:
-            bot.reply_to(message, "❌ فرمت صحیح نیست! مثال: `2000000|6037991234567890`", parse_mode="Markdown")
+            safe_send_message(message.chat.id, "فرمت صحيح نيست! مثال: 2000000|6037991234567890")
             return
         
         amount = int(parts[0].strip())
         card_number = parts[1].strip()
         
         success, msg = WithdrawManager.request_withdraw(user_id, amount, card_number)
-        bot.reply_to(message, msg)
+        safe_send_message(message.chat.id, msg)
         
     except ValueError:
-        bot.reply_to(message, "❌ مبلغ باید عدد باشد!")
+        safe_send_message(message.chat.id, "مبلغ بايد عدد باشد")
     except Exception as e:
-        bot.reply_to(message, f"❌ خطا: {str(e)}")
+        safe_send_message(message.chat.id, f"خطا: {str(e)}")
 
-# ==================== فیش واریزی (اصلاح شده با پلن) ====================
+# ==================== فیش واریزی ====================
 @bot.message_handler(content_types=['photo'])
 def handle_receipt(message):
     user_id = message.from_user.id
     
-    # تشخیص پلن از کپشن
     plan_type = 'monthly'
     amount = PRICE_PER_MONTH
     if message.caption:
@@ -905,7 +876,7 @@ def handle_receipt(message):
             ''', (user_id,)).fetchone()
             
             if existing:
-                bot.reply_to(message, "⏳ شما یک فیش در انتظار بررسی دارید. لطفاً صبر کنید.")
+                safe_send_message(message.chat.id, "شما يک فيش در انتظار بررسي داريد. لطفاً صبر کنيد.")
                 return
     except:
         pass
@@ -926,13 +897,13 @@ def handle_receipt(message):
         ''', (user_id, amount, plan_type, receipt_path, datetime.now().isoformat(), payment_code))
         conn.commit()
     
-    bot.reply_to(
-        message,
-        f"✅ فیش شما دریافت شد!\n\n"
+    safe_send_message(
+        message.chat.id,
+        f"✅ فيش شما دريافت شد!\n\n"
         f"💰 مبلغ: {amount:,} تومان\n"
         f"📋 نوع اشتراک: {plan_type}\n"
-        f"🆔 کد پیگیری: {payment_code}\n\n"
-        f"⏳ پس از بررسی توسط ادمین، اشتراک شما فعال می‌شود."
+        f"🆔 کد پيگيري: {payment_code}\n\n"
+        f"پس از بررسي توسط ادمين، اشتراک شما فعال مي شود."
     )
     
     for admin_id in ADMIN_IDS:
@@ -940,19 +911,13 @@ def handle_receipt(message):
             bot.send_photo(
                 admin_id,
                 photo=open(receipt_path, 'rb'),
-                caption=f"📸 **فیش جدید**\n"
-                       f"👤 کاربر: {user_id}\n"
-                       f"💰 مبلغ: {amount:,} تومان\n"
-                       f"📋 نوع: {plan_type}\n"
-                       f"🆔 کد: {payment_code}\n"
-                       f"👤 نام: {message.from_user.first_name}",
-                parse_mode="Markdown"
+                caption=f"فيش جديد\n\n👤 کاربر: {user_id}\n💰 مبلغ: {amount:,} تومان\n📋 نوع: {plan_type}\n🆔 کد: {payment_code}\n👤 نام: {message.from_user.first_name}"
             )
         except Exception as e:
-            logger.error(f"خطا در ارسال فیش به ادمین: {e}")
+            logger.error(f"خطا در ارسال فيش به ادمين: {e}")
 
 # ==================== ساخت ربات جدید ====================
-@bot.message_handler(func=lambda m: m.text == '🤖 ساخت ربات جدید')
+@bot.message_handler(func=lambda m: m.text == '🤖 ساخت ربات جديد')
 def new_bot(message):
     user_id = message.from_user.id
     
@@ -960,33 +925,33 @@ def new_bot(message):
     
     if not can_create:
         text = (
-            f"❌ **شما دسترسی به ساخت ربات ندارید!**\n\n"
-            f"برای ساخت ربات می‌توانید:\n\n"
-            f"1️⃣ **فعال‌سازی تست ۲۴ ساعته (رایگان)**\n"
-            f"   • فقط یک بار قابل استفاده\n"
-            f"   • از قسمت «اشتراک و تست ۲۴ ساعته» فعال کنید\n\n"
-            f"2️⃣ **خرید اشتراک**\n"
-            f"   • ماهانه: {PRICE_PER_MONTH:,} تومان\n"
-            f"   • سه ماهه: {PRICE_3_MONTHS:,} تومان\n\n"
-            f"💳 شماره کارت: `{CARD_NUMBER}`\n"
+            f"❌ شما دسترسي به ساخت ربات نداريد!\n\n"
+            f"برای ساخت ربات مي توانيد:\n\n"
+            f"1️⃣ فعال سازي تست 24 ساعته (رايجان)\n"
+            f"   - فقط يک بار قابل استفاده\n"
+            f"   - از قسمت «اشتراک و تست 24 ساعته» فعال کنيد\n\n"
+            f"2️⃣ خريد اشتراک\n"
+            f"   - ماهانه: {PRICE_PER_MONTH:,} تومان\n"
+            f"   - سه ماهه: {PRICE_3_MONTHS:,} تومان\n\n"
+            f"💳 شماره کارت: {CARD_NUMBER}\n"
             f"🏦 به نام: {CARD_HOLDER}"
         )
-        bot.send_message(message.chat.id, text, parse_mode="Markdown")
+        safe_send_message(message.chat.id, text)
         return
     
     text = (
-        f"🤖 **ساخت ربات جدید**\n\n"
-        f"کاربر گرامی، از اینکه ما را انتخاب کردید متشکرم!\n\n"
-        f"📤 **مراحل ساخت ربات:**\n"
-        f"1️⃣ فایل `.py` یا `.zip` خود را ارسال کنید\n"
-        f"2️⃣ توکن ربات باید داخل کد باشد\n"
-        f"3️⃣ حداکثر حجم: ۵۰ مگابایت\n"
-        f"4️⃣ در صورت وجود چند فایل، آنها را zip کنید\n\n"
-        f"✅ **نوع دسترسی:** {reason}\n"
-        f"🔒 کد شما از نظر امنیت بررسی می‌شود"
+        f"🤖 ساخت ربات جديد\n\n"
+        f"کاربر گرامي، از اینکه ما را انتخاب کرديد متشکرم!\n\n"
+        f"مراحل ساخت ربات:\n"
+        f"1️⃣ فايل .py يا .zip خود را ارسال کنيد\n"
+        f"2️⃣ توکن ربات بايد داخل کد باشد\n"
+        f"3️⃣ حداکثر حجم: 50 مگابايت\n"
+        f"4️⃣ در صورت وجود چند فايل، آنها را zip کنيد\n\n"
+        f"✅ نوع دسترسي: {reason}\n"
+        f"🔒 کد شما از نظر امنيت بررسي مي شود"
     )
     
-    bot.send_message(message.chat.id, text, parse_mode="Markdown")
+    safe_send_message(message.chat.id, text)
 
 # ==================== آپلود و اجرای ربات ====================
 @bot.message_handler(content_types=['document'])
@@ -995,20 +960,20 @@ def handle_build_file(message):
     
     can_create, reason = SubscriptionManager.can_create_bot(user_id)
     if not can_create:
-        bot.reply_to(message, "❌ ابتدا اشتراک خود را فعال کنید یا تست ۲۴ ساعته را فعال نمایید!")
+        safe_send_message(message.chat.id, "ابتدا اشتراک خود را فعال کنيد يا تست 24 ساعته را فعال نماييد")
         return
     
     file_name = message.document.file_name
     
     if not (file_name.endswith('.py') or file_name.endswith('.zip')):
-        bot.reply_to(message, "❌ فقط فایل‌های `.py` یا `.zip` مجاز هستند!")
+        safe_send_message(message.chat.id, "فقط فايل هاي .py يا .zip مجاز هستند")
         return
     
     if message.document.file_size > 50 * 1024 * 1024:
-        bot.reply_to(message, "❌ حجم فایل نباید بیشتر از ۵۰ مگابایت باشد!")
+        safe_send_message(message.chat.id, "حجم فايل نبايد بيشتر از 50 مگابايت باشد")
         return
     
-    status_msg = bot.reply_to(message, "🔄 در حال پردازش فایل...")
+    status_msg = safe_send_message(message.chat.id, "در حال پردازش فايل...")
     
     try:
         file_info = bot.get_file(message.document.file_id)
@@ -1016,7 +981,7 @@ def handle_build_file(message):
         
         file_path = save_uploaded_file(user_id, downloaded_file, file_name)
         if not file_path:
-            bot.edit_message_text("❌ خطا در ذخیره فایل", message.chat.id, status_msg.message_id)
+            safe_edit_message("خطا در ذخيره فايل", message.chat.id, status_msg.message_id)
             return
         
         main_code = ""
@@ -1040,99 +1005,91 @@ def handle_build_file(message):
                 main_code = f.read()
         
         if not main_code:
-            bot.edit_message_text("❌ هیچ فایل پایتونی پیدا نشد!", message.chat.id, status_msg.message_id)
+            safe_edit_message("هيچ فايل پايتوني پيدا نشد", message.chat.id, status_msg.message_id)
             return
         
-        # بررسی امنیت
         is_safe, errors = SecurityManager.validate_code(main_code)
         if not is_safe:
-            bot.edit_message_text(
-                f"❌ **کد شما از نظر امنیتی مشکل دارد!**\n\n⚠️ خطاها:\n" + "\n".join(errors),
-                message.chat.id,
-                status_msg.message_id,
-                parse_mode="Markdown"
-            )
+            safe_edit_message(f"کد شما از نظر امنيتي مشکل دارد!\n\nخطاها:\n" + "\n".join(errors), message.chat.id, status_msg.message_id)
             return
         
         token = extract_token_from_code(main_code)
         if not token:
-            bot.edit_message_text("❌ توکن در کد پیدا نشد!", message.chat.id, status_msg.message_id)
+            safe_edit_message("توکن در کد پيدا نشد", message.chat.id, status_msg.message_id)
             return
         
-        # بررسی توکن
         try:
             response = requests.get(f"https://api.telegram.org/bot{token}/getMe", timeout=10)
             if response.status_code != 200:
-                bot.edit_message_text("❌ توکن معتبر نیست!", message.chat.id, status_msg.message_id)
+                safe_edit_message("توکن معتبر نيست", message.chat.id, status_msg.message_id)
                 return
             bot_info = response.json()['result']
             bot_name = bot_info['first_name']
             bot_username = bot_info['username']
         except Exception as e:
-            bot.edit_message_text(f"❌ خطا در بررسی توکن: {str(e)}", message.chat.id, status_msg.message_id)
+            safe_edit_message(f"خطا در بررسي توکن: {str(e)}", message.chat.id, status_msg.message_id)
             return
         
-        bot.edit_message_text("⚡ در حال اجرای ربات...", message.chat.id, status_msg.message_id)
+        safe_edit_message("در حال اجراي ربات...", message.chat.id, status_msg.message_id)
         
-        # اجرا
         bot_id = hashlib.md5(f"{user_id}{token}{time.time()}".encode()).hexdigest()[:10]
         result = BotRunner.run_bot(bot_id, main_code, token)
         
         if result['success']:
             add_bot_to_db(user_id, bot_id, token, bot_name, bot_username, file_path, result.get('pid'))
             
-            reply = f"✅ **ربات با موفقیت ساخته شد!** 🎉\n\n"
+            reply = f"✅ ربات با موفقيت ساخته شد! 🎉\n\n"
             reply += f"🤖 نام: {bot_name}\n"
-            reply += f"🔗 لینک: https://t.me/{bot_username}\n"
-            reply += f"🆔 آیدی: `{bot_id}`\n"
-            reply += f"🔄 وضعیت: در حال اجرا\n\n"
+            reply += f"🔗 لينک: https://t.me/{bot_username}\n"
+            reply += f"🆔 آيدي: {bot_id}\n"
+            reply += f"وضعيت: در حال اجرا\n\n"
             
             if reason == 'trial':
                 with get_db() as conn:
                     conn.execute('UPDATE trial_usage SET bot_id = ? WHERE user_id = ?', (bot_id, user_id))
                     conn.commit()
-                reply += f"⏰ **تست ۲۴ ساعته فعال است**\n"
-                reply += f"⏳ بعد از {TRIAL_HOURS} ساعت ربات متوقف می‌شود\n"
-                reply += f"💡 برای ادامه، اشتراک تهیه کنید"
+                reply += f"تست 24 ساعته فعال است\n"
+                reply += f"بعد از {TRIAL_HOURS} ساعت ربات متوقف مي شود\n"
+                reply += f"براي ادامه، اشتراک تهيه کنيد"
             
-            bot.edit_message_text(reply, message.chat.id, status_msg.message_id, parse_mode="Markdown")
+            safe_edit_message(reply, message.chat.id, status_msg.message_id)
         else:
-            bot.edit_message_text(f"❌ خطا در اجرا:\n{result.get('error', 'خطای ناشناخته')}", message.chat.id, status_msg.message_id)
+            safe_edit_message(f"خطا در اجرا:\n{result.get('error', 'خطاي ناشناخته')}", message.chat.id, status_msg.message_id)
         
     except Exception as e:
         logger.error(f"Error: {e}")
-        bot.edit_message_text(f"❌ خطا: {str(e)}", message.chat.id, status_msg.message_id)
+        safe_edit_message(f"خطا: {str(e)}", message.chat.id, status_msg.message_id)
 
 # ==================== ربات‌های من ====================
-@bot.message_handler(func=lambda m: m.text == '📋 ربات‌های من')
+@bot.message_handler(func=lambda m: m.text == '📋 ربات هاي من')
 def my_bots(message):
     user_id = message.from_user.id
     bots = get_user_bots(user_id)
     
     if not bots:
-        bot.send_message(message.chat.id, "📋 شما رباتی ندارید!\nبرای ساخت ربات از گزینه «ساخت ربات جدید» استفاده کنید")
+        safe_send_message(message.chat.id, "شما رباتي نداريد\nبراي ساخت ربات از گزينه ساخت ربات جديد استفاده کنيد")
         return
     
     for b in bots[:10]:
         status_emoji = "🟢" if b['status'] == 'running' else "🔴"
         status_text = "در حال اجرا" if b['status'] == 'running' else "متوقف"
         
-        text = f"{status_emoji} **{b['name']}**\n"
+        text = f"{status_emoji} {b['name']}\n"
         text += f"🔗 https://t.me/{b['username']}\n"
-        text += f"🆔 `{b['id']}`\n"
-        text += f"📊 وضعیت: {status_text}\n"
-        text += f"📅 {b['created_at'][:10]}"
+        text += f"🆔 {b['id']}\n"
+        text += f"وضعيت: {status_text}\n"
+        text += f"تارخ: {b['created_at'][:10]}"
         
-        bot.send_message(message.chat.id, text, parse_mode="Markdown")
+        safe_send_message(message.chat.id, text)
 
 # ==================== فعال/غیرفعال کردن ====================
-@bot.message_handler(func=lambda m: m.text == '🔄 فعال/غیرفعال کردن')
+@bot.message_handler(func=lambda m: m.text == '🔄 فعال/غيرفعال کردن')
 def toggle_prompt(message):
     user_id = message.from_user.id
     bots = get_user_bots(user_id)
     
     if not bots:
-        bot.send_message(message.chat.id, "📋 شما رباتی ندارید!")
+        safe_send_message(message.chat.id, "شما رباتي نداريد")
         return
     
     markup = types.InlineKeyboardMarkup(row_width=1)
@@ -1140,7 +1097,7 @@ def toggle_prompt(message):
         status = "🟢" if b['status'] == 'running' else "🔴"
         markup.add(types.InlineKeyboardButton(f"{status} {b['name']}", callback_data=f"toggle_{b['id']}"))
     
-    bot.send_message(message.chat.id, "🔄 ربات مورد نظر را انتخاب کنید:", reply_markup=markup)
+    safe_send_message(message.chat.id, "ربات مورد نظر را انتخاب کنيد", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('toggle_'))
 def toggle_bot(call):
@@ -1150,16 +1107,16 @@ def toggle_bot(call):
     with get_db() as conn:
         bot_info = conn.execute('SELECT * FROM bots WHERE id = ? AND user_id = ?', (bot_id, user_id)).fetchone()
         if not bot_info:
-            bot.answer_callback_query(call.id, "❌ ربات پیدا نشد!")
+            bot.answer_callback_query(call.id, "ربات پيدا نشد")
             return
         
         if bot_info['status'] == 'running':
             BotRunner.stop_bot(bot_id)
             update_bot_status(bot_id, 'stopped')
-            bot.answer_callback_query(call.id, "✅ ربات متوقف شد")
-            bot.edit_message_text(f"✅ ربات {bot_info['name']} متوقف شد.", call.message.chat.id, call.message.message_id)
+            bot.answer_callback_query(call.id, "ربات متوقف شد")
+            safe_edit_message(f"ربات {bot_info['name']} متوقف شد", call.message.chat.id, call.message.message_id)
         else:
-            bot.answer_callback_query(call.id, "❌ ربات در حال حاضر متوقف است")
+            bot.answer_callback_query(call.id, "ربات در حال حاضر متوقف است")
 
 # ==================== حذف ربات ====================
 @bot.message_handler(func=lambda m: m.text == '🗑 حذف ربات')
@@ -1168,24 +1125,24 @@ def delete_prompt(message):
     bots = get_user_bots(user_id)
     
     if not bots:
-        bot.send_message(message.chat.id, "📋 شما رباتی ندارید!")
+        safe_send_message(message.chat.id, "شما رباتي نداريد")
         return
     
     markup = types.InlineKeyboardMarkup(row_width=1)
     for b in bots:
         markup.add(types.InlineKeyboardButton(f"🗑 {b['name']}", callback_data=f"delete_{b['id']}"))
     
-    bot.send_message(message.chat.id, "⚠️ ربات مورد نظر را انتخاب کنید:", reply_markup=markup)
+    safe_send_message(message.chat.id, "ربات مورد نظر را انتخاب کنيد", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('delete_'))
 def confirm_delete(call):
     bot_id = call.data.replace('delete_', '')
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("✅ بله", callback_data=f"confirm_del_{bot_id}"),
-        types.InlineKeyboardButton("❌ خیر", callback_data="cancel_del")
+        types.InlineKeyboardButton("بله", callback_data=f"confirm_del_{bot_id}"),
+        types.InlineKeyboardButton("خير", callback_data="cancel_del")
     )
-    bot.edit_message_text("⚠️ آیا از حذف این ربات اطمینان دارید؟", call.message.chat.id, call.message.message_id, reply_markup=markup)
+    safe_edit_message("آيا از حذف اين ربات اطمينان داريد؟", call.message.chat.id, call.message.message_id, reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('confirm_del_'))
 def do_delete(call):
@@ -1193,18 +1150,18 @@ def do_delete(call):
     user_id = call.from_user.id
     
     if delete_bot_from_db(bot_id, user_id):
-        bot.edit_message_text("✅ ربات با موفقیت حذف شد.", call.message.chat.id, call.message.message_id)
+        safe_edit_message("ربات با موفقيت حذف شد", call.message.chat.id, call.message.message_id)
     else:
-        bot.edit_message_text("❌ خطا در حذف ربات!", call.message.chat.id, call.message.message_id)
+        safe_edit_message("خطا در حذف ربات", call.message.chat.id, call.message.message_id)
 
 @bot.callback_query_handler(func=lambda call: call.data == 'cancel_del')
 def cancel_delete(call):
-    bot.edit_message_text("❌ عملیات حذف لغو شد.", call.message.chat.id, call.message.message_id)
+    safe_edit_message("عمليات حذف لغو شد", call.message.chat.id, call.message.message_id)
 
 # ==================== راهنما ====================
 @bot.message_handler(func=lambda m: m.text == '📚 راهنما')
 def guide(message):
-    bot.send_message(message.chat.id, GUIDE_TEXT, parse_mode="Markdown")
+    safe_send_message(message.chat.id, GUIDE_TEXT)
 
 # ==================== نصب کتابخانه ====================
 @bot.message_handler(func=lambda m: m.text == '📦 نصب کتابخانه')
@@ -1213,19 +1170,19 @@ def install_library_menu(message):
     libs = [
         ('requests', 'requests'), ('numpy', 'numpy'), ('pandas', 'pandas'),
         ('flask', 'flask'), ('pyTelegramBotAPI', 'pyTelegramBotAPI'),
-        ('aiogram', 'aiogram'), ('jdatetime', 'jdatetime'), ('🔧 دستی', 'custom')
+        ('aiogram', 'aiogram'), ('jdatetime', 'jdatetime'), ('دستي', 'custom')
     ]
     for name, data in libs:
         markup.add(types.InlineKeyboardButton(name, callback_data=f"lib_{data}"))
     
-    bot.send_message(message.chat.id, "📦 کتابخانه مورد نظر را انتخاب کنید:", reply_markup=markup)
+    safe_send_message(message.chat.id, "کتابخانه مورد نظر را انتخاب کنيد", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('lib_'))
 def install_library_callback(call):
     lib = call.data.replace('lib_', '')
     
     if lib == 'custom':
-        msg = bot.send_message(call.message.chat.id, "📦 نام کتابخانه را وارد کنید:")
+        msg = safe_send_message(call.message.chat.id, "نام کتابخانه را وارد کنيد")
         bot.register_next_step_handler(msg, install_custom_library)
         return
     
@@ -1234,22 +1191,22 @@ def install_library_callback(call):
     try:
         result = subprocess.run([sys.executable, "-m", "pip", "install", lib], capture_output=True, text=True, timeout=60)
         if result.returncode == 0:
-            bot.send_message(call.message.chat.id, f"✅ کتابخانه {lib} با موفقیت نصب شد.")
+            safe_send_message(call.message.chat.id, f"کتابخانه {lib} با موفقيت نصب شد")
         else:
-            bot.send_message(call.message.chat.id, f"❌ خطا در نصب:\n{result.stderr[:200]}")
+            safe_send_message(call.message.chat.id, f"خطا در نصب:\n{result.stderr[:200]}")
     except Exception as e:
-        bot.send_message(call.message.chat.id, f"❌ خطا: {str(e)}")
+        safe_send_message(call.message.chat.id, f"خطا: {str(e)}")
 
 def install_custom_library(message):
     lib = message.text.strip()
     try:
         result = subprocess.run([sys.executable, "-m", "pip", "install", lib], capture_output=True, text=True, timeout=60)
         if result.returncode == 0:
-            bot.send_message(message.chat.id, f"✅ کتابخانه {lib} با موفقیت نصب شد.")
+            safe_send_message(message.chat.id, f"کتابخانه {lib} با موفقيت نصب شد")
         else:
-            bot.send_message(message.chat.id, f"❌ خطا در نصب:\n{result.stderr[:200]}")
+            safe_send_message(message.chat.id, f"خطا در نصب:\n{result.stderr[:200]}")
     except Exception as e:
-        bot.send_message(message.chat.id, f"❌ خطا: {str(e)}")
+        safe_send_message(message.chat.id, f"خطا: {str(e)}")
 
 # ==================== آمار ====================
 @bot.message_handler(func=lambda m: m.text == '📊 آمار')
@@ -1263,86 +1220,86 @@ def stats(message):
             total_withdraw = conn.execute('SELECT SUM(amount) FROM withdraw_requests WHERE status = "pending"').fetchone()[0] or 0
             trial_users = conn.execute('SELECT COUNT(*) FROM trial_usage WHERE is_active = 1').fetchone()[0]
         
-        text = f"📊 **آمار کلی**\n\n"
+        text = f"آمار کلي\n\n"
         text += f"👥 کل کاربران: {total_users}\n"
-        text += f"🤖 کل ربات‌ها: {total_bots}\n"
+        text += f"🤖 کل ربات ها: {total_bots}\n"
         text += f"🟢 فعال: {running_bots}\n"
-        text += f"💰 پرداخت‌ها: {total_payments}\n"
+        text += f"💰 پرداخت ها: {total_payments}\n"
         text += f"🎁 تست فعال: {trial_users}\n"
         text += f"💳 درخواست برداشت: {total_withdraw:,} تومان"
         
-        bot.send_message(message.chat.id, text, parse_mode="Markdown")
+        safe_send_message(message.chat.id, text)
     except Exception as e:
-        bot.send_message(message.chat.id, f"📊 آمار در دسترس نیست\nخطا: {e}")
+        safe_send_message(message.chat.id, f"آمار در دسترس نيست\nخطا: {e}")
 
 # ==================== پشتیبانی ====================
 @bot.message_handler(func=lambda m: m.text == '📞 پشتیبانی')
 def support(message):
-    bot.send_message(message.chat.id, "📞 **پشتیبانی:** @shahraghee13", parse_mode="Markdown")
+    safe_send_message(message.chat.id, "پشتيباني: @shahraghee13")
 
-# ==================== پنل ادمین کامل ====================
+# ==================== پنل ادمین ====================
 @bot.message_handler(func=lambda m: m.text == '👑 پنل ادمین')
 def admin_panel(message):
     if message.from_user.id not in ADMIN_IDS:
-        bot.reply_to(message, "⛔ شما دسترسی ادمین ندارید!")
+        safe_send_message(message.chat.id, "شما دسترسي ادمين نداريد")
         return
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("📸 فیش‌ها", callback_data="admin_receipts"),
-        types.InlineKeyboardButton("👥 کاربران", callback_data="admin_users"),
-        types.InlineKeyboardButton("📊 آمار کامل", callback_data="admin_stats"),
-        types.InlineKeyboardButton("💰 تایید پرداخت مستقیم", callback_data="admin_approve"),
-        types.InlineKeyboardButton("💳 تغییر قیمت", callback_data="admin_change_price"),
-        types.InlineKeyboardButton("🏧 تغییر شماره کارت", callback_data="admin_change_card"),
-        types.InlineKeyboardButton("🖨 تغییر متن راهنما", callback_data="admin_change_guide"),
-        types.InlineKeyboardButton("🗑 حذف ربات کاربران", callback_data="admin_delete_user_bot"),
-        types.InlineKeyboardButton("💰 لیست برداشت‌ها", callback_data="admin_withdraw_list"),
-        types.InlineKeyboardButton("📊 گزارش کمیسیون‌ها", callback_data="admin_commissions"),
-        types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back")
+        types.InlineKeyboardButton("فيش ها", callback_data="admin_receipts"),
+        types.InlineKeyboardButton("کاربران", callback_data="admin_users"),
+        types.InlineKeyboardButton("آمار کامل", callback_data="admin_stats"),
+        types.InlineKeyboardButton("تاييد پرداخت مستقيم", callback_data="admin_approve"),
+        types.InlineKeyboardButton("تغيير قيمت", callback_data="admin_change_price"),
+        types.InlineKeyboardButton("تغيير شماره کارت", callback_data="admin_change_card"),
+        types.InlineKeyboardButton("تغيير متن راهنما", callback_data="admin_change_guide"),
+        types.InlineKeyboardButton("حذف ربات کاربران", callback_data="admin_delete_user_bot"),
+        types.InlineKeyboardButton("ليست برداشت ها", callback_data="admin_withdraw_list"),
+        types.InlineKeyboardButton("گزارش کميسيون ها", callback_data="admin_commissions"),
+        types.InlineKeyboardButton("بازگشت", callback_data="admin_back")
     )
     
-    bot.send_message(message.chat.id, "👑 **پنل مدیریت پیشرفته**", parse_mode="Markdown", reply_markup=markup)
+    safe_send_message(message.chat.id, "پنل مديريت پيشرفته", reply_markup=markup)
 
 # ==================== هندلرهای پنل ادمین ====================
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_receipts")
 def admin_receipts(call):
     if call.from_user.id not in ADMIN_IDS:
-        bot.answer_callback_query(call.id, "⛔ دسترسی ندارید!")
+        bot.answer_callback_query(call.id, "دسترسي نداريد")
         return
     
     with get_db() as conn:
         receipts = conn.execute('SELECT * FROM receipts WHERE status = "pending" ORDER BY created_at DESC').fetchall()
     
     if not receipts:
-        bot.send_message(call.message.chat.id, "📸 هیچ فیش در انتظاری نیست")
+        safe_send_message(call.message.chat.id, "هيچ فيش در انتظاري نيست")
         return
     
     for r in receipts:
-        text = f"📸 **فیش شماره {r['id']}**\n"
+        text = f"فيش شماره {r['id']}\n"
         text += f"👤 کاربر: {r['user_id']}\n"
         text += f"💰 مبلغ: {r['amount']:,} تومان\n"
         text += f"📋 نوع: {r['plan_type']}\n"
-        text += f"🆔 کد: `{r['payment_code']}`\n"
-        text += f"📅 تاریخ: {r['created_at'][:19]}"
+        text += f"🆔 کد: {r['payment_code']}\n"
+        text += f"تارخ: {r['created_at'][:19]}"
         
         markup = types.InlineKeyboardMarkup()
         markup.add(
-            types.InlineKeyboardButton("✅ تایید و فعال‌سازی", callback_data=f"approve_receipt_{r['id']}"),
-            types.InlineKeyboardButton("❌ رد", callback_data=f"reject_receipt_{r['id']}")
+            types.InlineKeyboardButton("تاييد و فعال سازي", callback_data=f"approve_receipt_{r['id']}"),
+            types.InlineKeyboardButton("رد", callback_data=f"reject_receipt_{r['id']}")
         )
         
         if os.path.exists(r['receipt_path']):
             with open(r['receipt_path'], 'rb') as f:
-                bot.send_photo(call.message.chat.id, f, caption=text, reply_markup=markup, parse_mode="Markdown")
+                bot.send_photo(call.message.chat.id, f, caption=text, reply_markup=markup)
         else:
-            bot.send_message(call.message.chat.id, text, reply_markup=markup, parse_mode="Markdown")
+            safe_send_message(call.message.chat.id, text, reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('approve_receipt_'))
 def approve_receipt(call):
     if call.from_user.id not in ADMIN_IDS:
-        bot.answer_callback_query(call.id, "⛔ دسترسی ندارید!")
+        bot.answer_callback_query(call.id, "دسترسي نداريد")
         return
     
     receipt_id = int(call.data.replace('approve_receipt_', ''))
@@ -1350,41 +1307,36 @@ def approve_receipt(call):
     with get_db() as conn:
         receipt = conn.execute('SELECT * FROM receipts WHERE id = ?', (receipt_id,)).fetchone()
         if receipt:
-            # بروزرسانی وضعیت فیش
             conn.execute('''
                 UPDATE receipts SET status = "approved", reviewed_at = ?, reviewed_by = ? 
                 WHERE id = ?
             ''', (datetime.now().isoformat(), call.from_user.id, receipt_id))
             
-            # فعال کردن اشتراک
             SubscriptionManager.activate_subscription(receipt['user_id'], receipt['plan_type'], receipt['amount'])
             
-            # پرداخت کمیسیون به رفرال دهنده
             ReferralManager.process_purchase_commission(receipt['user_id'], receipt['amount'])
             
             conn.commit()
             
-            # ارسال پیام به کاربر
             try:
                 bot.send_message(
                     receipt['user_id'],
-                    f"✅ **اشتراک شما فعال شد!**\n\n"
+                    f"✅ اشتراک شما فعال شد!\n\n"
                     f"💰 مبلغ: {receipt['amount']:,} تومان\n"
                     f"📋 نوع: {receipt['plan_type']}\n"
-                    f"🎉 می‌توانید ربات خود را بسازید.\n\n"
-                    f"🤖 از گزینه «ساخت ربات جدید» استفاده کنید.",
-                    parse_mode="Markdown"
+                    f"🎉 مي توانيد ربات خود را بسازيد.\n\n"
+                    f"🤖 از گزينه ساخت ربات جديد استفاده کنيد."
                 )
             except Exception as e:
-                logger.error(f"خطا در ارسال پیام به کاربر: {e}")
+                logger.error(f"خطا در ارسال پيام به کاربر: {e}")
     
-    bot.answer_callback_query(call.id, "✅ فیش تایید و اشتراک فعال شد!")
+    bot.answer_callback_query(call.id, "فيش تاييد و اشتراک فعال شد")
     bot.delete_message(call.message.chat.id, call.message.message_id)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('reject_receipt_'))
 def reject_receipt(call):
     if call.from_user.id not in ADMIN_IDS:
-        bot.answer_callback_query(call.id, "⛔ دسترسی ندارید!")
+        bot.answer_callback_query(call.id, "دسترسي نداريد")
         return
     
     receipt_id = int(call.data.replace('reject_receipt_', ''))
@@ -1401,26 +1353,26 @@ def reject_receipt(call):
             try:
                 bot.send_message(
                     receipt['user_id'],
-                    f"❌ **فیش شما رد شد**\n\n"
-                    f"دلیل احتمالی:\n"
-                    f"• تصویر نامشخص\n"
-                    f"• مبلغ اشتباه\n"
-                    f"• اطلاعات ناقص\n\n"
-                    f"لطفاً با پشتیبانی تماس بگیرید: @shahraghee13"
+                    f"❌ فيش شما رد شد\n\n"
+                    f"دلايل احتمالي:\n"
+                    f"- تصوير نامشخص\n"
+                    f"- مبلغ اشتباه\n"
+                    f"- اطلاعات ناقص\n\n"
+                    f"لطفاً با پشتيباني تماس بگيريد: @shahraghee13"
                 )
             except:
                 pass
     
-    bot.answer_callback_query(call.id, "❌ فیش رد شد")
+    bot.answer_callback_query(call.id, "فيش رد شد")
     bot.delete_message(call.message.chat.id, call.message.message_id)
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_change_price")
 def admin_change_price(call):
     if call.from_user.id not in ADMIN_IDS:
-        bot.answer_callback_query(call.id, "⛔ دسترسی ندارید!")
+        bot.answer_callback_query(call.id, "دسترسي نداريد")
         return
     
-    msg = bot.send_message(call.message.chat.id, "💰 **تغییر قیمت‌ها**\n\nلطفاً قیمت جدید ماهانه را وارد کنید (تومان):\nمثال: 2500000")
+    msg = safe_send_message(call.message.chat.id, "تغيير قيمت ها\n\nلطفاً قيمت جديد ماهانه را وارد کنيد (تومان):\nمثال: 2500000")
     bot.register_next_step_handler(msg, process_price_change)
 
 def process_price_change(message):
@@ -1432,17 +1384,17 @@ def process_price_change(message):
         new_price = int(message.text.strip())
         PRICE_PER_MONTH = new_price
         PRICE_3_MONTHS = int(new_price * 2.5)
-        bot.reply_to(message, f"✅ قیمت با موفقیت تغییر کرد!\n💰 ماهانه: {PRICE_PER_MONTH:,} تومان\n💰 سه ماهه: {PRICE_3_MONTHS:,} تومان")
+        safe_send_message(message.chat.id, f"قيمت با موفقيت تغيير کرد\nماهانه: {PRICE_PER_MONTH:,} تومان\nسه ماهه: {PRICE_3_MONTHS:,} تومان")
     except:
-        bot.reply_to(message, "❌ عدد معتبر وارد کنید!")
+        safe_send_message(message.chat.id, "عدد معتبر وارد کنيد")
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_change_card")
 def admin_change_card(call):
     if call.from_user.id not in ADMIN_IDS:
-        bot.answer_callback_query(call.id, "⛔ دسترسی ندارید!")
+        bot.answer_callback_query(call.id, "دسترسي نداريد")
         return
     
-    msg = bot.send_message(call.message.chat.id, "🏧 **تغییر شماره کارت**\n\nلطفاً شماره کارت جدید را وارد کنید:\n(۱۶ رقم)")
+    msg = safe_send_message(call.message.chat.id, "تغيير شماره کارت\n\nلطفاً شماره کارت جديد را وارد کنيد\n(16 رقم)")
     bot.register_next_step_handler(msg, process_card_change)
 
 def process_card_change(message):
@@ -1451,15 +1403,15 @@ def process_card_change(message):
         return
     
     CARD_NUMBER = message.text.strip()
-    bot.reply_to(message, f"✅ شماره کارت با موفقیت تغییر کرد!\n🏧 شماره جدید: {CARD_NUMBER}")
+    safe_send_message(message.chat.id, f"شماره کارت با موفقيت تغيير کرد\nشماره جديد: {CARD_NUMBER}")
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_change_guide")
 def admin_change_guide(call):
     if call.from_user.id not in ADMIN_IDS:
-        bot.answer_callback_query(call.id, "⛔ دسترسی ندارید!")
+        bot.answer_callback_query(call.id, "دسترسي نداريد")
         return
     
-    msg = bot.send_message(call.message.chat.id, "📝 **تغییر متن راهنما**\n\nلطفاً متن جدید راهنما را ارسال کنید:")
+    msg = safe_send_message(call.message.chat.id, "تغيير متن راهنما\n\nلطفاً متن جديد راهنما را ارسال کنيد")
     bot.register_next_step_handler(msg, process_guide_change)
 
 def process_guide_change(message):
@@ -1468,12 +1420,12 @@ def process_guide_change(message):
         return
     
     GUIDE_TEXT = message.text
-    bot.reply_to(message, "✅ متن راهنما با موفقیت تغییر کرد!")
+    safe_send_message(message.chat.id, "متن راهنما با موفقيت تغيير کرد")
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_delete_user_bot")
 def admin_delete_user_bot(call):
     if call.from_user.id not in ADMIN_IDS:
-        bot.answer_callback_query(call.id, "⛔ دسترسی ندارید!")
+        bot.answer_callback_query(call.id, "دسترسي نداريد")
         return
     
     with get_db() as conn:
@@ -1483,19 +1435,19 @@ def admin_delete_user_bot(call):
         ''').fetchall()
     
     if not bots:
-        bot.send_message(call.message.chat.id, "📋 هیچ رباتی وجود ندارد")
+        safe_send_message(call.message.chat.id, "هيچ رباتي وجود ندارد")
         return
     
     markup = types.InlineKeyboardMarkup(row_width=1)
     for b in bots:
         markup.add(types.InlineKeyboardButton(f"🗑 {b['name']} (کاربر: {b['first_name']})", callback_data=f"admin_del_bot_{b['id']}"))
     
-    bot.send_message(call.message.chat.id, "🗑 ربات مورد نظر برای حذف را انتخاب کنید:", reply_markup=markup)
+    safe_send_message(call.message.chat.id, "ربات مورد نظر برای حذف را انتخاب کنيد", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('admin_del_bot_'))
 def admin_confirm_delete_bot(call):
     if call.from_user.id not in ADMIN_IDS:
-        bot.answer_callback_query(call.id, "⛔ دسترسی ندارید!")
+        bot.answer_callback_query(call.id, "دسترسي نداريد")
         return
     
     bot_id = call.data.replace('admin_del_bot_', '')
@@ -1505,18 +1457,18 @@ def admin_confirm_delete_bot(call):
         if bot_info:
             markup = types.InlineKeyboardMarkup()
             markup.add(
-                types.InlineKeyboardButton("✅ بله", callback_data=f"admin_confirm_del_{bot_id}"),
-                types.InlineKeyboardButton("❌ خیر", callback_data="admin_cancel_del")
+                types.InlineKeyboardButton("بله", callback_data=f"admin_confirm_del_{bot_id}"),
+                types.InlineKeyboardButton("خير", callback_data="admin_cancel_del")
             )
-            bot.edit_message_text(
-                f"⚠️ آیا از حذف ربات **{bot_info['name']}** (کاربر: {bot_info['user_id']}) اطمینان دارید؟",
-                call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown"
+            safe_edit_message(
+                f"آيا از حذف ربات {bot_info['name']} (کاربر: {bot_info['user_id']}) اطمينان داريد؟",
+                call.message.chat.id, call.message.message_id, reply_markup=markup
             )
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('admin_confirm_del_'))
 def admin_do_delete_bot(call):
     if call.from_user.id not in ADMIN_IDS:
-        bot.answer_callback_query(call.id, "⛔ دسترسی ندارید!")
+        bot.answer_callback_query(call.id, "دسترسي نداريد")
         return
     
     bot_id = call.data.replace('admin_confirm_del_', '')
@@ -1529,63 +1481,63 @@ def admin_do_delete_bot(call):
             conn.execute('UPDATE users SET bots_count = bots_count - 1 WHERE user_id = ?', (bot_info['user_id'],))
             conn.commit()
     
-    bot.edit_message_text("✅ ربات با موفقیت حذف شد.", call.message.chat.id, call.message.message_id)
+    safe_edit_message("ربات با موفقيت حذف شد", call.message.chat.id, call.message.message_id)
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_withdraw_list")
 def admin_withdraw_list(call):
     if call.from_user.id not in ADMIN_IDS:
-        bot.answer_callback_query(call.id, "⛔ دسترسی ندارید!")
+        bot.answer_callback_query(call.id, "دسترسي نداريد")
         return
     
     withdraws = WithdrawManager.get_withdraw_requests('pending')
     
     if not withdraws:
-        bot.send_message(call.message.chat.id, "💰 هیچ درخواست برداشتی وجود ندارد")
+        safe_send_message(call.message.chat.id, "هيچ درخواست برداشتي وجود ندارد")
         return
     
     for w in withdraws:
-        text = f"💰 **درخواست برداشت #{w['id']}**\n"
+        text = f"درخواست برداشت #{w['id']}\n"
         text += f"👤 کاربر: {w['user_id']}\n"
         text += f"💰 مبلغ: {w['amount']:,} تومان\n"
-        text += f"💳 کارت: `{w['card_number']}`\n"
-        text += f"📅 تاریخ: {w['created_at'][:19]}"
+        text += f"💳 کارت: {w['card_number']}\n"
+        text += f"تارخ: {w['created_at'][:19]}"
         
         markup = types.InlineKeyboardMarkup()
         markup.add(
-            types.InlineKeyboardButton("✅ تایید واریز", callback_data=f"withdraw_approve_{w['id']}"),
-            types.InlineKeyboardButton("❌ رد", callback_data=f"withdraw_reject_{w['id']}")
+            types.InlineKeyboardButton("تاييد واريز", callback_data=f"withdraw_approve_{w['id']}"),
+            types.InlineKeyboardButton("رد", callback_data=f"withdraw_reject_{w['id']}")
         )
         
-        bot.send_message(call.message.chat.id, text, reply_markup=markup, parse_mode="Markdown")
+        safe_send_message(call.message.chat.id, text, reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('withdraw_approve_'))
 def withdraw_approve(call):
     if call.from_user.id not in ADMIN_IDS:
-        bot.answer_callback_query(call.id, "⛔ دسترسی ندارید!")
+        bot.answer_callback_query(call.id, "دسترسي نداريد")
         return
     
     withdraw_id = int(call.data.replace('withdraw_approve_', ''))
     success, msg = WithdrawManager.process_withdraw(withdraw_id, 'approve')
     
-    bot.answer_callback_query(call.id, "✅ تایید شد" if success else msg)
+    bot.answer_callback_query(call.id, "تاييد شد" if success else msg)
     bot.delete_message(call.message.chat.id, call.message.message_id)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('withdraw_reject_'))
 def withdraw_reject(call):
     if call.from_user.id not in ADMIN_IDS:
-        bot.answer_callback_query(call.id, "⛔ دسترسی ندارید!")
+        bot.answer_callback_query(call.id, "دسترسي نداريد")
         return
     
     withdraw_id = int(call.data.replace('withdraw_reject_', ''))
     success, msg = WithdrawManager.process_withdraw(withdraw_id, 'reject')
     
-    bot.answer_callback_query(call.id, "❌ رد شد" if success else msg)
+    bot.answer_callback_query(call.id, "رد شد" if success else msg)
     bot.delete_message(call.message.chat.id, call.message.message_id)
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_stats")
 def admin_stats(call):
     if call.from_user.id not in ADMIN_IDS:
-        bot.answer_callback_query(call.id, "⛔ دسترسی ندارید!")
+        bot.answer_callback_query(call.id, "دسترسي نداريد")
         return
     
     with get_db() as conn:
@@ -1602,26 +1554,26 @@ def admin_stats(call):
         trial_active = conn.execute('SELECT COUNT(*) FROM trial_usage WHERE is_active = 1').fetchone()[0]
         total_commissions = conn.execute('SELECT SUM(amount) FROM commissions').fetchone()[0] or 0
     
-    text = f"📊 **آمار کامل سیستم**\n\n"
+    text = f"آمار کامل سيستم\n\n"
     text += f"👥 کل کاربران: {total_users}\n"
-    text += f"✅ پرداخت کرده: {paid_users}\n"
+    text += f"پرداخت کرده: {paid_users}\n"
     text += f"🎁 تست فعال: {trial_active}\n"
-    text += f"🤖 کل ربات‌ها: {total_bots}\n"
+    text += f"🤖 کل ربات ها: {total_bots}\n"
     text += f"🟢 فعال: {running_bots}\n"
-    text += f"📸 کل فیش‌ها: {total_receipts}\n"
-    text += f"⏳ در انتظار: {pending}\n"
-    text += f"✅ تایید شده: {approved}\n"
-    text += f"💰 مجموع واریزی: {total_amount:,} تومان\n"
+    text += f"فيش ها: {total_receipts}\n"
+    text += f"در انتظار: {pending}\n"
+    text += f"تاييد شده: {approved}\n"
+    text += f"💰 مجموع واريزي: {total_amount:,} تومان\n"
     text += f"💳 درخواست برداشت: {total_withdraw_pending:,} تومان\n"
-    text += f"🏦 موجودی کاربران: {total_balance:,} تومان\n"
-    text += f"🎁 کل کمیسیون‌ها: {total_commissions:,} تومان"
+    text += f"🏦 موجودي کاربران: {total_balance:,} تومان\n"
+    text += f"🎁 کل کميسيون ها: {total_commissions:,} تومان"
     
-    bot.send_message(call.message.chat.id, text, parse_mode="Markdown")
+    safe_send_message(call.message.chat.id, text)
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_users")
 def admin_users(call):
     if call.from_user.id not in ADMIN_IDS:
-        bot.answer_callback_query(call.id, "⛔ دسترسی ندارید!")
+        bot.answer_callback_query(call.id, "دسترسي نداريد")
         return
     
     with get_db() as conn:
@@ -1631,18 +1583,18 @@ def admin_users(call):
             FROM users ORDER BY created_at DESC LIMIT 20
         ''').fetchall()
     
-    text = "👥 **۲۰ کاربر آخر:**\n\n"
+    text = "20 کاربر آخر:\n\n"
     for u in users:
-        payment = "✅" if u['payment_status'] == 'approved' else "⏳"
-        text += f"{payment} `{u['user_id']}` - {u['first_name']}\n"
-        text += f"   🤖 {u['bots_count']} ربات | 🎁 {u['verified_referrals']} رفرال | 💰 {u['balance']:,} تومان\n\n"
+        payment = "پرداخت شده" if u['payment_status'] == 'approved' else "در انتظار"
+        text += f"{payment} - {u['user_id']} - {u['first_name']}\n"
+        text += f"   ربات: {u['bots_count']} - رفرال: {u['verified_referrals']} - موجودي: {u['balance']:,} تومان\n\n"
     
-    bot.send_message(call.message.chat.id, text, parse_mode="Markdown")
+    safe_send_message(call.message.chat.id, text)
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_commissions")
 def admin_commissions(call):
     if call.from_user.id not in ADMIN_IDS:
-        bot.answer_callback_query(call.id, "⛔ دسترسی ندارید!")
+        bot.answer_callback_query(call.id, "دسترسي نداريد")
         return
     
     with get_db() as conn:
@@ -1654,24 +1606,24 @@ def admin_commissions(call):
         ''').fetchall()
     
     if not commissions:
-        bot.send_message(call.message.chat.id, "📊 هیچ کمیسیونی ثبت نشده است")
+        safe_send_message(call.message.chat.id, "هيچ کميسيوني ثبت نشده است")
         return
     
-    text = "💰 **۳۰ کمیسیون آخر:**\n\n"
+    text = "30 کميسيون آخر:\n\n"
     for c in commissions:
-        text += f"👤 {c['user_name']} (`{c['user_id']}`)\n"
+        text += f"👤 {c['user_name']} ({c['user_id']})\n"
         text += f"💰 {c['amount']:,} تومان - {c['reason']}\n"
-        text += f"📅 {c['created_at'][:10]}\n\n"
+        text += f"تارخ: {c['created_at'][:10]}\n\n"
     
-    bot.send_message(call.message.chat.id, text, parse_mode="Markdown")
+    safe_send_message(call.message.chat.id, text)
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_approve")
 def admin_approve_prompt(call):
     if call.from_user.id not in ADMIN_IDS:
-        bot.answer_callback_query(call.id, "⛔ دسترسی ندارید!")
+        bot.answer_callback_query(call.id, "دسترسي نداريد")
         return
     
-    msg = bot.send_message(call.message.chat.id, "💰 **تایید دستی پرداخت**\n\nلطفاً آیدی کاربر را وارد کنید:")
+    msg = safe_send_message(call.message.chat.id, "تاييد دستي پرداخت\n\nلطفاً آيدي کاربر را وارد کنيد")
     bot.register_next_step_handler(msg, process_admin_approve)
 
 def process_admin_approve(message):
@@ -1685,13 +1637,13 @@ def process_admin_approve(message):
                         (datetime.now().isoformat(), user_id))
             conn.commit()
         
-        bot.reply_to(message, f"✅ پرداخت کاربر {user_id} تایید شد")
+        safe_send_message(message.chat.id, f"پرداخت کاربر {user_id} تاييد شد")
         try:
-            bot.send_message(user_id, f"✅ پرداخت شما تایید شد!\nاکنون می‌توانید ربات بسازید.")
+            safe_send_message(user_id, f"پرداخت شما تاييد شد\nاکنون مي توانيد ربات بسازيد")
         except:
             pass
     except:
-        bot.reply_to(message, "❌ آیدی باید عدد باشد")
+        safe_send_message(message.chat.id, "آيدي بايد عدد باشد")
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_back")
 def admin_back(call):
@@ -1700,13 +1652,13 @@ def admin_back(call):
     markup = get_main_menu(is_admin)
     
     bot.delete_message(call.message.chat.id, call.message.message_id)
-    bot.send_message(call.message.chat.id, "🚀 منوی اصلی:", reply_markup=markup)
+    safe_send_message(call.message.chat.id, "منوي اصلي", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_cancel_del")
 def admin_cancel_del(call):
     bot.delete_message(call.message.chat.id, call.message.message_id)
 
-# ==================== مانیتورینگ تست‌های ۲۴ ساعته ====================
+# ==================== مانیتورینگ تست های 24 ساعته ====================
 def monitor_trials():
     while True:
         try:
@@ -1717,24 +1669,23 @@ def monitor_trials():
                         if trial['bot_id']:
                             BotRunner.stop_bot(trial['bot_id'])
                             update_bot_status(trial['bot_id'], 'stopped')
-                            logger.info(f"تست ۲۴ ساعته کاربر {trial['user_id']} به پایان رسید - ربات {trial['bot_id']} متوقف شد")
+                            logger.info(f"تست 24 ساعته کاربر {trial['user_id']} به پايان رسيد - ربات {trial['bot_id']} متوقف شد")
                             
                             try:
                                 bot.send_message(
                                     trial['user_id'],
-                                    f"⏰ **تست ۲۴ ساعته شما به پایان رسید!**\n\n"
-                                    f"🤖 ربات شما متوقف شد.\n"
-                                    f"💡 برای ادامه استفاده، اشتراک تهیه کنید:\n"
-                                    f"• ماهانه: {PRICE_PER_MONTH:,} تومان\n"
-                                    f"• سه ماهه: {PRICE_3_MONTHS:,} تومان",
-                                    parse_mode="Markdown"
+                                    f"تست 24 ساعته شما به پايان رسيد\n\n"
+                                    f"ربات شما متوقف شد.\n"
+                                    f"براي ادامه استفاده، اشتراک تهيه کنيد:\n"
+                                    f"- ماهانه: {PRICE_PER_MONTH:,} تومان\n"
+                                    f"- سه ماهه: {PRICE_3_MONTHS:,} تومان"
                                 )
                             except:
                                 pass
             
-            time.sleep(1800)  # هر 30 دقیقه چک کن
+            time.sleep(1800)
         except Exception as e:
-            logger.error(f"خطا در مانیتورینگ تست‌ها: {e}")
+            logger.error(f"خطا در مانيتورينگ تست ها: {e}")
             time.sleep(60)
 
 # شروع ترد مانیتورینگ
@@ -1744,14 +1695,14 @@ monitor_thread.start()
 # ==================== اجرا ====================
 if __name__ == "__main__":
     print("=" * 70)
-    print("🚀 ربات مادر نهایی - نسخه 10.0 نهایی")
+    print("ربات مادر نهايي - نسخه 11.0 نهايي با رفع خطاها")
     print("=" * 70)
-    print(f"✅ ادمین: {ADMIN_IDS}")
-    print(f"✅ قیمت ماهانه: {PRICE_PER_MONTH:,} تومان")
-    print(f"✅ قیمت سه ماهه: {PRICE_3_MONTHS:,} تومان")
-    print(f"✅ حداقل برداشت: {MIN_WITHDRAW_AMOUNT:,} تومان")
-    print(f"✅ پورسانت رفرال: {REFERRAL_COMMISSION_PERCENT}%")
-    print(f"✅ تست ۲۴ ساعته: فعال")
+    print(f"ادمين: {ADMIN_IDS}")
+    print(f"قيمت ماهانه: {PRICE_PER_MONTH:,} تومان")
+    print(f"قيمت سه ماهه: {PRICE_3_MONTHS:,} تومان")
+    print(f"حداقل برداشت: {MIN_WITHDRAW_AMOUNT:,} تومان")
+    print(f"پورسانت رفرال: {REFERRAL_COMMISSION_PERCENT}%")
+    print(f"تست 24 ساعته: فعال")
     print("=" * 70)
     print("ربات در حال اجراست...")
     
