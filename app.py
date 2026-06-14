@@ -44,12 +44,12 @@ os.makedirs(RECEIPTS_DIR, exist_ok=True)
 os.makedirs(PENDING_FILES_DIR, exist_ok=True)
 
 # ==================== توکن ربات مادر ====================
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"  # 🔴 توکن خودت رو اینجا بزار
+BOT_TOKEN = "8266270866:AAF6m1x4weSUEvzIj1gkbIS_j0yAdxCSs78"  # 🔴 توکن خودت رو اینجا بزار
 bot = telebot.TeleBot(BOT_TOKEN)
 bot.delete_webhook()
 
 # ==================== آیدی ادمین ====================
-ADMIN_IDS = [YOUR_ADMIN_ID]  # 🔴 آیدی ادمین خودت رو اینجا بزار
+ADMIN_IDS = [327855654]  # 🔴 آیدی ادمین خودت رو اینجا بزار
 
 # ==================== تنظیمات پیش‌فرض (قابل تغییر توسط ادمین) ====================
 class Config:
