@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-ربات مادر نهایی نسخه 12.0 - اجرا روی سرور مادر در صورت نبود سرور دیگه
+ربات مادر نهایی نسخه 13.0 - با مدیریت کامل ربات توسط کاربر و پیام همگانی
 """
 
 import telebot
@@ -13,7 +13,6 @@ import subprocess
 import sys
 import time
 import hashlib
-import json
 import threading
 import shutil
 import re
@@ -89,6 +88,7 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[RotatingFileHandler(os.path.join(LOGS_DIR, 'mother_bot.log'), maxBytes=10485760, backupCount=30)]
 )
+logger = logging.getLogger(__name__)
 
 # ==================== دیتابیس ====================
 DB_PATH = os.path.join(DB_DIR, 'mother_bot.db')
@@ -213,6 +213,16 @@ with get_db() as conn:
         )
     ''')
     
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS broadcast_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            admin_id INTEGER,
+            message_text TEXT,
+            sent_count INTEGER DEFAULT 0,
+            created_at TIMESTAMP
+        )
+    ''')
+    
     conn.commit()
 
 config.load_from_db()
@@ -242,7 +252,8 @@ def create_user(user_id, username, first_name, last_name, referred_by=None):
                 conn.execute('UPDATE users SET balance = balance + 50000 WHERE user_id = ?', (referred_by,))
                 conn.commit()
             return True
-    except:
+    except Exception as e:
+        logger.error(f"create_user error: {e}")
         return False
 
 def get_user(user_id):
@@ -252,6 +263,14 @@ def get_user(user_id):
             return dict(user) if user else None
     except:
         return None
+
+def get_all_users():
+    try:
+        with get_db() as conn:
+            users = conn.execute('SELECT user_id FROM users').fetchall()
+            return [u['user_id'] for u in users]
+    except:
+        return []
 
 def has_active_subscription(user_id):
     try:
@@ -314,7 +333,6 @@ def activate_subscription(subscription_id, user_id, amount):
             conn.execute('UPDATE subscriptions SET status = "active", paid_at = ? WHERE id = ?',
                         (datetime.now().isoformat(), subscription_id))
             
-            # پاداش رفرال
             user = conn.execute('SELECT referred_by FROM users WHERE user_id = ?', (user_id,)).fetchone()
             if user and user['referred_by']:
                 bonus = int(amount * 0.1)
@@ -337,7 +355,7 @@ def get_user_balance(user_id):
 def can_create_bot(user_id):
     try:
         with get_db() as conn:
-            bots_count = conn.execute('SELECT COUNT(*) FROM bots WHERE user_id = ?', (user_id,)).fetchone()[0]
+            bots_count = conn.execute('SELECT COUNT(*) FROM bots WHERE user_id = ? AND status != "deleted"', (user_id,)).fetchone()[0]
             return has_active_subscription(user_id) and bots_count == 0
     except:
         return False
@@ -362,24 +380,45 @@ def add_bot(user_id, subscription_id, server_id, bot_id, token, name, username, 
 def get_user_bots(user_id):
     try:
         with get_db() as conn:
-            bots = conn.execute('SELECT * FROM bots WHERE user_id = ? ORDER BY created_at DESC', (user_id,)).fetchall()
+            bots = conn.execute('SELECT * FROM bots WHERE user_id = ? AND status != "deleted" ORDER BY created_at DESC', (user_id,)).fetchall()
             return [dict(bot) for bot in bots]
     except:
         return []
+
+def get_bot_by_id(bot_id):
+    try:
+        with get_db() as conn:
+            bot = conn.execute('SELECT * FROM bots WHERE id = ?', (bot_id,)).fetchone()
+            return dict(bot) if bot else None
+    except:
+        return None
+
+def update_bot_status(bot_id, status):
+    try:
+        with get_db() as conn:
+            conn.execute('UPDATE bots SET status = ? WHERE id = ?', (status, bot_id))
+            conn.commit()
+            return True
+    except:
+        return False
 
 def delete_bot(bot_id, user_id):
     try:
         with get_db() as conn:
             bot = conn.execute('SELECT * FROM bots WHERE id = ? AND user_id = ?', (bot_id, user_id)).fetchone()
-            if bot:
-                if bot['server_id']:
-                    server = conn.execute('SELECT * FROM servers WHERE id = ?', (bot['server_id'],)).fetchone()
-                    if server:
-                        stop_bot_on_server(dict(server), bot_id)
-                conn.execute('DELETE FROM bots WHERE id = ?', (bot_id,))
-                conn.commit()
-                return True
-            return False
+            if not bot:
+                return False
+            
+            if bot['server_id'] and bot['server_id'] != 0:
+                server = conn.execute('SELECT * FROM servers WHERE id = ?', (bot['server_id'],)).fetchone()
+                if server:
+                    stop_bot_on_server(dict(server), bot_id)
+            else:
+                stop_bot_on_mother(bot_id)
+            
+            conn.execute('DELETE FROM bots WHERE id = ?', (bot_id,))
+            conn.commit()
+            return True
     except:
         return False
 
@@ -422,10 +461,21 @@ def update_pending_file_status(file_id, status):
     except:
         return False
 
+def save_broadcast_message(admin_id, message_text, sent_count):
+    try:
+        with get_db() as conn:
+            conn.execute('''
+                INSERT INTO broadcast_messages (admin_id, message_text, sent_count, created_at)
+                VALUES (?, ?, ?, ?)
+            ''', (admin_id, message_text, sent_count, datetime.now().isoformat()))
+            conn.commit()
+            return True
+    except:
+        return False
+
 # ==================== سیستم مدیریت سرور و اجرا ====================
 
 def get_available_servers():
-    """دریافت سرورهای فعال با بار کمتر"""
     with get_db() as conn:
         servers = conn.execute('''
             SELECT * FROM servers 
@@ -435,12 +485,10 @@ def get_available_servers():
         return [dict(s) for s in servers]
 
 def get_best_server():
-    """بهترین سرور (کمترین بار) یا None اگر سروری نباشد"""
     servers = get_available_servers()
     return servers[0] if servers else None
 
 def test_server_connection(ip, port, username, password):
-    """تست اتصال به سرور"""
     try:
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -451,7 +499,6 @@ def test_server_connection(ip, port, username, password):
         return False
 
 def add_new_server(name, ip, port, username, password):
-    """اضافه کردن سرور جدید"""
     try:
         if not test_server_connection(ip, port, username, password):
             return False, "❌ اتصال به سرور امکان‌پذیر نیست"
@@ -468,7 +515,6 @@ def add_new_server(name, ip, port, username, password):
         return False, f"❌ خطا: {str(e)}"
 
 def run_bot_on_server(server, bot_id, code, token):
-    """اجرای ربات روی سرور مشخص"""
     try:
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -483,12 +529,10 @@ def run_bot_on_server(server, bot_id, code, token):
             f.write(code)
         sftp.close()
         
-        # نصب کتابخانه‌های مورد نیاز
         libs = detect_requirements(code)
         for lib in libs[:10]:
             client.exec_command(f'pip3 install {lib} --quiet')
         
-        # اجرا با screen
         client.exec_command(f'screen -dmS bot_{bot_id} python3 {remote_path}')
         time.sleep(2)
         
@@ -506,7 +550,6 @@ def run_bot_on_server(server, bot_id, code, token):
         return None, str(e)
 
 def run_bot_on_mother_server(bot_id, code, token):
-    """اجرای ربات روی خود سرور مادر (وقتی سرور دیگه‌ای نباشه)"""
     try:
         bot_dir = os.path.join(RUNNING_DIR, bot_id)
         os.makedirs(bot_dir, exist_ok=True)
@@ -537,7 +580,6 @@ def run_bot_on_mother_server(bot_id, code, token):
         return None, str(e)
 
 def stop_bot_on_server(server, bot_id):
-    """توقف ربات روی سرور"""
     try:
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -553,7 +595,6 @@ def stop_bot_on_server(server, bot_id):
         return False
 
 def stop_bot_on_mother(bot_id):
-    """توقف ربات روی سرور مادر"""
     try:
         with get_db() as conn:
             bot = conn.execute('SELECT pid FROM bots WHERE id = ?', (bot_id,)).fetchone()
@@ -564,8 +605,50 @@ def stop_bot_on_mother(bot_id):
     except:
         return False
 
+def stop_user_bot(bot_id):
+    """توقف ربات کاربر (غیرفعال کردن)"""
+    bot_info = get_bot_by_id(bot_id)
+    if not bot_info:
+        return False
+    
+    if bot_info['server_id'] and bot_info['server_id'] != 0:
+        with get_db() as conn:
+            server = conn.execute('SELECT * FROM servers WHERE id = ?', (bot_info['server_id'],)).fetchone()
+            if server:
+                stop_bot_on_server(dict(server), bot_id)
+    else:
+        stop_bot_on_mother(bot_id)
+    
+    return update_bot_status(bot_id, 'stopped')
+
+def start_user_bot(bot_id):
+    """راه‌اندازی مجدد ربات کاربر (فعال کردن)"""
+    bot_info = get_bot_by_id(bot_id)
+    if not bot_info:
+        return False, "ربات پیدا نشد"
+    
+    with open(bot_info['file_path'], 'r', encoding='utf-8') as f:
+        code = f.read()
+    
+    if bot_info['server_id'] and bot_info['server_id'] != 0:
+        with get_db() as conn:
+            server = conn.execute('SELECT * FROM servers WHERE id = ?', (bot_info['server_id'],)).fetchone()
+            if server:
+                pid, error = run_bot_on_server(dict(server), bot_info['id'], code, bot_info['token'])
+                if pid:
+                    update_bot_status(bot_id, 'running')
+                    return True, "ربات فعال شد"
+                else:
+                    return False, error
+    else:
+        pid, error = run_bot_on_mother_server(bot_info['id'], code, bot_info['token'])
+        if pid:
+            update_bot_status(bot_id, 'running')
+            return True, "ربات فعال شد"
+        else:
+            return False, error
+
 def detect_requirements(code):
-    """تشخیص کتابخانه‌های مورد نیاز از کد"""
     imports = set()
     lines = code.split('\n')
     for line in lines:
@@ -585,7 +668,6 @@ def detect_requirements(code):
     return list(imports)
 
 def extract_token(code):
-    """استخراج توکن از کد"""
     patterns = [
         r'[0-9]{8,10}:[A-Za-z0-9_-]{35}',
         r'token\s*=\s*["\']([^"\']+)["\']',
@@ -600,7 +682,6 @@ def extract_token(code):
     return None
 
 def build_bot_from_pending(file_id):
-    """ساخت ربات از فایل تایید شده"""
     result = {'success': False, 'error': None, 'name': None, 'username': None, 'bot_id': None}
     
     pending = get_pending_file_by_id(file_id)
@@ -616,7 +697,6 @@ def build_bot_from_pending(file_id):
         result['error'] = "توکن پیدا نشد"
         return result
     
-    # بررسی توکن
     try:
         response = requests.get(f"https://api.telegram.org/bot{token}/getMe", timeout=5)
         if response.status_code != 200:
@@ -631,16 +711,14 @@ def build_bot_from_pending(file_id):
     
     bot_id = hashlib.md5(f"{pending['user_id']}_{token}_{time.time()}".encode()).hexdigest()[:12]
     
-    # اول سعی کن روی سرورهای دیگه اجرا کن
     server = get_best_server()
     
     if server:
         pid, error = run_bot_on_server(server, bot_id, code, token)
         server_id = server['id']
     else:
-        # اگر سروری نبود، روی خود مادر اجرا کن
         pid, error = run_bot_on_mother_server(bot_id, code, token)
-        server_id = 0  # 0 یعنی سرور مادر
+        server_id = 0
     
     if pid:
         add_bot(pending['user_id'], pending['subscription_id'], server_id, bot_id, token, bot_name, bot_username, pending['file_path'], pid)
@@ -651,11 +729,10 @@ def build_bot_from_pending(file_id):
         result['username'] = bot_username
         result['bot_id'] = bot_id
         
-        # پیام موفقیت به کاربر (فقط یک پیام)
         try:
             bot.send_message(
                 pending['user_id'],
-                f"✅ ربات شما ساخته شد!\n\n🤖 {bot_name}\n🔗 https://t.me/{bot_username}"
+                f"✅ ربات شما ساخته شد!\n\n🤖 {bot_name}\n🔗 https://t.me/{bot_username}\n\nاز منوی «ربات‌های من» می‌توانید آن را مدیریت کنید."
             )
         except:
             pass
@@ -663,6 +740,24 @@ def build_bot_from_pending(file_id):
         result['error'] = error or "خطا در اجرا"
     
     return result
+
+# ==================== پیام همگانی ====================
+
+def send_broadcast(message_text, admin_id):
+    """ارسال پیام همگانی به همه کاربران"""
+    users = get_all_users()
+    sent_count = 0
+    
+    for user_id in users:
+        try:
+            bot.send_message(user_id, message_text)
+            sent_count += 1
+            time.sleep(0.05)  # جلوگیری از محدودیت تلگرام
+        except:
+            pass
+    
+    save_broadcast_message(admin_id, message_text, sent_count)
+    return sent_count
 
 # ==================== منوها ====================
 
@@ -715,7 +810,8 @@ def buy_subscription(message):
     user_id = message.from_user.id
     
     if has_active_subscription(user_id):
-        bot.send_message(message.chat.id, f"✅ اشتراک فعال دارید! {get_subscription_days_left(user_id)} روز مونده.")
+        days_left = get_subscription_days_left(user_id)
+        bot.send_message(message.chat.id, f"✅ اشتراک فعال دارید! {days_left} روز مونده.")
         return
     
     sub_id, sub_code = create_subscription(user_id, config.price)
@@ -765,10 +861,8 @@ def handle_receipt(message):
             ''', (user_id, pending_sub['id'], config.price, receipt_path, payment_code, datetime.now().isoformat()))
             conn.commit()
         
-        # فقط همین یک پیام به کاربر
         bot.reply_to(message, f"✅ فیش شما با موفقیت ارسال شد.\n🆔 کد پیگیری: {payment_code}\n⏳ پس از تایید، اشتراک شما فعال می‌شود.")
         
-        # اطلاع به ادمین (فقط یک پیام)
         for admin_id in ADMIN_IDS:
             try:
                 bot.send_photo(admin_id, open(receipt_path, 'rb'), caption=f"📸 فیش جدید\n👤 {user_id}\n💰 {config.price:,} تومان\n🆔 {payment_code}")
@@ -833,10 +927,7 @@ def handle_bot_file(message):
         
         save_pending_file(user_id, subscription_id, file_path, file_name, file_hash)
         
-        # فقط همین یک پیام به کاربر
         bot.reply_to(message, f"✅ فایل {file_name} دریافت شد.\n⏳ در لیست انتظار بررسی قرار گرفت.")
-        
-        # هیچ پیامی به پنل ادمین نمی‌ره، فقط توی لیست فایل‌ها نمایش داده می‌شه
         
     except Exception as e:
         bot.reply_to(message, f"❌ خطا")
@@ -847,22 +938,96 @@ def my_bots(message):
     bots = get_user_bots(user_id)
     
     if not bots:
-        bot.send_message(message.chat.id, "📋 رباتی ندارید!")
+        bot.send_message(message.chat.id, "📋 شما رباتی ندارید!\nبرای ساخت ربات، ابتدا اشتراک بخرید.")
         return
     
     for b in bots:
-        text = f"🤖 {b['name']}\n🔗 https://t.me/{b['username']}\n🆔 `{b['id']}`\n📅 {b['created_at'][:10]}"
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🗑 حذف", callback_data=f"delete_{b['id']}"))
+        status_emoji = "🟢" if b['status'] == 'running' else "🔴"
+        status_text = "فعال" if b['status'] == 'running' else "غیرفعال"
+        
+        text = f"{status_emoji} **{b['name']}**\n"
+        text += f"🔗 https://t.me/{b['username']}\n"
+        text += f"🆔 `{b['id']}`\n"
+        text += f"📊 وضعیت: {status_text}\n"
+        text += f"📅 ساخته شده: {b['created_at'][:10]}\n"
+        
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        
+        if b['status'] == 'running':
+            markup.add(types.InlineKeyboardButton("🛑 غیرفعال", callback_data=f"disable_bot_{b['id']}"))
+        else:
+            markup.add(types.InlineKeyboardButton("✅ فعال", callback_data=f"enable_bot_{b['id']}"))
+        
+        markup.add(types.InlineKeyboardButton("🗑 حذف", callback_data=f"delete_bot_{b['id']}"))
+        
         bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('delete_'))
-def delete_bot_cmd(call):
-    bot_id = call.data.replace('delete_', '')
+# ==================== دکمه‌های مدیریت ربات توسط کاربر ====================
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('disable_bot_'))
+def disable_user_bot(call):
+    bot_id = call.data.replace('disable_bot_', '')
     user_id = call.from_user.id
+    
+    bot_info = get_bot_by_id(bot_id)
+    if not bot_info or bot_info['user_id'] != user_id:
+        bot.answer_callback_query(call.id, "❌ ربات پیدا نشد!")
+        return
+    
+    if stop_user_bot(bot_id):
+        bot.answer_callback_query(call.id, "✅ ربات غیرفعال شد")
+        bot.edit_message_text(
+            f"🛑 ربات {bot_info['name']} غیرفعال شد.\nبرای فعال کردن دوباره به منوی ربات‌های من بروید.",
+            call.message.chat.id,
+            call.message.message_id
+        )
+    else:
+        bot.answer_callback_query(call.id, "❌ خطا در غیرفعال کردن")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('enable_bot_'))
+def enable_user_bot(call):
+    bot_id = call.data.replace('enable_bot_', '')
+    user_id = call.from_user.id
+    
+    bot_info = get_bot_by_id(bot_id)
+    if not bot_info or bot_info['user_id'] != user_id:
+        bot.answer_callback_query(call.id, "❌ ربات پیدا نشد!")
+        return
+    
+    # بررسی اینکه اشتراک هنوز فعال هست یا نه
+    days_left = get_subscription_days_left(user_id)
+    if days_left <= 0:
+        bot.answer_callback_query(call.id, "❌ اشتراک شما منقضی شده است!")
+        bot.edit_message_text(
+            f"❌ اشتراک شما منقضی شده است.\nلطفاً برای فعال کردن ربات، اشتراک جدید بخرید.",
+            call.message.chat.id,
+            call.message.message_id
+        )
+        return
+    
+    success, msg = start_user_bot(bot_id)
+    if success:
+        bot.answer_callback_query(call.id, "✅ ربات فعال شد")
+        bot.edit_message_text(
+            f"✅ ربات {bot_info['name']} فعال شد.\nبرای غیرفعال کردن به منوی ربات‌های من بروید.",
+            call.message.chat.id,
+            call.message.message_id
+        )
+    else:
+        bot.answer_callback_query(call.id, f"❌ {msg[:30]}")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('delete_bot_'))
+def delete_user_bot_cmd(call):
+    bot_id = call.data.replace('delete_bot_', '')
+    user_id = call.from_user.id
+    
     if delete_bot(bot_id, user_id):
-        bot.answer_callback_query(call.id, "✅ حذف شد")
-        bot.edit_message_text("🗑 ربات حذف شد.", call.message.chat.id, call.message.message_id)
+        bot.answer_callback_query(call.id, "✅ ربات حذف شد")
+        bot.edit_message_text("🗑 ربات با موفقیت حذف شد.", call.message.chat.id, call.message.message_id)
+    else:
+        bot.answer_callback_query(call.id, "❌ خطا در حذف")
+
+# ==================== کیف پول ====================
 
 @bot.message_handler(func=lambda m: m.text == '💰 کیف پول')
 def wallet(message):
@@ -870,6 +1035,10 @@ def wallet(message):
     user = get_user(user_id)
     balance = get_user_balance(user_id)
     bot_username = bot.get_me().username
+    
+    if not user:
+        bot.send_message(message.chat.id, "❌ /start را بزنید")
+        return
     
     text = f"💰 کیف پول\n\nموجودی: {balance:,} تومان\nکل درآمد: {user['total_earned']:,} تومان\n\n🎁 لینک رفرال:\nhttps://t.me/{bot_username}?start={user['referral_code']}"
     
@@ -888,6 +1057,10 @@ def process_withdraw(message):
     card = message.text.strip()
     balance = get_user_balance(user_id)
     
+    if not card.isdigit() or len(card) < 16:
+        bot.reply_to(message, "❌ شماره کارت نامعتبر")
+        return
+    
     if balance < 2000000:
         bot.reply_to(message, "❌ موجودی کافی نیست")
         return
@@ -901,15 +1074,20 @@ def process_withdraw(message):
     bot.reply_to(message, f"✅ درخواست برداشت {balance:,} تومان ثبت شد.")
     
     for admin_id in ADMIN_IDS:
-        bot.send_message(admin_id, f"💰 درخواست برداشت\n👤 {user_id}\n💰 {balance:,} تومان\n💳 {card}")
+        try:
+            bot.send_message(admin_id, f"💰 درخواست برداشت\n👤 {user_id}\n💰 {balance:,} تومان\n💳 {card}")
+        except:
+            pass
+
+# ==================== راهنما و پشتیبانی ====================
 
 @bot.message_handler(func=lambda m: m.text == '📚 راهنما')
 def guide(message):
-    bot.send_message(message.chat.id, f"📚 راهنما\n\n💰 قیمت: {config.price:,} تومان\n💳 کارت: {config.card_number}\n👤 {config.card_holder}")
+    bot.send_message(message.chat.id, f"📚 راهنما\n\n💰 قیمت: {config.price:,} تومان\n💳 کارت: {config.card_number}\n👤 {config.card_holder}\n\n📌 هر اشتراک = ۱ ربات\n🎁 ۱۰٪ پاداش رفرال")
 
 @bot.message_handler(func=lambda m: m.text == '📞 پشتیبانی')
 def support(message):
-    bot.send_message(message.chat.id, "📞 @shahraghee13")
+    bot.send_message(message.chat.id, "📞 پشتیبانی: @shahraghee13")
 
 @bot.message_handler(func=lambda m: m.text and m.text.startswith('📅'))
 def show_days(message):
@@ -929,8 +1107,14 @@ def admin_panel(message):
         servers_count = conn.execute('SELECT COUNT(*) FROM servers WHERE status = "active"').fetchone()[0]
         total_load = conn.execute('SELECT SUM(current_load) FROM servers').fetchone()[0] or 0
         max_load = conn.execute('SELECT SUM(max_load) FROM servers').fetchone()[0] or 0
+        total_users = conn.execute('SELECT COUNT(*) FROM users').fetchone()[0]
     
-    text = f"👑 پنل ادمین\n\n📸 فیش: {pending_payments}\n📥 فایل: {pending_files}\n🖥️ سرور: {servers_count}\n📊 بار: {total_load}/{max_load}"
+    text = f"👑 پنل ادمین\n\n"
+    text += f"👥 کاربران: {total_users}\n"
+    text += f"📸 فیش: {pending_payments}\n"
+    text += f"📥 فایل: {pending_files}\n"
+    text += f"🖥️ سرور: {servers_count}\n"
+    text += f"📊 بار: {total_load}/{max_load}"
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
@@ -939,11 +1123,37 @@ def admin_panel(message):
         types.InlineKeyboardButton("🖥️ سرورها", callback_data="admin_servers"),
         types.InlineKeyboardButton("➕ سرور جدید", callback_data="admin_add_server"),
         types.InlineKeyboardButton("💰 برداشت‌ها", callback_data="admin_withdraws"),
+        types.InlineKeyboardButton("📢 پیام همگانی", callback_data="admin_broadcast"),
         types.InlineKeyboardButton("⚙️ تنظیمات", callback_data="admin_settings"),
         types.InlineKeyboardButton("🎁 تایید اشتراک", callback_data="admin_manual_sub")
     )
     
     bot.send_message(message.chat.id, text, reply_markup=markup)
+
+# ==================== پیام همگانی ====================
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_broadcast")
+def admin_broadcast(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    msg = bot.send_message(call.message.chat.id, "📢 متن پیام همگانی را ارسال کنید:\n\n(برای ارسال به همه کاربران)")
+    bot.register_next_step_handler(msg, process_broadcast)
+
+def process_broadcast(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    text = message.text
+    status_msg = bot.reply_to(message, "🔄 در حال ارسال پیام همگانی...")
+    
+    sent_count = send_broadcast(text, message.from_user.id)
+    
+    bot.edit_message_text(
+        f"✅ پیام همگانی ارسال شد!\n\n📨 تعداد دریافت‌کنندگان: {sent_count} نفر",
+        message.chat.id,
+        status_msg.message_id
+    )
 
 # ==================== مدیریت فیش‌ها ====================
 
@@ -980,7 +1190,7 @@ def approve_payment(call):
             conn.execute('UPDATE receipts SET status = "approved" WHERE id = ?', (receipt_id,))
             conn.commit()
             bot.answer_callback_query(call.id, "✅ تایید شد")
-            bot.send_message(receipt['user_id'], f"✅ اشتراک شما فعال شد!\n📅 {config.subscription_days} روز اعتبار.")
+            bot.send_message(receipt['user_id'], f"✅ اشتراک شما فعال شد!\n📅 {config.subscription_days} روز اعتبار.\n📤 فایل ربات خود را ارسال کنید.")
             bot.delete_message(call.message.chat.id, call.message.message_id)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('reject_payment_'))
@@ -992,7 +1202,7 @@ def reject_payment(call):
         bot.answer_callback_query(call.id, "❌ رد شد")
         bot.delete_message(call.message.chat.id, call.message.message_id)
 
-# ==================== مدیریت فایل‌ها (فقط توی پنل نمایش داده می‌شه) ====================
+# ==================== مدیریت فایل‌ها ====================
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_files")
 def admin_files_list(call):
@@ -1103,7 +1313,7 @@ def process_add_server(message):
     success, msg = add_new_server(name, ip, port, username, password)
     bot.edit_message_text(msg, message.chat.id, status_msg.message_id)
 
-# ==================== سایر بخش‌های ادمین ====================
+# ==================== مدیریت برداشت‌ها ====================
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_withdraws")
 def admin_withdraws_list(call):
@@ -1144,6 +1354,8 @@ def reject_withdraw(call):
             conn.execute('UPDATE withdraw_requests SET status = "rejected" WHERE id = ?', (wid,))
             conn.commit()
     bot.answer_callback_query(call.id, "❌ رد شد")
+
+# ==================== تنظیمات ====================
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_settings")
 def admin_settings(call):
@@ -1211,6 +1423,8 @@ def process_manual_sub(message):
         if sub_id and activate_subscription(sub_id, user_id, config.price):
             bot.reply_to(message, f"✅ اشتراک {user_id} فعال شد")
             bot.send_message(user_id, f"✅ اشتراک شما فعال شد!\n📤 فایل ربات خود را ارسال کنید.")
+        else:
+            bot.reply_to(message, "❌ خطا")
     except:
         bot.reply_to(message, "❌ خطا")
 
@@ -1228,6 +1442,7 @@ def check_expired():
     while True:
         try:
             with get_db() as conn:
+                # غیرفعال کردن اشتراک‌های منقضی شده
                 expired = conn.execute('''
                     SELECT user_id FROM users 
                     WHERE active_subscription = 1 
@@ -1238,33 +1453,53 @@ def check_expired():
                     conn.execute('UPDATE users SET active_subscription = 0 WHERE user_id = ?', (user['user_id'],))
                     
                     # توقف ربات‌های منقضی شده
-                    bots = conn.execute('SELECT id, server_id FROM bots WHERE user_id = ?', (user['user_id'],)).fetchall()
+                    bots = conn.execute('SELECT id, server_id FROM bots WHERE user_id = ? AND status != "deleted"', (user['user_id'],)).fetchall()
                     for bot in bots:
-                        if bot['server_id']:
+                        if bot['server_id'] and bot['server_id'] != 0:
                             server = conn.execute('SELECT * FROM servers WHERE id = ?', (bot['server_id'],)).fetchone()
                             if server:
                                 stop_bot_on_server(dict(server), bot['id'])
                         else:
                             stop_bot_on_mother(bot['id'])
+                        conn.execute('UPDATE bots SET status = "expired" WHERE id = ?', (bot['id'],))
                     
                     try:
-                        bot.send_message(user['user_id'], "❌ اشتراک شما منقضی شد!")
+                        bot.send_message(user['user_id'], "❌ اشتراک شما منقضی شد!\nربات شما غیرفعال شد.\nبرای ادامه، اشتراک جدید بخرید.")
                     except:
                         pass
                 
+                # هشدار به کاربرانی که ۳ روز مونده
+                warning = conn.execute('''
+                    SELECT user_id, subscription_expire FROM users 
+                    WHERE active_subscription = 1 
+                    AND julianday(subscription_expire) - julianday('now') BETWEEN 0 AND 3
+                ''').fetchall()
+                
+                for user in warning:
+                    days_left = (datetime.fromisoformat(user['subscription_expire']) - datetime.now()).days
+                    if days_left > 0:
+                        try:
+                            bot.send_message(user['user_id'], f"⚠️ {days_left} روز تا اتمام اشتراک!\nلطفاً تمدید کنید تا ربات شما غیرفعال نشود.")
+                        except:
+                            pass
+                
                 conn.commit()
             time.sleep(3600)
-        except:
+        except Exception as e:
+            logger.error(f"check_expired error: {e}")
             time.sleep(3600)
 
 # ==================== اجرا ====================
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("🚀 ربات مادر نسخه نهایی")
+    print("🚀 ربات مادر نسخه نهایی 13.0")
     print("=" * 60)
     print(f"✅ ادمین: {ADMIN_IDS}")
     print(f"✅ قیمت: {config.price:,} تومان")
+    print(f"✅ مدت اشتراک: {config.subscription_days} روز")
+    print("=" * 60)
+    print("🟢 ربات در حال اجراست...")
     print("=" * 60)
     
     expiry_thread = threading.Thread(target=check_expired, daemon=True)
