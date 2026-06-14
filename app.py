@@ -71,11 +71,11 @@ for dir_path in [DB_DIR, FILES_DIR, RUNNING_DIR, LOGS_DIR, RECEIPTS_DIR, PENDING
     os.makedirs(dir_path, exist_ok=True)
 
 # ==================== توکن و امنیت ====================
-BOT_TOKEN = os.environ.get("MOTHER_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
+BOT_TOKEN = os.environ.get("7685135237:AAEmsHktRw9cEqrHTkCoPZk-fBimK7TDjOo", "7685135237:AAEmsHktRw9cEqrHTkCoPZk-fBimK7TDjOo")
 bot = telebot.TeleBot(BOT_TOKEN)
 bot.delete_webhook()
 
-ADMIN_IDS = [int(id.strip()) for id in os.environ.get("ADMIN_IDS", "YOUR_ADMIN_ID").split(",")]
+ADMIN_IDS = [int(id.strip()) for id in os.environ.get("327855654", "327855654").split(",")]
 
 # کلید رمزگذاری
 ENCRYPTION_KEY = Fernet.generate_key()
