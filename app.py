@@ -40,8 +40,8 @@ for dir_path in [DB_DIR, FILES_DIR, RUNNING_DIR, LOGS_DIR, RECEIPTS_DIR, PENDING
     os.makedirs(dir_path, exist_ok=True)
 
 # ==================== توکن ربات مادر ====================
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"  # 🔴 توکن خودت رو اینجا بزار
-ADMIN_IDS = [YOUR_ADMIN_ID]  # 🔴 آیدی ادمین خودت رو اینجا بزار
+BOT_TOKEN = "8266270866:AAF6m1x4weSUEvzIj1gkbIS_j0yAdxCSs78"  # 🔴 توکن خودت رو اینجا بزار
+ADMIN_IDS = [327855654]  # 🔴 آیدی ادمین خودت رو اینجا بزار
 
 PRICE = 200000
 CARD_NUMBER = "5892101187322777"
