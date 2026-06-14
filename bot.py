@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-ربات مادر نهایی نسخه 16.0 - رفع باگ‌ها و بهبود عملکرد
+ربات مادر نهایی نسخه 15.0 - کامل و نهایی با تمام قابلیت‌ها
 """
 
 import telebot
@@ -70,7 +70,7 @@ class Texts:
 💰 هر اشتراک = ۱ ربات (به مدت ۳۰ روز)
 🎁 سیستم رفرال: ۱۰٪ از درآمد دوستانتان به شما تعلق می‌گیرد
 
-@{}\n\n🎁 لینک رفرال شما: {}"""
+@{} - پشتیبانی"""
         
         self.subscription_text = """💰 خرید اشتراک
 
@@ -78,7 +78,7 @@ class Texts:
 شماره کارت: {}
 به نام: {}
 
-🆔 کد: {}
+🆔 کد: `{}`
 
 📌 مراحل:
 1️⃣ مبلغ را واریز کنید
@@ -887,7 +887,7 @@ def build_bot_from_pending(file_id):
         try:
             bot.send_message(
                 pending['user_id'],
-                f"✅ ربات شما ساخته شد!\n\n🤖 نام: {bot_name}\n🔗 لینک: https://t.me/{bot_username}\n🆔 آیدی: {bot_id}\n\nاز منوی «ربات‌های من» می‌توانید آن را مدیریت کنید."
+                f"✅ ربات شما ساخته شد!\n\n🤖 {bot_name}\n🔗 https://t.me/{bot_username}\n\nاز منوی «ربات‌های من» می‌توانید آن را مدیریت کنید."
             )
         except:
             pass
@@ -985,7 +985,8 @@ def cmd_start(message):
     user = get_user(user_id)
     referral_link = f"https://t.me/{bot_username}?start={user['referral_code']}" if user else ""
     
-    welcome = texts.welcome_text.format(bot_username, referral_link)
+    welcome = texts.welcome_text.format(bot_username)
+    welcome += f"\n\n🎁 لینک رفرال شما:\n{referral_link}"
     
     bot.send_message(message.chat.id, welcome, reply_markup=get_main_menu(user_id))
 
@@ -1007,7 +1008,7 @@ def buy_subscription(message):
         config.price, config.card_number, config.card_holder, sub_code, config.subscription_days
     )
     
-    bot.send_message(message.chat.id, subscription_text)
+    bot.send_message(message.chat.id, subscription_text, parse_mode="Markdown")
 
 @bot.message_handler(content_types=['photo'])
 def handle_receipt(message):
@@ -1110,8 +1111,6 @@ def handle_bot_file(message):
     except Exception as e:
         bot.reply_to(message, f"❌ خطا")
 
-# ==================== ربات‌های من (بدون Markdown برای جلوگیری از خطا) ====================
-
 @bot.message_handler(func=lambda m: m.text == '🤖 ربات‌های من')
 def my_bots(message):
     user_id = message.from_user.id
@@ -1125,11 +1124,11 @@ def my_bots(message):
         status_emoji = "🟢" if b['status'] == 'running' else "🔴"
         status_text = "فعال" if b['status'] == 'running' else "غیرفعال"
         
-        text = f"{status_emoji} نام: {b['name']}\n"
-        text += f"🔗 لینک: https://t.me/{b['username']}\n"
-        text += f"🆔 آیدی: {b['id']}\n"
+        text = f"{status_emoji} **{b['name']}**\n"
+        text += f"🔗 https://t.me/{b['username']}\n"
+        text += f"🆔 `{b['id']}`\n"
         text += f"📊 وضعیت: {status_text}\n"
-        text += f"📅 ساخته شده: {b['created_at'][:10]}"
+        text += f"📅 ساخته شده: {b['created_at'][:10]}\n"
         
         markup = types.InlineKeyboardMarkup(row_width=2)
         
@@ -1142,7 +1141,7 @@ def my_bots(message):
         
         markup.add(types.InlineKeyboardButton("🗑 حذف ربات", callback_data=f"delete_bot_{b['id']}"))
         
-        bot.send_message(message.chat.id, text, reply_markup=markup)
+        bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
 
 # ==================== دکمه مشاهده جزئیات ربات ====================
 
@@ -1167,28 +1166,28 @@ def view_bot_details(call):
     status_emoji = "🟢" if bot_info['status'] == 'running' else "🔴"
     status_text = "در حال اجرا" if bot_info['status'] == 'running' else "متوقف"
     
-    text = f"🔍 جزئیات ربات\n\n"
-    text += f"{status_emoji} نام: {bot_info['name']}\n"
-    text += f"🔗 لینک: https://t.me/{bot_info['username']}\n"
-    text += f"🆔 آیدی ربات: {bot_info['id']}\n"
-    text += f"📊 وضعیت: {status_text}\n"
-    text += f"📅 تاریخ ساخت: {bot_info['created_at'][:10]}\n"
+    text = f"🔍 **جزئیات ربات**\n\n"
+    text += f"{status_emoji} **نام:** {bot_info['name']}\n"
+    text += f"🔗 **لینک:** https://t.me/{bot_info['username']}\n"
+    text += f"🆔 **آیدی ربات:** `{bot_info['id']}`\n"
+    text += f"📊 **وضعیت:** {status_text}\n"
+    text += f"📅 **تاریخ ساخت:** {bot_info['created_at'][:10]}\n"
     
     if bot_days_left > 0:
-        text += f"⏰ اعتبار باقی‌مانده: {bot_days_left} روز\n"
+        text += f"⏰ **اعتبار باقی‌مانده:** {bot_days_left} روز\n"
     else:
-        text += f"⏰ اعتبار: منقضی شده\n"
+        text += f"⏰ **اعتبار:** منقضی شده\n"
     
-    text += f"\n📊 آمار شما:\n"
+    text += f"\n📊 **آمار شما:**\n"
     text += f"• تعداد کل ربات‌ها: {total_bots}\n"
     text += f"• اشتراک فعال: {'بله' if days_left > 0 else 'خیر'}\n"
     if days_left > 0:
         text += f"• اعتبار اشتراک: {days_left} روز\n"
     
-    text += f"\n💡 راهنما:\n"
-    text += f"• برای غیرفعال کردن ربات، دکمه غیرفعال را بزنید\n"
-    text += f"• برای حذف کامل ربات، دکمه حذف ربات را بزنید\n"
-    text += f"• برای ساخت ربات جدید، ابتدا اشتراک جدید بخرید"
+    text += f"\n💡 **راهنما:**\n"
+    text += f"• برای غیرفعال کردن ربات، دکمه 🛑 غیرفعال را بزنید\n"
+    text += f"• برای حذف کامل ربات، دکمه 🗑 حذف ربات را بزنید\n"
+    text += f"• برای ساخت ربات جدید، ابتدا اشتراک جدید بخرید\n"
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     
@@ -1204,6 +1203,7 @@ def view_bot_details(call):
         text,
         call.message.chat.id,
         call.message.message_id,
+        parse_mode="Markdown",
         reply_markup=markup
     )
 
@@ -1229,11 +1229,11 @@ def back_to_bots(call):
         status_emoji = "🟢" if b['status'] == 'running' else "🔴"
         status_text = "فعال" if b['status'] == 'running' else "غیرفعال"
         
-        text = f"{status_emoji} نام: {b['name']}\n"
-        text += f"🔗 لینک: https://t.me/{b['username']}\n"
-        text += f"🆔 آیدی: {b['id']}\n"
+        text = f"{status_emoji} **{b['name']}**\n"
+        text += f"🔗 https://t.me/{b['username']}\n"
+        text += f"🆔 `{b['id']}`\n"
         text += f"📊 وضعیت: {status_text}\n"
-        text += f"📅 ساخته شده: {b['created_at'][:10]}"
+        text += f"📅 ساخته شده: {b['created_at'][:10]}\n"
         
         markup = types.InlineKeyboardMarkup(row_width=2)
         
@@ -1246,7 +1246,7 @@ def back_to_bots(call):
         
         markup.add(types.InlineKeyboardButton("🗑 حذف ربات", callback_data=f"delete_bot_{b['id']}"))
         
-        bot.send_message(call.message.chat.id, text, reply_markup=markup)
+        bot.send_message(call.message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
 
 # ==================== دکمه‌های مدیریت ربات توسط کاربر ====================
 
@@ -1301,7 +1301,7 @@ def enable_user_bot(call):
     else:
         bot.answer_callback_query(call.id, f"❌ {msg[:30]}")
 
-# ==================== دکمه حذف ربات با تأیید (رفع باگ) ====================
+# ==================== دکمه حذف ربات با تأیید ====================
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('delete_bot_'))
 def delete_user_bot_cmd(call):
@@ -1320,9 +1320,11 @@ def delete_user_bot_cmd(call):
     )
     
     bot.edit_message_text(
-        f"⚠️ آیا از حذف ربات {bot_info['name']} اطمینان دارید؟\n\nاین عمل غیرقابل بازگشت است و ربات به طور کامل حذف می‌شود.",
+        f"⚠️ **آیا از حذف ربات {bot_info['name']} اطمینان دارید؟**\n\n"
+        f"این عمل غیرقابل بازگشت است و ربات به طور کامل حذف می‌شود.",
         call.message.chat.id,
         call.message.message_id,
+        parse_mode="Markdown",
         reply_markup=markup
     )
 
@@ -1371,23 +1373,23 @@ def cancel_delete_bot(call):
     status_emoji = "🟢" if bot_info['status'] == 'running' else "🔴"
     status_text = "در حال اجرا" if bot_info['status'] == 'running' else "متوقف"
     
-    text = f"🔍 جزئیات ربات\n\n"
-    text += f"{status_emoji} نام: {bot_info['name']}\n"
-    text += f"🔗 لینک: https://t.me/{bot_info['username']}\n"
-    text += f"🆔 آیدی ربات: {bot_info['id']}\n"
-    text += f"📊 وضعیت: {status_text}\n"
-    text += f"📅 تاریخ ساخت: {bot_info['created_at'][:10]}\n"
+    text = f"🔍 **جزئیات ربات**\n\n"
+    text += f"{status_emoji} **نام:** {bot_info['name']}\n"
+    text += f"🔗 **لینک:** https://t.me/{bot_info['username']}\n"
+    text += f"🆔 **آیدی ربات:** `{bot_info['id']}`\n"
+    text += f"📊 **وضعیت:** {status_text}\n"
+    text += f"📅 **تاریخ ساخت:** {bot_info['created_at'][:10]}\n"
     
     if bot_days_left > 0:
-        text += f"⏰ اعتبار باقی‌مانده: {bot_days_left} روز\n"
+        text += f"⏰ **اعتبار باقی‌مانده:** {bot_days_left} روز\n"
     else:
-        text += f"⏰ اعتبار: منقضی شده\n"
+        text += f"⏰ **اعتبار:** منقضی شده\n"
     
-    text += f"\n📊 آمار شما:\n"
+    text += f"\n📊 **آمار شما:**\n"
     text += f"• تعداد کل ربات‌ها: {total_bots}\n"
     text += f"• اشتراک فعال: {'بله' if days_left > 0 else 'خیر'}\n"
     if days_left > 0:
-        text += f"• اعتبار اشتراک: {days_left} روز"
+        text += f"• اعتبار اشتراک: {days_left} روز\n"
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     
@@ -1403,6 +1405,7 @@ def cancel_delete_bot(call):
         text,
         call.message.chat.id,
         call.message.message_id,
+        parse_mode="Markdown",
         reply_markup=markup
     )
 
@@ -1530,9 +1533,14 @@ def admin_texts(call):
     )
     
     bot.edit_message_text(
-        "📝 مدیریت متون\n\nهر کدام از متون زیر را می‌توانید تغییر دهید:\n\n🔹 متن خوش‌آمدگویی - هنگام استارت\n🔹 متن خرید اشتراک - هنگام درخواست اشتراک\n🔹 متن راهنما - هنگام درخواست راهنما",
+        "📝 **مدیریت متون**\n\n"
+        "هر کدام از متون زیر را می‌توانید تغییر دهید:\n\n"
+        "🔹 متن خوش‌آمدگویی - هنگام استارت\n"
+        "🔹 متن خرید اشتراک - هنگام درخواست اشتراک\n"
+        "🔹 متن راهنما - هنگام درخواست راهنما",
         call.message.chat.id,
         call.message.message_id,
+        parse_mode="Markdown",
         reply_markup=markup
     )
 
@@ -1541,7 +1549,7 @@ def edit_welcome(call):
     if call.from_user.id not in ADMIN_IDS:
         return
     
-    msg = bot.send_message(call.message.chat.id, "📝 متن جدید خوش‌آمدگویی را ارسال کنید:\n\nمتن فعلی:\n" + texts.welcome_text[:200])
+    msg = bot.send_message(call.message.chat.id, "📝 متن جدید خوش‌آمدگویی را ارسال کنید:\n(از {} برای نام ربات استفاده کنید)\n\nمتن فعلی:\n" + texts.welcome_text[:200])
     bot.register_next_step_handler(msg, save_welcome_text)
 
 def save_welcome_text(message):
@@ -1556,7 +1564,7 @@ def edit_subscription(call):
     if call.from_user.id not in ADMIN_IDS:
         return
     
-    msg = bot.send_message(call.message.chat.id, "💰 متن جدید خرید اشتراک را ارسال کنید:\n\nمتن فعلی:\n" + texts.subscription_text[:200])
+    msg = bot.send_message(call.message.chat.id, "💰 متن جدید خرید اشتراک را ارسال کنید:\n(از {} برای قیمت، {} برای کارت، {} برای صاحب کارت، {} برای کد، {} برای مدت استفاده کنید)\n\nمتن فعلی:\n" + texts.subscription_text[:200])
     bot.register_next_step_handler(msg, save_subscription_text)
 
 def save_subscription_text(message):
@@ -1571,7 +1579,7 @@ def edit_guide(call):
     if call.from_user.id not in ADMIN_IDS:
         return
     
-    msg = bot.send_message(call.message.chat.id, "📚 متن جدید راهنما را ارسال کنید:\n\nمتن فعلی:\n" + texts.guide_text[:200])
+    msg = bot.send_message(call.message.chat.id, "📚 متن جدید راهنما را ارسال کنید:\n(از {} برای قیمت، {} برای کارت، {} برای صاحب کارت، {} برای نام ربات استفاده کنید)\n\nمتن فعلی:\n" + texts.guide_text[:200])
     bot.register_next_step_handler(msg, save_guide_text)
 
 def save_guide_text(message):
@@ -1621,7 +1629,7 @@ def admin_receipts_list(call):
         return
     
     for r in receipts:
-        text = f"📸 فیش #{r['id']}\n👤 کاربر: {r['user_id']}\n💰 مبلغ: {r['amount']:,} تومان\n🆔 کد: {r['payment_code']}"
+        text = f"📸 فیش #{r['id']}\n👤 {r['user_id']}\n💰 {r['amount']:,} تومان\n🆔 {r['payment_code']}"
         markup = types.InlineKeyboardMarkup()
         markup.add(
             types.InlineKeyboardButton("✅ تایید", callback_data=f"approve_payment_{r['id']}"),
@@ -1667,7 +1675,7 @@ def admin_files_list(call):
         return
     
     for f in files:
-        text = f"📥 فایل #{f['id']}\n👤 کاربر: {f['user_id']}\n📄 نام: {f['file_name']}\n📅 تاریخ: {f['submitted_at'][:10]}"
+        text = f"📥 فایل #{f['id']}\n👤 کاربر: {f['user_id']}\n📄 {f['file_name']}\n📅 {f['submitted_at'][:10]}"
         markup = types.InlineKeyboardMarkup()
         markup.add(
             types.InlineKeyboardButton("✅ تایید و ساخت", callback_data=f"build_file_{f['id']}"),
@@ -1699,7 +1707,7 @@ def build_file(call):
         result = build_bot_from_pending(file_id)
         if result['success']:
             bot.edit_message_caption(
-                f"✅ ربات ساخته شد!\n🤖 نام: {result['name']}\n🔗 لینک: https://t.me/{result['username']}",
+                f"✅ ربات ساخته شد!\n🤖 {result['name']}\n🔗 https://t.me/{result['username']}",
                 call.message.chat.id,
                 call.message.message_id
             )
@@ -1730,11 +1738,11 @@ def admin_servers_list(call):
         bot.send_message(call.message.chat.id, "🖥️ سروری وجود ندارد\nاز دکمه «➕ سرور جدید» استفاده کنید.")
         return
     
-    text = "🖥️ سرورها\n\n"
+    text = "🖥️ **سرورها**\n\n"
     for s in servers:
         text += f"🔹 {s['name']}\n   📍 {s['ip']}:{s['port']}\n   📊 {s['current_load']}/{s['max_load']}\n   ✅ {s['status']}\n\n"
     
-    bot.send_message(call.message.chat.id, text)
+    bot.send_message(call.message.chat.id, text, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_add_server")
 def admin_add_server(call):
@@ -1742,7 +1750,11 @@ def admin_add_server(call):
         return
     
     msg = bot.send_message(call.message.chat.id, 
-        "➕ افزودن سرور\n\nاطلاعات را ارسال کنید:\nنام\nIP\nپورت\nyوزرنیم\nرمز\n\nمثال:\nServer1\n192.168.1.100\n22\nroot\n123")
+        "➕ **افزودن سرور**\n\n"
+        "اطلاعات را ارسال کنید:\n"
+        "`نام\nIP\nپورت\nyوزرنیم\nرمز`\n\n"
+        "مثال:\n"
+        "`Server1\n192.168.1.100\n22\nroot\n123`")
     
     bot.register_next_step_handler(msg, process_add_server)
 
@@ -1827,7 +1839,7 @@ def admin_settings(call):
     )
     
     bot.edit_message_text(
-        f"⚙️ تنظیمات\n\n💰 قیمت: {config.price:,} تومان\n💳 کارت: {config.card_number}\n👤 صاحب کارت: {config.card_holder}\n⏰ مدت اشتراک: {config.subscription_days} روز",
+        f"⚙️ تنظیمات\n\n💰 {config.price:,} تومان\n💳 {config.card_number}\n👤 {config.card_holder}\n⏰ {config.subscription_days} روز",
         call.message.chat.id,
         call.message.message_id,
         reply_markup=markup
@@ -1945,7 +1957,7 @@ def check_expired():
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("🚀 ربات مادر نسخه نهایی 16.0 - رفع باگ")
+    print("🚀 ربات مادر نسخه نهایی 15.0")
     print("=" * 60)
     print(f"✅ ادمین: {ADMIN_IDS}")
     print(f"✅ قیمت: {config.price:,} تومان")
