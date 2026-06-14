@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-ربات مادر نهایی نسخه 13.0 - با مدیریت کامل ربات توسط کاربر و پیام همگانی
+ربات مادر نهایی نسخه 14.0 - با Redis Queue، دیتابیس بهینه، پشتیبانی از ZIP
 """
 
 import telebot
@@ -20,11 +20,17 @@ import requests
 import signal
 import secrets
 import logging
+import json
+import zipfile
 from datetime import datetime, timedelta
 from logging.handlers import RotatingFileHandler
 from contextlib import contextmanager
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 import paramiko
+import redis
+from queue import Queue
+import asyncio
+from functools import wraps
 
 # ==================== تنظیمات پایه ====================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -41,12 +47,106 @@ for dir_path in [DB_DIR, FILES_DIR, RUNNING_DIR, LOGS_DIR, RECEIPTS_DIR, PENDING
     os.makedirs(dir_path, exist_ok=True)
 
 # ==================== توکن ربات مادر ====================
-BOT_TOKEN = "8266270866:AAF6m1x4weSUEvzIj1gkbIS_j0yAdxCSs78"
-bot = telebot.TeleBot(BOT_TOKEN, num_threads=100)
+BOT_TOKEN = "7685135237:AAEmsHktRw9cEqrHTkCoPZk-fBimK7TDjOo"
+bot = telebot.TeleBot(BOT_TOKEN, num_threads=200)
 bot.delete_webhook()
 
 # ==================== آیدی ادمین ====================
 ADMIN_IDS = [327855654]
+
+# ==================== Redis برای صف و کش ====================
+try:
+    redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True, socket_timeout=5)
+    redis_client.ping()
+    REDIS_AVAILABLE = True
+    print("✅ Redis متصل شد")
+except:
+    REDIS_AVAILABLE = False
+    print("⚠️ Redis در دسترس نیست، از حافظه داخلی استفاده می‌شود")
+
+# ==================== صف ساخت ربات ====================
+build_queue = Queue()
+queue_thread_running = True
+
+# ==================== تنظیمات متون (قابل تغییر توسط ادمین) ====================
+class Texts:
+    def __init__(self):
+        self.welcome_text = """🚀 به ربات سازنده ربات حرفه‌ای خوش آمدید!
+
+👤 کاربر عزیز، شما می‌توانید با خرید اشتراک، ربات تلگرامی خود را بسازید.
+
+📌 نحوه کار:
+1️⃣ خرید اشتراک
+2️⃣ ارسال فایل ربات (ZIP یا PY)
+3️⃣ پس از تایید، ربات ساخته می‌شود
+
+💰 هر اشتراک = ۱ ربات (به مدت ۳۰ روز)
+🎁 سیستم رفرال: ۱۰٪ از درآمد دوستانتان به شما تعلق می‌گیرد
+
+@{} - پشتیبانی"""
+        
+        self.subscription_text = """💰 خرید اشتراک
+
+مبلغ: {} تومان
+شماره کارت: {}
+به نام: {}
+
+🆔 کد: `{}`
+
+📌 مراحل:
+1️⃣ مبلغ را واریز کنید
+2️⃣ کد اشتراک را در رسید یادداشت کنید
+3️⃣ تصویر فیش را ارسال کنید
+
+⏰ مدت اشتراک: {} روز
+🎁 هر اشتراک = ۱ ربات
+🎁 پاداش رفرال: ۱۰٪"""
+        
+        self.guide_text = """📚 راهنمای کامل
+
+1️⃣ خرید اشتراک:
+   • مبلغ: {} تومان
+   • شماره کارت: {}
+   • به نام: {}
+
+2️⃣ سیستم رفرال:
+   • لینک اختصاصی خود را به دوستان بدهید
+   • از هر خرید دوستان، ۱۰٪ به حساب شما واریز می‌شود
+   • پس از رسیدن موجودی به ۲,۰۰۰,۰۰۰ تومان می‌توانید برداشت کنید
+
+3️⃣ ارسال فایل:
+   • می‌توانید فایل PY یا ZIP ارسال کنید
+   • در صورت ZIP، تمام فایل‌ها استخراج می‌شوند
+   • فایل اصلی باید bot.py یا main.py باشد
+
+4️⃣ مدیریت ربات:
+   • ربات شما به مدت ۳۰ روز فعال است
+   • می‌توانید ربات را فعال/غیرفعال یا حذف کنید
+
+@{} - پشتیبانی"""
+    
+    def load_from_db(self):
+        try:
+            with get_db() as conn:
+                data = conn.execute("SELECT key, value FROM texts").fetchall()
+                for row in data:
+                    if row['key'] == 'welcome_text':
+                        self.welcome_text = row['value']
+                    elif row['key'] == 'subscription_text':
+                        self.subscription_text = row['value']
+                    elif row['key'] == 'guide_text':
+                        self.guide_text = row['value']
+        except:
+            pass
+    
+    def save_to_db(self):
+        with get_db() as conn:
+            conn.execute("INSERT OR REPLACE INTO texts (key, value) VALUES (?, ?)", ('welcome_text', self.welcome_text))
+            conn.execute("INSERT OR REPLACE INTO texts (key, value) VALUES (?, ?)", ('subscription_text', self.subscription_text))
+            conn.execute("INSERT OR REPLACE INTO texts (key, value) VALUES (?, ?)", ('guide_text', self.guide_text))
+            conn.commit()
+
+texts = Texts()
 
 # ==================== تنظیمات ====================
 class Config:
@@ -86,11 +186,14 @@ config = Config()
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[RotatingFileHandler(os.path.join(LOGS_DIR, 'mother_bot.log'), maxBytes=10485760, backupCount=30)]
+    handlers=[
+        RotatingFileHandler(os.path.join(LOGS_DIR, 'mother_bot.log'), maxBytes=10485760, backupCount=50),
+        logging.StreamHandler()
+    ]
 )
 logger = logging.getLogger(__name__)
 
-# ==================== دیتابیس ====================
+# ==================== دیتابیس بهینه برای میلیون‌ها کاربر ====================
 DB_PATH = os.path.join(DB_DIR, 'mother_bot.db')
 
 @contextmanager
@@ -98,7 +201,10 @@ def get_db():
     conn = sqlite3.connect(DB_PATH, timeout=120, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA cache_size=-262144")
+    conn.execute("PRAGMA cache_size=-524288")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA temp_store=MEMORY")
+    conn.execute("PRAGMA mmap_size=1073741824")
     try:
         yield conn
         conn.commit()
@@ -108,10 +214,15 @@ def get_db():
     finally:
         conn.close()
 
-# ایجاد جداول
+# ایجاد جداول با ایندکس‌های بهینه
 with get_db() as conn:
+    # جدول متون
+    conn.execute('CREATE TABLE IF NOT EXISTS texts (key TEXT PRIMARY KEY, value TEXT)')
+    
+    # جدول تنظیمات
     conn.execute('CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT)')
     
+    # جدول کاربران (بهینه شده)
     conn.execute('''
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
@@ -130,6 +241,7 @@ with get_db() as conn:
         )
     ''')
     
+    # جدول اشتراک‌ها
     conn.execute('''
         CREATE TABLE IF NOT EXISTS subscriptions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -143,6 +255,7 @@ with get_db() as conn:
         )
     ''')
     
+    # جدول فایل‌های در انتظار
     conn.execute('''
         CREATE TABLE IF NOT EXISTS pending_files (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -157,6 +270,7 @@ with get_db() as conn:
         )
     ''')
     
+    # جدول سرورها
     conn.execute('''
         CREATE TABLE IF NOT EXISTS servers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -167,11 +281,12 @@ with get_db() as conn:
             password TEXT,
             status TEXT DEFAULT 'active',
             current_load INTEGER DEFAULT 0,
-            max_load INTEGER DEFAULT 10,
+            max_load INTEGER DEFAULT 20,
             created_at TIMESTAMP
         )
     ''')
     
+    # جدول ربات‌ها
     conn.execute('''
         CREATE TABLE IF NOT EXISTS bots (
             id TEXT PRIMARY KEY,
@@ -189,6 +304,7 @@ with get_db() as conn:
         )
     ''')
     
+    # جدول فیش‌ها
     conn.execute('''
         CREATE TABLE IF NOT EXISTS receipts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -202,6 +318,7 @@ with get_db() as conn:
         )
     ''')
     
+    # جدول برداشت‌ها
     conn.execute('''
         CREATE TABLE IF NOT EXISTS withdraw_requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -213,6 +330,7 @@ with get_db() as conn:
         )
     ''')
     
+    # جدول پیام‌های همگانی
     conn.execute('''
         CREATE TABLE IF NOT EXISTS broadcast_messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -223,11 +341,56 @@ with get_db() as conn:
         )
     ''')
     
+    # جدول صف ساخت ربات
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS build_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_id INTEGER,
+            user_id INTEGER,
+            status TEXT DEFAULT 'pending',
+            created_at TIMESTAMP,
+            completed_at TIMESTAMP
+        )
+    ''')
+    
+    # ایندکس‌ها برای سرعت بالا
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_users_referral ON users(referral_code)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_users_subscription ON users(active_subscription, subscription_expire)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_bots_user ON bots(user_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_bots_status ON bots(status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_pending_files_status ON pending_files(status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_receipts_status ON receipts(status)")
+    
     conn.commit()
 
+# بارگذاری تنظیمات
 config.load_from_db()
+texts.load_from_db()
 
-# ==================== توابع دیتابیس ====================
+# ==================== کش Redis برای پاسخگویی سریع ====================
+def cache_get(key):
+    if REDIS_AVAILABLE:
+        try:
+            return redis_client.get(key)
+        except:
+            return None
+    return None
+
+def cache_set(key, value, ttl=3600):
+    if REDIS_AVAILABLE:
+        try:
+            redis_client.setex(key, ttl, value)
+        except:
+            pass
+
+def cache_delete(key):
+    if REDIS_AVAILABLE:
+        try:
+            redis_client.delete(key)
+        except:
+            pass
+
+# ==================== توابع دیتابیس با کش ====================
 
 def generate_referral_code(user_id):
     return hashlib.md5(f"{user_id}_{time.time()}".encode()).hexdigest()[:10].upper()
@@ -251,28 +414,48 @@ def create_user(user_id, username, first_name, last_name, referred_by=None):
             if referred_by:
                 conn.execute('UPDATE users SET balance = balance + 50000 WHERE user_id = ?', (referred_by,))
                 conn.commit()
+            
+            cache_delete(f"user_{user_id}")
             return True
     except Exception as e:
         logger.error(f"create_user error: {e}")
         return False
 
 def get_user(user_id):
+    cached = cache_get(f"user_{user_id}")
+    if cached:
+        return json.loads(cached)
+    
     try:
         with get_db() as conn:
             user = conn.execute('SELECT * FROM users WHERE user_id = ?', (user_id,)).fetchone()
-            return dict(user) if user else None
+            if user:
+                user_dict = dict(user)
+                cache_set(f"user_{user_id}", json.dumps(user_dict), 300)
+                return user_dict
+            return None
     except:
         return None
 
 def get_all_users():
+    cached = cache_get("all_users")
+    if cached:
+        return json.loads(cached)
+    
     try:
         with get_db() as conn:
             users = conn.execute('SELECT user_id FROM users').fetchall()
-            return [u['user_id'] for u in users]
+            result = [u['user_id'] for u in users]
+            cache_set("all_users", json.dumps(result), 60)
+            return result
     except:
         return []
 
 def has_active_subscription(user_id):
+    cached = cache_get(f"subscription_{user_id}")
+    if cached:
+        return cached == "true"
+    
     try:
         with get_db() as conn:
             user = conn.execute('SELECT active_subscription, subscription_expire FROM users WHERE user_id = ?', (user_id,)).fetchone()
@@ -280,10 +463,12 @@ def has_active_subscription(user_id):
                 if user['subscription_expire']:
                     expire = datetime.fromisoformat(user['subscription_expire'])
                     if expire > datetime.now():
+                        cache_set(f"subscription_{user_id}", "true", 300)
                         return True
                     else:
                         conn.execute('UPDATE users SET active_subscription = 0 WHERE user_id = ?', (user_id,))
                         conn.commit()
+                        cache_delete(f"subscription_{user_id}")
                         return False
                 return True
             return False
@@ -291,12 +476,18 @@ def has_active_subscription(user_id):
         return False
 
 def get_subscription_days_left(user_id):
+    cached = cache_get(f"days_left_{user_id}")
+    if cached:
+        return int(cached)
+    
     try:
         with get_db() as conn:
             user = conn.execute('SELECT subscription_expire FROM users WHERE user_id = ?', (user_id,)).fetchone()
             if user and user['subscription_expire']:
                 expire = datetime.fromisoformat(user['subscription_expire'])
-                return max(0, (expire - datetime.now()).days)
+                days = max(0, (expire - datetime.now()).days)
+                cache_set(f"days_left_{user_id}", str(days), 3600)
+                return days
             return 0
     except:
         return 0
@@ -340,15 +531,24 @@ def activate_subscription(subscription_id, user_id, amount):
                             (bonus, bonus, user['referred_by']))
             
             conn.commit()
+            
+            cache_delete(f"subscription_{user_id}")
+            cache_delete(f"days_left_{user_id}")
             return True
     except:
         return False
 
 def get_user_balance(user_id):
+    cached = cache_get(f"balance_{user_id}")
+    if cached:
+        return int(cached)
+    
     try:
         with get_db() as conn:
             user = conn.execute('SELECT balance FROM users WHERE user_id = ?', (user_id,)).fetchone()
-            return user['balance'] if user else 0
+            balance = user['balance'] if user else 0
+            cache_set(f"balance_{user_id}", str(balance), 60)
+            return balance
     except:
         return 0
 
@@ -373,15 +573,23 @@ def add_bot(user_id, subscription_id, server_id, bot_id, token, name, username, 
             
             conn.execute('UPDATE users SET total_bots = total_bots + 1, active_subscription = 0 WHERE user_id = ?', (user_id,))
             conn.commit()
+            
+            cache_delete(f"user_bots_{user_id}")
             return True
     except:
         return False
 
 def get_user_bots(user_id):
+    cached = cache_get(f"user_bots_{user_id}")
+    if cached:
+        return json.loads(cached)
+    
     try:
         with get_db() as conn:
             bots = conn.execute('SELECT * FROM bots WHERE user_id = ? AND status != "deleted" ORDER BY created_at DESC', (user_id,)).fetchall()
-            return [dict(bot) for bot in bots]
+            result = [dict(bot) for bot in bots]
+            cache_set(f"user_bots_{user_id}", json.dumps(result), 60)
+            return result
     except:
         return []
 
@@ -398,6 +606,10 @@ def update_bot_status(bot_id, status):
         with get_db() as conn:
             conn.execute('UPDATE bots SET status = ? WHERE id = ?', (status, bot_id))
             conn.commit()
+            
+            bot = conn.execute('SELECT user_id FROM bots WHERE id = ?', (bot_id,)).fetchone()
+            if bot:
+                cache_delete(f"user_bots_{bot['user_id']}")
             return True
     except:
         return False
@@ -418,6 +630,8 @@ def delete_bot(bot_id, user_id):
             
             conn.execute('DELETE FROM bots WHERE id = ?', (bot_id,))
             conn.commit()
+            
+            cache_delete(f"user_bots_{user_id}")
             return True
     except:
         return False
@@ -461,17 +675,66 @@ def update_pending_file_status(file_id, status):
     except:
         return False
 
-def save_broadcast_message(admin_id, message_text, sent_count):
+def add_to_build_queue(file_id, user_id):
     try:
         with get_db() as conn:
             conn.execute('''
-                INSERT INTO broadcast_messages (admin_id, message_text, sent_count, created_at)
-                VALUES (?, ?, ?, ?)
-            ''', (admin_id, message_text, sent_count, datetime.now().isoformat()))
+                INSERT INTO build_queue (file_id, user_id, created_at)
+                VALUES (?, ?, ?)
+            ''', (file_id, user_id, datetime.now().isoformat()))
             conn.commit()
-            return True
+            
+            queue_id = conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+            
+            # اضافه کردن به صف Redis یا حافظه
+            build_queue.put(queue_id)
+            if REDIS_AVAILABLE:
+                redis_client.lpush("build_queue", queue_id)
+            
+            return queue_id
     except:
-        return False
+        return None
+
+# ==================== پردازشگر صف ساخت ربات ====================
+
+def queue_worker():
+    """پردازشگر صف ساخت ربات در پس‌زمینه"""
+    global queue_thread_running
+    while queue_thread_running:
+        try:
+            # گرفتن از صف
+            queue_id = None
+            if REDIS_AVAILABLE:
+                queue_id = redis_client.rpop("build_queue")
+                if queue_id:
+                    queue_id = int(queue_id)
+            else:
+                if not build_queue.empty():
+                    queue_id = build_queue.get()
+            
+            if queue_id:
+                with get_db() as conn:
+                    queue_item = conn.execute('SELECT * FROM build_queue WHERE id = ? AND status = "pending"', (queue_id,)).fetchone()
+                    if queue_item:
+                        # ساخت ربات
+                        result = build_bot_from_pending(queue_item['file_id'])
+                        
+                        if result['success']:
+                            conn.execute('UPDATE build_queue SET status = "completed", completed_at = ? WHERE id = ?',
+                                        (datetime.now().isoformat(), queue_id))
+                        else:
+                            conn.execute('UPDATE build_queue SET status = "failed", completed_at = ? WHERE id = ?',
+                                        (datetime.now().isoformat(), queue_id))
+                        conn.commit()
+            
+            time.sleep(0.1)
+        except Exception as e:
+            logger.error(f"queue_worker error: {e}")
+            time.sleep(1)
+
+# شروع ترد پردازشگر صف
+queue_thread = threading.Thread(target=queue_worker, daemon=True)
+queue_thread.start()
 
 # ==================== سیستم مدیریت سرور و اجرا ====================
 
@@ -606,7 +869,6 @@ def stop_bot_on_mother(bot_id):
         return False
 
 def stop_user_bot(bot_id):
-    """توقف ربات کاربر (غیرفعال کردن)"""
     bot_info = get_bot_by_id(bot_id)
     if not bot_info:
         return False
@@ -622,7 +884,6 @@ def stop_user_bot(bot_id):
     return update_bot_status(bot_id, 'stopped')
 
 def start_user_bot(bot_id):
-    """راه‌اندازی مجدد ربات کاربر (فعال کردن)"""
     bot_info = get_bot_by_id(bot_id)
     if not bot_info:
         return False, "ربات پیدا نشد"
@@ -681,6 +942,39 @@ def extract_token(code):
             return token
     return None
 
+def extract_from_zip(zip_path, extract_to):
+    """استخراج فایل‌های ZIP و پیدا کردن فایل اصلی"""
+    py_files = []
+    main_code = None
+    
+    try:
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(extract_to)
+        
+        for root, dirs, files in os.walk(extract_to):
+            for file in files:
+                if file.endswith('.py'):
+                    file_path = os.path.join(root, file)
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                        py_files.append({'name': file, 'path': file_path, 'content': content})
+                    except:
+                        pass
+        
+        # پیدا کردن فایل اصلی
+        for pf in py_files:
+            if pf['name'] in ['bot.py', 'main.py', 'run.py', '__init__.py']:
+                main_code = pf['content']
+                break
+        
+        if not main_code and py_files:
+            main_code = py_files[0]['content']
+        
+        return main_code, py_files
+    except Exception as e:
+        return None, []
+
 def build_bot_from_pending(file_id):
     result = {'success': False, 'error': None, 'name': None, 'username': None, 'bot_id': None}
     
@@ -689,8 +983,20 @@ def build_bot_from_pending(file_id):
         result['error'] = "فایل پیدا نشد"
         return result
     
-    with open(pending['file_path'], 'r', encoding='utf-8') as f:
-        code = f.read()
+    # خواندن کد از فایل (ممکنه ZIP باشه)
+    code = None
+    if pending['file_name'].endswith('.zip'):
+        extract_dir = os.path.join(PENDING_FILES_DIR, f"extract_{file_id}")
+        os.makedirs(extract_dir, exist_ok=True)
+        code, _ = extract_from_zip(pending['file_path'], extract_dir)
+        shutil.rmtree(extract_dir, ignore_errors=True)
+    else:
+        with open(pending['file_path'], 'r', encoding='utf-8') as f:
+            code = f.read()
+    
+    if not code:
+        result['error'] = "خطا در خواندن فایل"
+        return result
     
     token = extract_token(code)
     if not token:
@@ -744,7 +1050,6 @@ def build_bot_from_pending(file_id):
 # ==================== پیام همگانی ====================
 
 def send_broadcast(message_text, admin_id):
-    """ارسال پیام همگانی به همه کاربران"""
     users = get_all_users()
     sent_count = 0
     
@@ -752,11 +1057,17 @@ def send_broadcast(message_text, admin_id):
         try:
             bot.send_message(user_id, message_text)
             sent_count += 1
-            time.sleep(0.05)  # جلوگیری از محدودیت تلگرام
+            time.sleep(0.03)
         except:
             pass
     
-    save_broadcast_message(admin_id, message_text, sent_count)
+    with get_db() as conn:
+        conn.execute('''
+            INSERT INTO broadcast_messages (admin_id, message_text, sent_count, created_at)
+            VALUES (?, ?, ?, ?)
+        ''', (admin_id, message_text, sent_count, datetime.now().isoformat()))
+        conn.commit()
+    
     return sent_count
 
 # ==================== منوها ====================
@@ -802,8 +1113,10 @@ def cmd_start(message):
     user = get_user(user_id)
     referral_link = f"https://t.me/{bot_username}?start={user['referral_code']}" if user else ""
     
-    text = f"🚀 به ربات سازنده ربات خوش آمدید!\n\n🎁 لینک رفرال شما:\n{referral_link}"
-    bot.send_message(message.chat.id, text, reply_markup=get_main_menu(user_id))
+    welcome = texts.welcome_text.format(bot_username)
+    welcome += f"\n\n🎁 لینک رفرال شما:\n{referral_link}"
+    
+    bot.send_message(message.chat.id, welcome, reply_markup=get_main_menu(user_id))
 
 @bot.message_handler(func=lambda m: m.text == '🛒 خرید اشتراک')
 def buy_subscription(message):
@@ -819,17 +1132,11 @@ def buy_subscription(message):
         bot.send_message(message.chat.id, "❌ خطا")
         return
     
-    text = f"""💰 خرید اشتراک
-
-مبلغ: {config.price:,} تومان
-کارت: {config.card_number}
-به نام: {config.card_holder}
-
-🆔 کد: `{sub_code}`
-
-پس از واریز، تصویر فیش را ارسال کنید."""
+    subscription_text = texts.subscription_text.format(
+        config.price, config.card_number, config.card_holder, sub_code, config.subscription_days
+    )
     
-    bot.send_message(message.chat.id, text, parse_mode="Markdown")
+    bot.send_message(message.chat.id, subscription_text, parse_mode="Markdown")
 
 @bot.message_handler(content_types=['photo'])
 def handle_receipt(message):
@@ -883,7 +1190,7 @@ def send_bot_file(message):
         bot.send_message(message.chat.id, "❌ قبلاً با این اشتراک ربات ساخته‌اید!")
         return
     
-    bot.send_message(message.chat.id, "📤 فایل `.py` خود را ارسال کنید.\n\n✅ پس از تایید ادمین، ربات ساخته می‌شود.")
+    bot.send_message(message.chat.id, "📤 فایل `.py` یا `.zip` خود را ارسال کنید.\n\n✅ پس از تایید ادمین، ربات ساخته می‌شود.\n📦 در صورت ZIP، تمام فایل‌ها استخراج می‌شوند.")
 
 @bot.message_handler(content_types=['document'])
 def handle_bot_file(message):
@@ -898,12 +1205,12 @@ def handle_bot_file(message):
         return
     
     file_name = message.document.file_name
-    if not file_name.endswith('.py'):
-        bot.reply_to(message, "❌ فقط فایل `.py` مجاز است!")
+    if not (file_name.endswith('.py') or file_name.endswith('.zip')):
+        bot.reply_to(message, "❌ فقط فایل `.py` یا `.zip` مجاز است!")
         return
     
-    if message.document.file_size > 10 * 1024 * 1024:
-        bot.reply_to(message, "❌ حجم بیشتر از ۱۰ مگابایت!")
+    if message.document.file_size > 20 * 1024 * 1024:
+        bot.reply_to(message, "❌ حجم بیشتر از ۲۰ مگابایت!")
         return
     
     try:
@@ -994,7 +1301,6 @@ def enable_user_bot(call):
         bot.answer_callback_query(call.id, "❌ ربات پیدا نشد!")
         return
     
-    # بررسی اینکه اشتراک هنوز فعال هست یا نه
     days_left = get_subscription_days_left(user_id)
     if days_left <= 0:
         bot.answer_callback_query(call.id, "❌ اشتراک شما منقضی شده است!")
@@ -1083,7 +1389,9 @@ def process_withdraw(message):
 
 @bot.message_handler(func=lambda m: m.text == '📚 راهنما')
 def guide(message):
-    bot.send_message(message.chat.id, f"📚 راهنما\n\n💰 قیمت: {config.price:,} تومان\n💳 کارت: {config.card_number}\n👤 {config.card_holder}\n\n📌 هر اشتراک = ۱ ربات\n🎁 ۱۰٪ پاداش رفرال")
+    bot_username = bot.get_me().username
+    guide_text = texts.guide_text.format(config.price, config.card_number, config.card_holder, bot_username)
+    bot.send_message(message.chat.id, guide_text)
 
 @bot.message_handler(func=lambda m: m.text == '📞 پشتیبانی')
 def support(message):
@@ -1108,13 +1416,15 @@ def admin_panel(message):
         total_load = conn.execute('SELECT SUM(current_load) FROM servers').fetchone()[0] or 0
         max_load = conn.execute('SELECT SUM(max_load) FROM servers').fetchone()[0] or 0
         total_users = conn.execute('SELECT COUNT(*) FROM users').fetchone()[0]
+        queue_size = conn.execute('SELECT COUNT(*) FROM build_queue WHERE status = "pending"').fetchone()[0]
     
     text = f"👑 پنل ادمین\n\n"
     text += f"👥 کاربران: {total_users}\n"
     text += f"📸 فیش: {pending_payments}\n"
     text += f"📥 فایل: {pending_files}\n"
     text += f"🖥️ سرور: {servers_count}\n"
-    text += f"📊 بار: {total_load}/{max_load}"
+    text += f"📊 بار: {total_load}/{max_load}\n"
+    text += f"⏳ صف ساخت: {queue_size}"
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
@@ -1124,11 +1434,84 @@ def admin_panel(message):
         types.InlineKeyboardButton("➕ سرور جدید", callback_data="admin_add_server"),
         types.InlineKeyboardButton("💰 برداشت‌ها", callback_data="admin_withdraws"),
         types.InlineKeyboardButton("📢 پیام همگانی", callback_data="admin_broadcast"),
+        types.InlineKeyboardButton("📝 تنظیم متون", callback_data="admin_texts"),
         types.InlineKeyboardButton("⚙️ تنظیمات", callback_data="admin_settings"),
         types.InlineKeyboardButton("🎁 تایید اشتراک", callback_data="admin_manual_sub")
     )
     
     bot.send_message(message.chat.id, text, reply_markup=markup)
+
+# ==================== تنظیم متون ====================
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_texts")
+def admin_texts(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton("📝 متن خوش‌آمدگویی", callback_data="edit_welcome"),
+        types.InlineKeyboardButton("💰 متن خرید اشتراک", callback_data="edit_subscription"),
+        types.InlineKeyboardButton("📚 متن راهنما", callback_data="edit_guide"),
+        types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back")
+    )
+    
+    bot.edit_message_text(
+        "📝 **مدیریت متون**\n\n"
+        "هر کدام از متون زیر را می‌توانید تغییر دهید:\n\n"
+        "🔹 متن خوش‌آمدگویی - هنگام استارت\n"
+        "🔹 متن خرید اشتراک - هنگام درخواست اشتراک\n"
+        "🔹 متن راهنما - هنگام درخواست راهنما",
+        call.message.chat.id,
+        call.message.message_id,
+        parse_mode="Markdown",
+        reply_markup=markup
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data == "edit_welcome")
+def edit_welcome(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    msg = bot.send_message(call.message.chat.id, "📝 متن جدید خوش‌آمدگویی را ارسال کنید:\n(از {} برای نام ربات استفاده کنید)\n\nمتن فعلی:\n" + texts.welcome_text[:200])
+    bot.register_next_step_handler(msg, save_welcome_text)
+
+def save_welcome_text(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    texts.welcome_text = message.text
+    texts.save_to_db()
+    bot.reply_to(message, "✅ متن خوش‌آمدگویی تغییر کرد!")
+
+@bot.callback_query_handler(func=lambda call: call.data == "edit_subscription")
+def edit_subscription(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    msg = bot.send_message(call.message.chat.id, "💰 متن جدید خرید اشتراک را ارسال کنید:\n(از {} برای قیمت، {} برای کارت، {} برای صاحب کارت، {} برای کد، {} برای مدت استفاده کنید)\n\nمتن فعلی:\n" + texts.subscription_text[:200])
+    bot.register_next_step_handler(msg, save_subscription_text)
+
+def save_subscription_text(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    texts.subscription_text = message.text
+    texts.save_to_db()
+    bot.reply_to(message, "✅ متن خرید اشتراک تغییر کرد!")
+
+@bot.callback_query_handler(func=lambda call: call.data == "edit_guide")
+def edit_guide(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    msg = bot.send_message(call.message.chat.id, "📚 متن جدید راهنما را ارسال کنید:\n(از {} برای قیمت، {} برای کارت، {} برای صاحب کارت، {} برای نام ربات استفاده کنید)\n\nمتن فعلی:\n" + texts.guide_text[:200])
+    bot.register_next_step_handler(msg, save_guide_text)
+
+def save_guide_text(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    texts.guide_text = message.text
+    texts.save_to_db()
+    bot.reply_to(message, "✅ متن راهنما تغییر کرد!")
 
 # ==================== پیام همگانی ====================
 
@@ -1234,18 +1617,28 @@ def build_file(call):
     
     file_id = int(call.data.replace('build_file_', ''))
     
-    bot.edit_message_caption("🔄 در حال ساخت ربات...", call.message.chat.id, call.message.message_id)
+    bot.edit_message_caption("🔄 در حال اضافه کردن به صف ساخت...", call.message.chat.id, call.message.message_id)
     
-    result = build_bot_from_pending(file_id)
+    # اضافه کردن به صف
+    queue_id = add_to_build_queue(file_id, call.from_user.id)
     
-    if result['success']:
+    if queue_id:
         bot.edit_message_caption(
-            f"✅ ربات ساخته شد!\n🤖 {result['name']}\n🔗 https://t.me/{result['username']}",
+            f"✅ فایل به صف ساخت اضافه شد (شماره {queue_id})\n⏳ به زودی ساخته می‌شود.",
             call.message.chat.id,
             call.message.message_id
         )
     else:
-        bot.edit_message_caption(f"❌ خطا: {result['error']}", call.message.chat.id, call.message.message_id)
+        # اگر صف در دسترس نبود، مستقیم بساز
+        result = build_bot_from_pending(file_id)
+        if result['success']:
+            bot.edit_message_caption(
+                f"✅ ربات ساخته شد!\n🤖 {result['name']}\n🔗 https://t.me/{result['username']}",
+                call.message.chat.id,
+                call.message.message_id
+            )
+        else:
+            bot.edit_message_caption(f"❌ خطا: {result['error']}", call.message.chat.id, call.message.message_id)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('delete_file_'))
 def delete_file(call):
@@ -1406,6 +1799,8 @@ def set_config(message, key, cast):
         setattr(config, key, val)
         config.save_to_db()
         bot.reply_to(message, f"✅ {key} تغییر کرد")
+        # پاک کردن کش
+        cache_delete(f"config_{key}")
     except:
         bot.reply_to(message, "❌ خطا")
 
@@ -1452,7 +1847,6 @@ def check_expired():
                 for user in expired:
                     conn.execute('UPDATE users SET active_subscription = 0 WHERE user_id = ?', (user['user_id'],))
                     
-                    # توقف ربات‌های منقضی شده
                     bots = conn.execute('SELECT id, server_id FROM bots WHERE user_id = ? AND status != "deleted"', (user['user_id'],)).fetchall()
                     for bot in bots:
                         if bot['server_id'] and bot['server_id'] != 0:
@@ -1467,8 +1861,11 @@ def check_expired():
                         bot.send_message(user['user_id'], "❌ اشتراک شما منقضی شد!\nربات شما غیرفعال شد.\nبرای ادامه، اشتراک جدید بخرید.")
                     except:
                         pass
+                    
+                    cache_delete(f"subscription_{user['user_id']}")
+                    cache_delete(f"days_left_{user['user_id']}")
                 
-                # هشدار به کاربرانی که ۳ روز مونده
+                # هشدار 3 روز مونده
                 warning = conn.execute('''
                     SELECT user_id, subscription_expire FROM users 
                     WHERE active_subscription = 1 
@@ -1493,11 +1890,13 @@ def check_expired():
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("🚀 ربات مادر نسخه نهایی 13.0")
+    print("🚀 ربات مادر نسخه نهایی 14.0")
     print("=" * 60)
     print(f"✅ ادمین: {ADMIN_IDS}")
     print(f"✅ قیمت: {config.price:,} تومان")
     print(f"✅ مدت اشتراک: {config.subscription_days} روز")
+    print(f"✅ Redis: {'فعال' if REDIS_AVAILABLE else 'غیرفعال'}")
+    print(f"✅ صف ساخت: فعال")
     print("=" * 60)
     print("🟢 ربات در حال اجراست...")
     print("=" * 60)
