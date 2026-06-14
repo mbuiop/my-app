@@ -54,8 +54,8 @@ for dir_path in [DB_DIR, FILES_DIR, RUNNING_DIR, LOGS_DIR, RECEIPTS_DIR,
     os.makedirs(dir_path, exist_ok=True)
 
 # ==================== توکن و تنظیمات ====================
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-ADMIN_IDS = [int(x.strip()) for x in os.environ.get("ADMIN_IDS", "YOUR_ADMIN_ID").split(",")]
+BOT_TOKEN = os.environ.get("7685135237:AAEmsHktRw9cEqrHTkCoPZk-fBimK7TDjOo", "7685135237:AAEmsHktRw9cEqrHTkCoPZk-fBimK7TDjOo")
+ADMIN_IDS = [int(x.strip()) for x in os.environ.get("327855654", "327855654").split(",")]
 
 PRICE = 200000
 CARD_NUMBER = "5892101187322777"
