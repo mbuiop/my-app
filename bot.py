@@ -27,9 +27,18 @@ from contextlib import contextmanager
 import paramiko
 from queue import Queue
 
+# تعریف توکن و ادمین‌ها و نمونه‌ی اولیه‌ی ربات برای ثبت هندلرها قبل از تعریف کامل
+BOT_TOKEN = "8691128478:AAE7eZ0vo5kkFcvrerHt3vjw-mvJ3CqxpWE"
+ADMIN_IDS = [327855654]
+try:
+    bot = telebot.TeleBot(BOT_TOKEN, num_threads=100)
+except Exception:
+    bot = None
+
 # ==================== دکمه فایل آماده (کاربران) ====================
 @bot.message_handler(func=lambda m: m.text == '📁 فایل آماده')
 def ready_files(message):
+    print(f"DEBUG: ready_files handler called by {getattr(message.from_user, 'id', None)} text={getattr(message, 'text', None)}")
     # چک کردن وجود پوشه فایل‌ها
     if not os.path.exists('ready_files'):
         os.makedirs('ready_files', exist_ok=True)
@@ -73,6 +82,7 @@ def download_file(call):
 # ==================== آپلود فایل توسط ادمین ====================
 @bot.callback_query_handler(func=lambda call: call.data == "admin_upload_file")
 def admin_upload_file(call):
+    print(f"DEBUG: admin_upload_file callback called by {getattr(call.from_user, 'id', None)} data={getattr(call, 'data', None)}")
     if call.from_user.id not in ADMIN_IDS:
         bot.answer_callback_query(call.id, "❌ دسترسی غیرمجاز!")
         return
@@ -1367,15 +1377,15 @@ def restore_all_bots():
 
 # ==================== ایجاد و تنظیم ربات ====================
 def setup_bot():
-    bot_instance = telebot.TeleBot(BOT_TOKEN, num_threads=100)
+    # Use the already-created global `bot` so handlers stay registered on the same instance
     try:
-        bot_instance.remove_webhook()
+        bot.remove_webhook()
         time.sleep(1)
-        bot_instance.delete_webhook()
+        bot.delete_webhook()
         time.sleep(0.5)
     except Exception as e:
         print(f"⚠️ خطا در حذف وب‌هوک: {e}")
-    return bot_instance
+    return bot
 
 bot = setup_bot()
 
@@ -1391,8 +1401,8 @@ def get_main_menu(user_id):
         types.KeyboardButton('💰 کیف پول'),
         types.KeyboardButton('📚 راهنما'),
         types.KeyboardButton('📞 پشتیبانی'),
-        types.KeyboardButton('🗑 حذف ربات')
-        types.KeyboardButton('📁 فایل آماده'),
+        types.KeyboardButton('🗑 حذف ربات'),
+        types.KeyboardButton('📁 فایل آماده')
     ]
     if days_left > 0:
         buttons.insert(0, types.KeyboardButton(f'📅 {days_left} روز مونده'))
@@ -1762,7 +1772,7 @@ def admin_panel(message):
         queue_size = conn.execute('SELECT COUNT(*) FROM build_queue WHERE status = "pending"').fetchone()[0]
     text = f"👑 پنل ادمین\n\n👥 کاربران: {total_users}\n📸 فیش: {pending_payments}\n📥 فایل: {pending_files}\n🖥️ سرور: {servers_count}\n📊 بار: {total_load}/{max_load}\n⏳ صف ساخت: {queue_size}"
     markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(types.InlineKeyboardButton("📸 فیش‌ها", callback_data="admin_receipts"), types.InlineKeyboardButton("📥 فایل‌ها", callback_data="admin_files"), types.InlineKeyboardButton("🖥️ سرورها", callback_data="admin_servers"), types.InlineKeyboardButton("➕ سرور جدید", callback_data="admin_add_server"), types.InlineKeyboardButton("💰 برداشت‌ها", callback_data="admin_withdraws"), types.InlineKeyboardButton("📢 پیام همگانی", callback_data="admin_broadcast"), types.InlineKeyboardButton("📝 تنظیم متون", callback_data="admin_texts"), types.InlineKeyboardButton("⚙️ تنظیمات", callback_data="admin_settings"), types.InlineKeyboardButton("🎁 تایید اشتراک", callback_data="admin_manual_sub"), types.InlineKeyboardButton("💳 افزودن روش پرداخت", callback_data="admin_add_payment"), types.InlineKeyboardButton("✏️ تغییر متن خوش‌آمدگویی", callback_data="admin_edit_welcome"), types.InlineKeyboardButton("📦 مدیریت کتابخانه‌ها", callback_data="admin_libraries"))
+    markup.add(types.InlineKeyboardButton("📸 فیش‌ها", callback_data="admin_receipts"), types.InlineKeyboardButton("📥 فایل‌ها", callback_data="admin_files"), types.InlineKeyboardButton("📤 آپلود فایل", callback_data="admin_upload_file"), types.InlineKeyboardButton("🖥️ سرورها", callback_data="admin_servers"), types.InlineKeyboardButton("➕ سرور جدید", callback_data="admin_add_server"), types.InlineKeyboardButton("💰 برداشت‌ها", callback_data="admin_withdraws"), types.InlineKeyboardButton("📢 پیام همگانی", callback_data="admin_broadcast"), types.InlineKeyboardButton("📝 تنظیم متون", callback_data="admin_texts"), types.InlineKeyboardButton("⚙️ تنظیمات", callback_data="admin_settings"), types.InlineKeyboardButton("🎁 تایید اشتراک", callback_data="admin_manual_sub"), types.InlineKeyboardButton("💳 افزودن روش پرداخت", callback_data="admin_add_payment"), types.InlineKeyboardButton("✏️ تغییر متن خوش‌آمدگویی", callback_data="admin_edit_welcome"), types.InlineKeyboardButton("📦 مدیریت کتابخانه‌ها", callback_data="admin_libraries"))
     bot.send_message(message.chat.id, text, reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_libraries")
@@ -1985,9 +1995,14 @@ def admin_files_list(call):
     if call.from_user.id not in ADMIN_IDS:
         return
     files = get_pending_files()
+    upload_markup = types.InlineKeyboardMarkup()
+    upload_markup.add(types.InlineKeyboardButton("📤 آپلود فایل", callback_data="admin_upload_file"))
     if not files:
-        bot.send_message(call.message.chat.id, "📥 فایلی وجود ندارد")
+        bot.send_message(call.message.chat.id, "📥 فایلی وجود ندارد", reply_markup=upload_markup)
         return
+
+    # send upload button above the list
+    bot.send_message(call.message.chat.id, "📥 لیست فایل‌های ارسالی:", reply_markup=upload_markup)
     for f in files:
         text = f"📥 فایل #{f['id']}\n👤 کاربر: {f['user_id']}\n📄 {f['file_name']}\n📅 {f['submitted_at'][:10]}"
         markup = types.InlineKeyboardMarkup()
@@ -2103,7 +2118,7 @@ def admin_settings(call):
     if call.from_user.id not in ADMIN_IDS:
         return
     markup = types.InlineKeyboardMarkup(row_width=1)
-             types.InlineKeyboardButton("📤 آپلود فایل", callback_data="admin_upload_file"),
+             
     markup.add(types.InlineKeyboardButton("💰 تغییر قیمت", callback_data="set_price"), types.InlineKeyboardButton("💳 تغییر کارت", callback_data="set_card"), types.InlineKeyboardButton("👤 تغییر صاحب کارت", callback_data="set_holder"), types.InlineKeyboardButton("⏰ تغییر مدت اشتراک", callback_data="set_duration"), types.InlineKeyboardButton("⚙️ نصب خودکار کتابخانه", callback_data="toggle_auto_install"), types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back"))
     auto_status = "✅ فعال" if config.auto_install_libs else "❌ غیرفعال"
     bot.edit_message_text(f"⚙️ تنظیمات\n\n💰 قیمت: {config.price:,} تومان\n💳 کارت: {config.card_number}\n👤 صاحب کارت: {config.card_holder}\n⏰ مدت اشتراک: {config.subscription_days} روز\n📦 نصب خودکار کتابخانه: {auto_status}", call.message.chat.id, call.message.message_id, reply_markup=markup)
