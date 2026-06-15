@@ -27,6 +27,26 @@ from contextlib import contextmanager
 import paramiko
 from queue import Queue
 
+
+def safe_edit_message(chat_id, message_id, text, parse_mode=None, reply_markup=None):
+    """ویرایش امن پیام بدون خطای تکرار محتوا"""
+    try:
+        if not message_id:
+            return False
+        bot.edit_message_text(text, chat_id, message_id, parse_mode=parse_mode, reply_markup=reply_markup)
+        return True
+    except telebot.apihelper.ApiTelegramException as e:
+        if "message is not modified" in str(e) or "can't parse entities" in str(e):
+            return False
+        elif "message to edit not found" in str(e):
+            return False
+        else:
+            logger.warning(f"خطا در ویرایش پیام: {e}")
+            return False
+    except Exception as e:
+        logger.warning(f"خطای غیرمنتظره: {e}")
+        return False
+
 # ==================== فایل PID ====================
 PID_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot.pid")
 
@@ -1137,12 +1157,21 @@ def update_countdown(chat_id, message_id, queue_id, start_time):
         elapsed = (datetime.now() - created_at).total_seconds()
         
         if elapsed >= 60:
-            bot.edit_message_text("🔄 **در حال ساخت ربات...**\n\n⏳ زمان ساخت به پایان رسید!\n📦 در حال نصب کتابخانه‌ها و اجرا...", chat_id, message_id, parse_mode="Markdown")
+            try:
+                bot.send_message(chat_id, "🔄 **در حال ساخت ربات...**\n\n⏳ زمان ساخت به پایان رسید!\n📦 در حال نصب کتابخانه‌ها و اجرا...", parse_mode="Markdown")
+            except:
+                bot.send_message(chat_id, "🔄 در حال ساخت ربات... زمان ساخت به پایان رسید! در حال نصب کتابخانه‌ها و اجرا...")
+            
             result = build_bot_from_pending(queue_item['file_id'], queue_id, chat_id)
+            
             if result['success']:
-                bot.edit_message_text(f"✅ **ربات با موفقیت ساخته شد!**\n\n🤖 نام: {result['name']}\n🔗 لینک: https://t.me/{result['username']}\n🆔 آیدی: `{result['bot_id']}`\n\n🎉 ربات شما آماده استفاده است!", chat_id, message_id, parse_mode="Markdown")
+                try:
+                    bot.send_message(chat_id, f"✅ **ربات با موفقیت ساخته شد!**\n\n🤖 نام: {result['name']}\n🔗 لینک: https://t.me/{result['username']}\n🆔 آیدی: `{result['bot_id']}`\n\n🎉 ربات شما آماده استفاده است!", parse_mode="Markdown")
+                except:
+                    bot.send_message(chat_id, f"✅ ربات با موفقیت ساخته شد!\n\n🤖 نام: {result['name']}\n🔗 لینک: https://t.me/{result['username']}\n\n🎉 ربات شما آماده استفاده است!")
             else:
-                bot.edit_message_text(f"❌ **خطا در ساخت ربات!**\n\n⚠️ خطا: {result['error'][:200]}\n\nلطفاً با پشتیبانی تماس بگیرید.", chat_id, message_id, parse_mode="Markdown")
+                bot.send_message(chat_id, f"❌ **خطا در ساخت ربات!**\n\n⚠️ خطا: {result['error'][:200]}\n\nلطفاً با پشتیبانی تماس بگیرید.")
+            
             if queue_id in active_builds:
                 del active_builds[queue_id]
             return
@@ -1153,12 +1182,12 @@ def update_countdown(chat_id, message_id, queue_id, start_time):
         progress = int((elapsed / 60) * 20)
         bar = "█" * progress + "░" * (20 - progress)
         
-        try:
-            bot.edit_message_text(f"🔄 **ساخت ربات در صف انتظار**\n\n📊 وضعیت: در حال آماده‌سازی\n⏳ زمان باقی‌مانده: {minutes:02d}:{seconds:02d}\n\n`[{bar}]`\n\n🔍 در حال بررسی و نصب کتابخانه‌های مورد نیاز...\n📦 پس از اتمام زمان، ربات شما ساخته می‌شود.\n🙏 لطفاً شکیبا باشید...", chat_id, message_id, parse_mode="Markdown")
-        except:
-            pass
+        text = f"🔄 **ساخت ربات در صف انتظار**\n\n📊 وضعیت: در حال آماده‌سازی\n⏳ زمان باقی‌مانده: {minutes:02d}:{seconds:02d}\n\n[{bar}]\n\n🔍 در حال بررسی و نصب کتابخانه‌های مورد نیاز...\n📦 پس از اتمام زمان، ربات شما ساخته می‌شود.\n🙏 لطفاً شکیبا باشید..."
+        
+        safe_edit_message(chat_id, message_id, text, parse_mode="Markdown")
         
         threading.Timer(1.0, update_countdown, args=(chat_id, message_id, queue_id, start_time)).start()
+        
     except Exception as e:
         logger.error(f"update_countdown error: {e}")
 
