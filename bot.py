@@ -27,7 +27,104 @@ from contextlib import contextmanager
 import paramiko
 from queue import Queue
 
+# ==================== دکمه فایل آماده (کاربران) ====================
+@bot.message_handler(func=lambda m: m.text == '📁 فایل آماده')
+def ready_files(message):
+    # چک کردن وجود پوشه فایل‌ها
+    if not os.path.exists('ready_files'):
+        os.makedirs('ready_files', exist_ok=True)
+    
+    # گرفتن لیست فایل‌های آپلود شده
+    files = [f for f in os.listdir('ready_files') if f.endswith(('.py', '.zip'))]
+    
+    if not files:
+        bot.send_message(message.chat.id, 
+            "📁 **فایل آماده**\n\nهیچ فایلی موجود نیست.\nبه زودی اضافه می‌شود.", 
+            parse_mode="Markdown")
+        return
+    
+    # ساختن منوی فایل‌ها
+    text = "📁 **فایل‌های آماده ربات**\n\nلطفاً فایل مورد نظر را انتخاب کنید:\n\n"
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    
+    for f in files:
+        name = f.replace('.py', '').replace('.zip', '').replace('_', ' ')
+        markup.add(types.InlineKeyboardButton(f"📥 {name}", callback_data=f"download_{f}"))
+    
+    bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
 
+
+# ==================== دانلود فایل توسط کاربر ====================
+@bot.callback_query_handler(func=lambda call: call.data.startswith('download_'))
+def download_file(call):
+    file_name = call.data.replace('download_', '')
+    file_path = os.path.join('ready_files', file_name)
+    
+    if os.path.exists(file_path):
+        with open(file_path, 'rb') as f:
+            bot.send_document(call.message.chat.id, f, 
+                caption=f"📁 **{file_name}**\n\n✅ فایل آماده دانلود است.\n\n📌 توکن ربات خود را جایگزین کنید.",
+                parse_mode="Markdown")
+        bot.answer_callback_query(call.id, "✅ فایل ارسال شد!")
+    else:
+        bot.answer_callback_query(call.id, "❌ فایل یافت نشد!")
+
+
+# ==================== آپلود فایل توسط ادمین ====================
+@bot.callback_query_handler(func=lambda call: call.data == "admin_upload_file")
+def admin_upload_file(call):
+    if call.from_user.id not in ADMIN_IDS:
+        bot.answer_callback_query(call.id, "❌ دسترسی غیرمجاز!")
+        return
+    
+    msg = bot.send_message(call.message.chat.id, 
+        "📤 **آپلود فایل آماده**\n\n"
+        "فایل `.py` یا `.zip` خود را ارسال کنید.\n\n"
+        "📌 این فایل در بخش «📁 فایل آماده» به کاربران نمایش داده می‌شود.")
+    
+    bot.register_next_step_handler(msg, save_uploaded_file)
+
+
+def save_uploaded_file(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    if not message.document:
+        bot.reply_to(message, "❌ لطفاً یک فایل ارسال کنید!")
+        return
+    
+    file = message.document
+    if not (file.file_name.endswith('.py') or file.file_name.endswith('.zip')):
+        bot.reply_to(message, "❌ فقط فایل `.py` یا `.zip` مجاز است!")
+        return
+    
+    if file.file_size > 20 * 1024 * 1024:
+        bot.reply_to(message, "❌ حجم فایل بیشتر از ۲۰ مگابایت است!")
+        return
+    
+    try:
+        # ساخت پوشه ready_files
+        os.makedirs('ready_files', exist_ok=True)
+        
+        # دانلود و ذخیره فایل
+        file_info = bot.get_file(file.file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        
+        # پاک کردن کاراکترهای مشکل‌دار از نام فایل
+        safe_name = file.file_name.replace(' ', '_').replace('(', '').replace(')', '')
+        file_path = os.path.join('ready_files', safe_name)
+        
+        with open(file_path, 'wb') as f:
+            f.write(downloaded_file)
+        
+        bot.reply_to(message, 
+            f"✅ **فایل با موفقیت آپلود شد!**\n\n"
+            f"📄 نام فایل: `{safe_name}`\n\n"
+            f"📌 کاربران می‌توانند از منوی «📁 فایل آماده» آن را دانلود کنند.",
+            parse_mode="Markdown")
+        
+    except Exception as e:
+        bot.reply_to(message, f"❌ خطا در آپلود: {str(e)}")
 def safe_edit_message(chat_id, message_id, text, parse_mode=None, reply_markup=None):
     """ویرایش امن پیام بدون خطای تکرار محتوا"""
     try:
@@ -1295,6 +1392,7 @@ def get_main_menu(user_id):
         types.KeyboardButton('📚 راهنما'),
         types.KeyboardButton('📞 پشتیبانی'),
         types.KeyboardButton('🗑 حذف ربات')
+        types.KeyboardButton('📁 فایل آماده'),
     ]
     if days_left > 0:
         buttons.insert(0, types.KeyboardButton(f'📅 {days_left} روز مونده'))
@@ -2005,6 +2103,7 @@ def admin_settings(call):
     if call.from_user.id not in ADMIN_IDS:
         return
     markup = types.InlineKeyboardMarkup(row_width=1)
+             types.InlineKeyboardButton("📤 آپلود فایل", callback_data="admin_upload_file"),
     markup.add(types.InlineKeyboardButton("💰 تغییر قیمت", callback_data="set_price"), types.InlineKeyboardButton("💳 تغییر کارت", callback_data="set_card"), types.InlineKeyboardButton("👤 تغییر صاحب کارت", callback_data="set_holder"), types.InlineKeyboardButton("⏰ تغییر مدت اشتراک", callback_data="set_duration"), types.InlineKeyboardButton("⚙️ نصب خودکار کتابخانه", callback_data="toggle_auto_install"), types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back"))
     auto_status = "✅ فعال" if config.auto_install_libs else "❌ غیرفعال"
     bot.edit_message_text(f"⚙️ تنظیمات\n\n💰 قیمت: {config.price:,} تومان\n💳 کارت: {config.card_number}\n👤 صاحب کارت: {config.card_holder}\n⏰ مدت اشتراک: {config.subscription_days} روز\n📦 نصب خودکار کتابخانه: {auto_status}", call.message.chat.id, call.message.message_id, reply_markup=markup)
