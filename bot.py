@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-ربات مادر نهایی نسخه 18.0 - با سیستم نصب تضمینی کتابخانه‌ها
+ربات مادر نهایی نسخه 19.0 - نصب هوشمند و تضمینی تمام کتابخانه‌ها
 """
 
 import telebot
@@ -63,7 +63,7 @@ for dir_path in [DB_DIR, FILES_DIR, RUNNING_DIR, LOGS_DIR, RECEIPTS_DIR, PENDING
     os.makedirs(dir_path, exist_ok=True)
 
 # ==================== توکن ربات مادر ====================
-BOT_TOKEN = "8787172986:AAHtlVXWZTTFUrvWc0OcVI-CehKxkPmF7nA"
+BOT_TOKEN = "7685135237:AAEmsHktRw9cEqrHTkCoPZk-fBimK7TDjOo"
 
 # ==================== آیدی ادمین ====================
 ADMIN_IDS = [327855654]
@@ -73,44 +73,69 @@ build_queue = Queue()
 queue_thread_running = True
 active_builds = {}
 
-# لیست کامل کتابخانه‌های پرکاربرد با نام صحیح نصب
-COMMON_LIBRARIES = {
+# ==================== دیتابیس کامل کتابخانه‌ها ====================
+LIBRARY_MAPPING = {
+    # کتابخانه‌های تلگرام
     "telebot": "pyTelegramBotAPI",
     "pyTelegramBotAPI": "pyTelegramBotAPI",
     "telethon": "telethon",
     "pyrogram": "pyrogram",
     "aiogram": "aiogram",
+    "python-telegram-bot": "python-telegram-bot",
+    "telegram": "python-telegram-bot",
+    "telegram.ext": "python-telegram-bot",
+    "telegram.bot": "python-telegram-bot",
+    
+    # کتابخانه‌های وب
     "requests": "requests",
+    "aiohttp": "aiohttp",
+    "httpx": "httpx",
+    "urllib3": "urllib3",
+    
+    # کتابخانه‌های پردازش داده
+    "numpy": "numpy",
+    "pandas": "pandas",
+    "scipy": "scipy",
+    "scikit-learn": "scikit-learn",
+    "sklearn": "scikit-learn",
+    
+    # کتابخانه‌های گرافیکی
+    "matplotlib": "matplotlib",
+    "seaborn": "seaborn",
+    "plotly": "plotly",
+    "PIL": "Pillow",
+    "Pillow": "Pillow",
+    "opencv-python": "opencv-python",
+    "cv2": "opencv-python",
+    
+    # کتابخانه‌های وب اسکرپینگ
     "beautifulsoup4": "beautifulsoup4",
     "bs4": "beautifulsoup4",
     "lxml": "lxml",
     "selenium": "selenium",
-    "numpy": "numpy",
-    "pandas": "pandas",
-    "matplotlib": "matplotlib",
-    "seaborn": "seaborn",
-    "scikit-learn": "scikit-learn",
-    "scipy": "scipy",
-    "opencv-python": "opencv-python",
-    "cv2": "opencv-python",
-    "Pillow": "Pillow",
-    "PIL": "Pillow",
-    "flask": "flask",
-    "django": "django",
-    "fastapi": "fastapi",
-    "uvicorn": "uvicorn",
+    "scrapy": "scrapy",
+    
+    # کتابخانه‌های دیتابیس
     "sqlalchemy": "sqlalchemy",
     "pymongo": "pymongo",
     "redis": "redis",
+    "psycopg2": "psycopg2-binary",
+    "psycopg2-binary": "psycopg2-binary",
+    
+    # کتابخانه‌های صف و پردازش
     "celery": "celery",
-    "aiohttp": "aiohttp",
-    "websockets": "websockets",
-    "paramiko": "paramiko",
+    "kafka-python": "kafka-python",
+    "rabbitmq": "pika",
+    "pika": "pika",
+    
+    # کتابخانه‌های امنیتی
     "cryptography": "cryptography",
+    "PyJWT": "PyJWT",
     "jwt": "PyJWT",
-    "python-jose": "python-jose",
     "passlib": "passlib",
     "bcrypt": "bcrypt",
+    
+    # کتابخانه‌های کاربردی
     "python-dotenv": "python-dotenv",
     "pyyaml": "pyyaml",
     "loguru": "loguru",
@@ -118,33 +143,73 @@ COMMON_LIBRARIES = {
     "tqdm": "tqdm",
     "click": "click",
     "colorama": "colorama",
-    "emoji": "emoji",
+    
+    # کتابخانه‌های فارسی
     "jdatetime": "jdatetime",
     "persiantools": "persiantools",
+    "persian": "persiantools",
+    "emoji": "emoji",
+    "hazm": "hazm",
+    
+    # کتابخانه‌های صوتی/تصویری
     "youtube-dl": "youtube-dl",
+    "yt-dlp": "yt-dlp",
     "pytube": "pytube",
     "spotipy": "spotipy",
+    "moviepy": "moviepy",
+    "pydub": "pydub",
+    "SpeechRecognition": "SpeechRecognition",
+    "speech_recognition": "SpeechRecognition",
+    "pyttsx3": "pyttsx3",
+    "ffmpeg-python": "ffmpeg-python",
+    
+    # کتابخانه‌های اکسل و گزارش
     "openpyxl": "openpyxl",
     "xlrd": "xlrd",
     "xlwt": "xlwt",
     "reportlab": "reportlab",
+    
+    # کتابخانه‌های QR و بارکد
     "qrcode": "qrcode",
-    "pillow": "Pillow",
-    "moviepy": "moviepy",
-    "pydub": "pydub",
-    "speechrecognition": "SpeechRecognition",
-    "pyttsx3": "pyttsx3",
-    "ffmpeg-python": "ffmpeg-python",
+    "pyqrcode": "pyqrcode",
+    
+    # کتابخانه‌های ایمیل
     "yagmail": "yagmail",
     "smtplib": "secure-smtplib",
-    "playwright": "playwright",
-    "scrapy": "scrapy",
+    
+    # کتابخانه‌های تست
     "pytest": "pytest",
+    "unittest": "unittest",  # استاندارد
     "black": "black",
-    "flake8": "flake8"
+    "flake8": "flake8",
+    "mypy": "mypy",
+    
+    # کتابخانه‌های فریمورک
+    "flask": "flask",
+    "django": "django",
+    "fastapi": "fastapi",
+    "uvicorn": "uvicorn",
+    "tornado": "tornado",
+    
+    # کتابخانه‌های async
+    "asyncio": "asyncio",  # استاندارد
+    "aiofiles": "aiofiles",
+    "websockets": "websockets",
+    
+    # کتابخانه‌های SSH و شبکه
+    "paramiko": "paramiko",
+    "scp": "scp",
+    "fabric": "fabric",
+    
+    # کتابخانه‌های سایر
+    "jinja2": "jinja2",
+    "markdown": "markdown",
+    "weasyprint": "weasyprint",
+    "playwright": "playwright",
+    "selenium": "selenium",
 }
 
-# کتابخانه‌های استاندارد پایتوت (نیاز به نصب ندارند)
+# کتابخانه‌های استاندارد پایتون (نیاز به نصب ندارند)
 STD_LIBRARIES = {
     'os', 'sys', 'time', 'datetime', 'json', 're', 'math', 'random',
     'string', 'collections', 'itertools', 'functools', 'typing',
@@ -156,8 +221,29 @@ STD_LIBRARIES = {
     'abc', 'enum', 'struct', 'array', 'queue', 'heapq', 'bisect',
     'calendar', 'uuid', 'secrets', 'statistics', 'dataclasses',
     'asyncio', 'concurrent', 'unittest', 'doctest', 'pdb',
-    'ctypes', 'gc', 'sysconfig', 'builtins', '__future__', '__main__'
+    'ctypes', 'gc', 'sysconfig', 'builtins', '__future__', '__main__',
+    'pathlib', 'io', 'codecs', 'tokenize', 'keyword', 'ast', 'symtable',
+    'pprint', 'reprlib', 'enum', 'weakref', 'copyreg', 'shelve',
+    'dbm', 'cProfile', 'profile', 'pstats', 'filecmp', 'linecache',
+    'textwrap', 'stringprep', 'readline', 'rlcompleter', 'telnetlib',
+    'curses', 'pty', 'tty', 'fcntl', 'pipes', 'posix', 'grp', 'pwd',
+    'spwd', 'resource', 'nis', 'termios', 'tty', 'syslog'
 }
+
+# لیست کتابخانه‌های محبوب برای نصب سریع
+POPULAR_LIBRARIES = [
+    "pyTelegramBotAPI", "python-telegram-bot", "telethon", "aiogram",
+    "requests", "aiohttp", "beautifulsoup4", "selenium",
+    "numpy", "pandas", "matplotlib", "seaborn",
+    "Pillow", "opencv-python", "moviepy",
+    "flask", "django", "fastapi",
+    "sqlalchemy", "pymongo", "redis",
+    "paramiko", "cryptography", "PyJWT",
+    "jdatetime", "persiantools", "emoji",
+    "youtube-dl", "pytube", "spotipy",
+    "openpyxl", "reportlab", "qrcode",
+    "loguru", "rich", "tqdm", "click"
+]
 
 # ==================== تنظیمات متون ====================
 class Texts:
@@ -576,72 +662,86 @@ def mark_library_installed(library_name, server_id=0):
     except:
         return False
 
-# ==================== سیستم تشخیص و نصب کتابخانه‌ها (تضمینی) ====================
+# ==================== سیستم نصب تضمینی کتابخانه‌ها ====================
 
 def get_pip_command():
     """دریافت دستور pip صحیح"""
     try:
-        # تست pip3
         result = subprocess.run(['pip3', '--version'], capture_output=True, text=True)
         if result.returncode == 0:
             return 'pip3'
     except:
         pass
-    
     try:
-        # تست pip
         result = subprocess.run(['pip', '--version'], capture_output=True, text=True)
         if result.returncode == 0:
             return 'pip'
     except:
         pass
-    
-    # استفاده از python -m pip
     return f'{sys.executable} -m pip'
+
+def get_correct_library_name(lib_name):
+    """دریافت نام صحیح کتابخانه برای نصب"""
+    lib_lower = lib_name.lower().strip()
+    
+    # بررسی مستقیم
+    if lib_lower in LIBRARY_MAPPING:
+        return LIBRARY_MAPPING[lib_lower]
+    
+    # بررسی با حذف underscore و dash
+    for key, value in LIBRARY_MAPPING.items():
+        if key.lower().replace('_', '').replace('-', '') == lib_lower.replace('_', '').replace('-', ''):
+            return value
+    
+    # بررسی جزئی
+    if 'telegram' in lib_lower or 'bot' in lib_lower:
+        if 'python-telegram-bot' not in lib_lower:
+            return 'python-telegram-bot'
+    elif 'telebot' in lib_lower:
+        return 'pyTelegramBotAPI'
+    elif 'beautifulsoup' in lib_lower or 'bs4' in lib_lower:
+        return 'beautifulsoup4'
+    elif 'cv2' in lib_lower or 'opencv' in lib_lower:
+        return 'opencv-python'
+    elif 'pil' in lib_lower:
+        return 'Pillow'
+    elif 'sklearn' in lib_lower:
+        return 'scikit-learn'
+    
+    return lib_name
 
 def install_library_with_retry(library_name, max_retries=3):
     """نصب کتابخانه با تلاش مجدد - تضمینی"""
+    correct_name = get_correct_library_name(library_name)
     pip_cmd = get_pip_command()
-    libs_to_try = [library_name]
-    
-    # بررسی نام صحیح کتابخانه
-    if library_name in COMMON_LIBRARIES:
-        correct_name = COMMON_LIBRARIES[library_name]
-        if correct_name != library_name:
-            libs_to_try.append(correct_name)
-    
-    # اگر کتابخانه مربوط به telebot است
-    if 'telebot' in library_name.lower() or library_name == 'pyTelegramBotAPI':
-        libs_to_try = ['pyTelegramBotAPI', 'telebot']
-    
-    # حذف تکراری
-    libs_to_try = list(dict.fromkeys(libs_to_try))
     
     for retry in range(max_retries):
-        for lib in libs_to_try:
-            try:
-                # بررسی نصب بودن
-                check = subprocess.run(f'{pip_cmd} show {lib}', shell=True, capture_output=True, text=True)
-                if check.returncode == 0 and check.stdout:
-                    logger.info(f"کتابخانه {lib} قبلاً نصب شده است")
-                    return True, lib
+        try:
+            # بررسی نصب بودن
+            check = subprocess.run(f'{pip_cmd} show {correct_name} 2>/dev/null | grep Name', shell=True, capture_output=True, text=True)
+            if check.returncode == 0 and check.stdout.strip():
+                logger.info(f"✅ کتابخانه {correct_name} قبلاً نصب شده است")
+                mark_library_installed(correct_name, 0)
+                return True, correct_name
+            
+            # نصب کتابخانه
+            logger.info(f"📦 در حال نصب {correct_name} (تلاش {retry + 1}/{max_retries})")
+            result = subprocess.run(f'{pip_cmd} install {correct_name} --quiet --no-cache-dir --default-timeout=100', shell=True, capture_output=True, text=True, timeout=120)
+            
+            if result.returncode == 0:
+                logger.info(f"✅ کتابخانه {correct_name} با موفقیت نصب شد")
+                mark_library_installed(correct_name, 0)
+                return True, correct_name
+            else:
+                logger.warning(f"⚠️ خطا در نصب {correct_name}: {result.stderr[:200]}")
                 
-                # نصب کتابخانه
-                logger.info(f"در حال نصب {lib} (تلاش {retry + 1}/{max_retries})")
-                result = subprocess.run(f'{pip_cmd} install {lib} --quiet --no-cache-dir', shell=True, capture_output=True, text=True, timeout=120)
-                
-                if result.returncode == 0:
-                    logger.info(f"✅ کتابخانه {lib} با موفقیت نصب شد")
-                    mark_library_installed(lib, 0)
-                    return True, lib
-                else:
-                    logger.warning(f"خطا در نصب {lib}: {result.stderr[:200]}")
-            except subprocess.TimeoutExpired:
-                logger.warning(f"Timeout در نصب {lib}")
-            except Exception as e:
-                logger.warning(f"خطا در نصب {lib}: {str(e)}")
+        except subprocess.TimeoutExpired:
+            logger.warning(f"⏰ Timeout در نصب {correct_name} (تلاش {retry + 1})")
+        except Exception as e:
+            logger.warning(f"⚠️ خطا در نصب {correct_name}: {str(e)}")
         
-        time.sleep(2)  #等待 قبل از تلاش مجدد
+        if retry < max_retries - 1:
+            time.sleep(2)
     
     return False, None
 
@@ -650,23 +750,29 @@ def install_multiple_libraries(libraries, progress_callback=None):
     installed = []
     failed = []
     
-    total = len(libraries)
-    for i, lib in enumerate(libraries):
+    # حذف کتابخانه‌های تکراری و استاندارد
+    unique_libs = []
+    for lib in libraries:
+        if lib not in STD_LIBRARIES and lib not in unique_libs:
+            unique_libs.append(lib)
+    
+    total = len(unique_libs)
+    for i, lib in enumerate(unique_libs):
         if progress_callback:
             progress_callback(i + 1, total, lib)
         
-        success, _ = install_library_with_retry(lib)
+        success, installed_lib = install_library_with_retry(lib)
         if success:
-            installed.append(lib)
+            installed.append(installed_lib)
         else:
             failed.append(lib)
         
-        time.sleep(0.5)  # فاصله بین نصب‌ها
+        time.sleep(0.5)
     
     return installed, failed
 
-def detect_requirements(code):
-    """تشخیص کتابخانه‌های مورد نیاز از کد - پیشرفته"""
+def detect_requirements_from_code(code):
+    """تشخیص پیشرفته کتابخانه‌های مورد نیاز از کد"""
     imports = set()
     lines = code.split('\n')
     
@@ -678,7 +784,7 @@ def detect_requirements(code):
             parts = line.split()
             if len(parts) > 1:
                 lib = parts[1].split('.')[0].split(' as ')[0]
-                if lib not in STD_LIBRARIES:
+                if lib not in STD_LIBRARIES and not lib.startswith('_'):
                     imports.add(lib)
         
         # from xyz import abc
@@ -686,31 +792,38 @@ def detect_requirements(code):
             parts = line.split()
             if len(parts) > 1:
                 lib = parts[1].split('.')[0]
-                if lib not in STD_LIBRARIES and not lib.startswith('.'):
+                if lib not in STD_LIBRARIES and not lib.startswith('_') and lib != '':
                     imports.add(lib)
         
         # try/except import
-        elif 'import' in line and ('try' in line or 'except' in line):
+        elif 'import' in line and ('try:' in line or 'except' in line):
             import_match = re.search(r'import\s+([a-zA-Z0-9_]+)', line)
             if import_match:
                 lib = import_match.group(1)
                 if lib not in STD_LIBRARIES:
                     imports.add(lib)
+        
+        # from ... import ...
+        elif line.startswith('from ') and ' import ' in line:
+            match = re.search(r'from\s+([a-zA-Z0-9_.]+)\s+import', line)
+            if match:
+                lib = match.group(1).split('.')[0]
+                if lib not in STD_LIBRARIES and not lib.startswith('_'):
+                    imports.add(lib)
     
-    # تبدیل نام‌ها به نام صحیح برای نصب
-    final_imports = []
+    # تبدیل به نام صحیح برای نصب
+    final_libs = []
     for lib in imports:
-        if lib in COMMON_LIBRARIES:
-            final_imports.append(COMMON_LIBRARIES[lib])
-        elif lib == 'telebot':
-            final_imports.append('pyTelegramBotAPI')
-        else:
-            final_imports.append(lib)
+        if lib in STD_LIBRARIES:
+            continue
+        correct = get_correct_library_name(lib)
+        if correct not in final_libs:
+            final_libs.append(correct)
     
-    return list(set(final_imports))
+    return final_libs
 
 def install_libraries_on_mother(libraries, chat_id=None):
-    """نصب کتابخانه‌ها روی سرور مادر با نمایش پیشرفت"""
+    """نصب کتابخانه‌ها روی سرور مادر"""
     if not libraries:
         return [], []
     
@@ -720,59 +833,29 @@ def install_libraries_on_mother(libraries, chat_id=None):
     def send_progress(current, total, lib):
         if chat_id:
             try:
-                bot.send_message(chat_id, f"📦 در حال نصب کتابخانه [{current}/{total}]: `{lib}`", parse_mode="Markdown")
+                percent = int(current / total * 100)
+                bar = "█" * int(percent / 5) + "░" * (20 - int(percent / 5))
+                bot.edit_message_text(f"📦 **نصب کتابخانه‌ها**\n\n`[{bar}]` {percent}%\n\nدر حال نصب [{current}/{total}]: `{lib}`", chat_id, status_msg_id, parse_mode="Markdown")
             except:
                 pass
-        print(f"📦 نصب کتابخانه [{current}/{total}]: {lib}")
+        print(f"📦 نصب [{current}/{total}]: {lib}")
     
-    installed, failed = install_multiple_libraries(libraries, send_progress)
+    # ارسال پیام اولیه
+    status_msg = None
+    if chat_id:
+        try:
+            status_msg = bot.send_message(chat_id, f"📦 در حال نصب {len(libraries)} کتابخانه مورد نیاز...\n⏳ لطفاً شکیبا باشید...", parse_mode="Markdown")
+            status_msg_id = status_msg.message_id
+        except:
+            pass
     
-    return installed, failed
-
-def install_libraries_on_server(server, libraries, chat_id=None):
-    """نصب کتابخانه‌ها روی سرور خارجی از طریق SSH"""
-    installed = []
-    failed = []
+    installed, failed = install_multiple_libraries(libraries, lambda c, t, l: send_progress(c, t, l))
     
-    if not libraries:
-        return installed, failed
-    
-    try:
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        client.connect(server['ip'], port=server['port'], username=server['username'], password=server['password'], timeout=30)
-        
-        for i, lib in enumerate(libraries):
-            if chat_id:
-                try:
-                    bot.send_message(chat_id, f"📦 در حال نصب کتابخانه [{i+1}/{len(libraries)}]: `{lib}` روی سرور {server['name']}", parse_mode="Markdown")
-                except:
-                    pass
-            
-            # بررسی نصب بودن
-            stdin, stdout, stderr = client.exec_command(f'pip3 show {lib} 2>/dev/null | grep Name')
-            result = stdout.read().decode().strip()
-            
-            if not result:
-                # نصب کتابخانه
-                stdin, stdout, stderr = client.exec_command(f'pip3 install {lib} --quiet')
-                error = stderr.read().decode()
-                if 'Successfully installed' in error or not error or 'already satisfied' in error:
-                    installed.append(lib)
-                    mark_library_installed(lib, server['id'])
-                    logger.info(f"کتابخانه {lib} روی سرور {server['name']} نصب شد")
-                else:
-                    failed.append(lib)
-                    logger.error(f"خطا در نصب {lib} روی سرور: {error[:200]}")
-            else:
-                installed.append(lib)
-            
-            time.sleep(0.5)
-        
-        client.close()
-    except Exception as e:
-        logger.error(f"install_libraries_on_server error: {e}")
-        failed.extend(libraries)
+    if chat_id and status_msg:
+        if installed:
+            bot.edit_message_text(f"✅ **نصب کتابخانه‌ها کامل شد!**\n\n📦 نصب شده: {len(installed)} مورد\n❌ ناموفق: {len(failed)} مورد\n\nکتابخانه‌های نصب شده:\n`{', '.join(installed[:15])}`", chat_id, status_msg_id, parse_mode="Markdown")
+        else:
+            bot.edit_message_text(f"❌ **خطا در نصب کتابخانه‌ها!**\n\nلطفاً به صورت دستی نصب کنید.", chat_id, status_msg_id, parse_mode="Markdown")
     
     return installed, failed
 
@@ -810,7 +893,7 @@ def add_new_server(name, ip, port, username, password):
         return False, f"❌ خطا: {str(e)}"
 
 def run_bot_on_mother_server(bot_id, code, token, chat_id=None):
-    """اجرای ربات روی سرور مادر با نصب تضمینی کتابخانه‌ها"""
+    """اجرای ربات روی سرور مادر"""
     try:
         bot_dir = os.path.join(RUNNING_DIR, bot_id)
         os.makedirs(bot_dir, exist_ok=True)
@@ -820,24 +903,12 @@ def run_bot_on_mother_server(bot_id, code, token, chat_id=None):
             f.write(code)
         
         # تشخیص و نصب کتابخانه‌های مورد نیاز
-        libraries = detect_requirements(code)
+        libraries = detect_requirements_from_code(code)
         
         if libraries and config.auto_install_libs:
-            if chat_id:
-                try:
-                    bot.send_message(chat_id, f"📦 تشخیص {len(libraries)} کتابخانه مورد نیاز:\n`{', '.join(libraries[:10])}`\n\nدر حال نصب...", parse_mode="Markdown")
-                except:
-                    pass
-            
             installed, failed = install_libraries_on_mother(libraries, chat_id)
-            
             if failed:
                 logger.warning(f"کتابخانه‌های نصب نشده: {failed}")
-                if chat_id:
-                    try:
-                        bot.send_message(chat_id, f"⚠️ برخی کتابخانه‌ها نصب نشدند:\n`{', '.join(failed[:5])}`\nربات ممکن است با خطا مواجه شود.", parse_mode="Markdown")
-                    except:
-                        pass
         
         log_file = os.path.join(bot_dir, 'bot.log')
         
@@ -859,7 +930,7 @@ def run_bot_on_mother_server(bot_id, code, token, chat_id=None):
                 start_new_session=True
             )
         
-        time.sleep(3)
+        time.sleep(4)
         
         if process.poll() is None:
             return process.pid, None
@@ -869,73 +940,6 @@ def run_bot_on_mother_server(bot_id, code, token, chat_id=None):
             return None, error if error else "خطای ناشناخته در اجرا"
     except Exception as e:
         return None, str(e)
-
-def run_bot_on_server(server, bot_id, code, token, chat_id=None):
-    """اجرای ربات روی سرور خارجی با نصب تضمینی کتابخانه‌ها"""
-    try:
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        client.connect(server['ip'], port=server['port'], username=server['username'], password=server['password'], timeout=30)
-        
-        bot_dir = f"/home/ubuntu/bots/{bot_id}"
-        client.exec_command(f'mkdir -p {bot_dir}')
-        
-        sftp = client.open_sftp()
-        remote_path = f"{bot_dir}/bot.py"
-        with sftp.open(remote_path, 'w') as f:
-            f.write(code)
-        sftp.close()
-        
-        # تشخیص و نصب کتابخانه‌ها
-        libraries = detect_requirements(code)
-        
-        if libraries and config.auto_install_libs:
-            if chat_id:
-                try:
-                    bot.send_message(chat_id, f"📦 در حال نصب {len(libraries)} کتابخانه روی سرور {server['name']}...")
-                except:
-                    pass
-            
-            for i, lib in enumerate(libraries):
-                stdin, stdout, stderr = client.exec_command(f'pip3 install {lib} --quiet')
-                error = stderr.read().decode()
-                if chat_id and (i % 3 == 0 or i == len(libraries) - 1):
-                    try:
-                        bot.send_message(chat_id, f"📦 نصب کتابخانه [{i+1}/{len(libraries)}]: `{lib}`", parse_mode="Markdown")
-                    except:
-                        pass
-                time.sleep(0.5)
-        
-        # اجرای ربات
-        client.exec_command(f'cd {bot_dir} && nohup python3 bot.py > bot.log 2>&1 &')
-        time.sleep(3)
-        
-        stdin, stdout, stderr = client.exec_command(f'pgrep -f "python3 {bot_dir}/bot.py"')
-        pid = stdout.read().decode().strip()
-        
-        client.close()
-        
-        with get_db() as conn:
-            conn.execute('UPDATE servers SET current_load = current_load + 1 WHERE id = ?', (server['id'],))
-            conn.commit()
-        
-        return pid, None
-    except Exception as e:
-        return None, str(e)
-
-def stop_bot_on_server(server, bot_id):
-    try:
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        client.connect(server['ip'], port=server['port'], username=server['username'], password=server['password'], timeout=30)
-        client.exec_command(f'pkill -f "python3 .*{bot_id}"')
-        client.close()
-        with get_db() as conn:
-            conn.execute('UPDATE servers SET current_load = current_load - 1 WHERE id = ?', (server['id'],))
-            conn.commit()
-        return True
-    except:
-        return False
 
 def stop_bot_on_mother(bot_id):
     try:
@@ -955,14 +959,7 @@ def stop_user_bot(bot_id):
     bot_info = get_bot_by_id(bot_id)
     if not bot_info:
         return False
-    if bot_info['server_id'] and bot_info['server_id'] != 0:
-        with get_db() as conn:
-            server = conn.execute('SELECT * FROM servers WHERE id = ?', (bot_info['server_id'],)).fetchone()
-            if server:
-                stop_bot_on_server(dict(server), bot_id)
-    else:
-        stop_bot_on_mother(bot_id)
-    return update_bot_status(bot_id, 'stopped')
+    return stop_bot_on_mother(bot_id)
 
 def start_user_bot(bot_id, chat_id=None):
     bot_info = get_bot_by_id(bot_id)
@@ -972,23 +969,12 @@ def start_user_bot(bot_id, chat_id=None):
         return False, "فایل ربات پیدا نشد"
     with open(bot_info['file_path'], 'r', encoding='utf-8') as f:
         code = f.read()
-    if bot_info['server_id'] and bot_info['server_id'] != 0:
-        with get_db() as conn:
-            server = conn.execute('SELECT * FROM servers WHERE id = ?', (bot_info['server_id'],)).fetchone()
-            if server:
-                pid, error = run_bot_on_server(dict(server), bot_info['id'], code, bot_info['token'], chat_id)
-                if pid:
-                    update_bot_status(bot_id, 'running')
-                    return True, "ربات فعال شد"
-                else:
-                    return False, error
+    pid, error = run_bot_on_mother_server(bot_info['id'], code, bot_info['token'], chat_id)
+    if pid:
+        update_bot_status(bot_id, 'running')
+        return True, "ربات فعال شد"
     else:
-        pid, error = run_bot_on_mother_server(bot_info['id'], code, bot_info['token'], chat_id)
-        if pid:
-            update_bot_status(bot_id, 'running')
-            return True, "ربات فعال شد"
-        else:
-            return False, error
+        return False, error
 
 def extract_token(code):
     patterns = [
@@ -1085,29 +1071,23 @@ def build_bot_from_pending(file_id, queue_id=None, chat_id=None):
         return result
     
     # تشخیص کتابخانه‌ها
-    libraries = detect_requirements(code)
+    libraries = detect_requirements_from_code(code)
     
     if libraries and config.auto_install_libs:
         if chat_id:
             try:
-                bot.send_message(chat_id, f"📦 تشخیص {len(libraries)} کتابخانه مورد نیاز:\n`{', '.join(libraries[:15])}`", parse_mode="Markdown")
+                bot.send_message(chat_id, f"📦 تشخیص {len(libraries)} کتابخانه مورد نیاز:\n`{', '.join(libraries[:15])}`\n\nدر حال نصب...", parse_mode="Markdown")
             except:
                 pass
+        installed, failed = install_libraries_on_mother(libraries, chat_id)
     
-    # انتخاب سرور
-    server = get_best_server()
     bot_id = hashlib.md5(f"{pending['user_id']}_{token}_{time.time()}".encode()).hexdigest()[:12]
     
-    if server:
-        pid, error = run_bot_on_server(server, bot_id, code, token, chat_id)
-        server_id = server['id']
-    else:
-        pid, error = run_bot_on_mother_server(bot_id, code, token, chat_id)
-        server_id = 0
+    pid, error = run_bot_on_mother_server(bot_id, code, token, chat_id)
     
     if pid:
         requirements = ','.join(libraries)
-        add_bot(pending['user_id'], pending['subscription_id'], server_id, bot_id, token, bot_name, bot_username, pending['file_path'], pid, requirements)
+        add_bot(pending['user_id'], pending['subscription_id'], 0, bot_id, token, bot_name, bot_username, pending['file_path'], pid, requirements)
         update_pending_file_status(file_id, 'approved')
         result['success'] = True
         result['name'] = bot_name
@@ -1116,8 +1096,7 @@ def build_bot_from_pending(file_id, queue_id=None, chat_id=None):
         if queue_id:
             update_build_queue_status(queue_id, 'completed', bot_name=bot_name, bot_username=bot_username)
         try:
-            libs_text = f"\n📦 کتابخانه‌های نصب شده: {len(libraries)} مورد" if libraries else ""
-            bot.send_message(pending['user_id'], f"✅ ربات شما با موفقیت ساخته شد!\n\n🤖 نام: {bot_name}\n🔗 لینک: https://t.me/{bot_username}\n🆔 آیدی: `{bot_id}`{libs_text}\n\nاز منوی «ربات‌های من» می‌توانید آن را مدیریت کنید.")
+            bot.send_message(pending['user_id'], f"✅ ربات شما با موفقیت ساخته شد!\n\n🤖 نام: {bot_name}\n🔗 لینک: https://t.me/{bot_username}\n🆔 آیدی: `{bot_id}`\n\nاز منوی «ربات‌های من» می‌توانید آن را مدیریت کنید.")
         except:
             pass
     else:
@@ -1249,40 +1228,14 @@ def restore_all_bots():
             running_bots = conn.execute('SELECT * FROM bots WHERE status = "running" OR status = "stopped"').fetchall()
         for bot_info in running_bots:
             bot_info = dict(bot_info)
-            if bot_info['server_id'] and bot_info['server_id'] != 0:
-                with get_db() as conn:
-                    server = conn.execute('SELECT * FROM servers WHERE id = ?', (bot_info['server_id'],)).fetchone()
-                    if server:
-                        client = paramiko.SSHClient()
-                        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                        try:
-                            client.connect(server['ip'], port=server['port'], username=server['username'], password=server['password'], timeout=10)
-                            stdin, stdout, stderr = client.exec_command(f'pgrep -f "python3 .*{bot_info["id"]}"')
-                            pid = stdout.read().decode().strip()
-                            if pid:
-                                conn.execute('UPDATE bots SET status = "running" WHERE id = ?', (bot_info['id'],))
-                                conn.commit()
-                                client.close()
-                                continue
-                            client.close()
-                        except:
-                            pass
-            else:
-                try:
-                    if os.path.exists(bot_info['file_path']):
-                        with open(bot_info['file_path'], 'r', encoding='utf-8') as f:
-                            code = f.read()
-                        if bot_info['server_id'] and bot_info['server_id'] != 0:
-                            with get_db() as conn:
-                                server = conn.execute('SELECT * FROM servers WHERE id = ?', (bot_info['server_id'],)).fetchone()
-                                if server:
-                                    run_bot_on_server(dict(server), bot_info['id'], code, bot_info['token'])
-                        else:
-                            run_bot_on_mother_server(bot_info['id'], code, bot_info['token'])
-                        conn.execute('UPDATE bots SET status = "running" WHERE id = ?', (bot_info['id'],))
-                        conn.commit()
-                except Exception as e:
-                    logger.error(f"خطا در بازگردانی ربات {bot_info['id']}: {e}")
+            if os.path.exists(bot_info['file_path']):
+                with open(bot_info['file_path'], 'r', encoding='utf-8') as f:
+                    code = f.read()
+                pid, error = run_bot_on_mother_server(bot_info['id'], code, bot_info['token'])
+                if pid:
+                    conn.execute('UPDATE bots SET status = "running" WHERE id = ?', (bot_info['id'],))
+                    conn.commit()
+                    logger.info(f"ربات {bot_info['id']} بازگردانی شد")
     except Exception as e:
         logger.error(f"خطا در بازگردانی ربات‌ها: {e}")
 
@@ -1694,10 +1647,10 @@ def admin_libraries(call):
     text = "📦 **مدیریت کتابخانه‌ها**\n\n🔧 کتابخانه‌های نصب شده:\n"
     if installed:
         for lib in installed[:20]:
-            text += f"• `{lib['library_name']}` (سرور {lib['server_id']})\n"
+            text += f"• `{lib['library_name']}`\n"
     else:
         text += "• هیچ کتابخانه‌ای نصب نشده است\n"
-    text += f"\n📚 تعداد کل کتابخانه‌های قابل نصب: {len(COMMON_LIBRARIES)}\n"
+    text += f"\n📚 تعداد کل کتابخانه‌های قابل نصب: {len(POPULAR_LIBRARIES)}\n"
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(types.InlineKeyboardButton("📦 نصب کتابخانه جدید", callback_data="install_new_library"), types.InlineKeyboardButton("🔧 نصب کتابخانه‌های پرکاربرد", callback_data="install_common_libs"), types.InlineKeyboardButton("🔄 به‌روزرسانی کتابخانه‌ها", callback_data="update_libraries"), types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back"))
     bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
@@ -1706,7 +1659,7 @@ def admin_libraries(call):
 def install_new_library(call):
     if call.from_user.id not in ADMIN_IDS:
         return
-    msg = bot.send_message(call.message.chat.id, "📦 نام کتابخانه مورد نظر را وارد کنید:\n(مثال: requests, telebot, numpy, pandas)")
+    msg = bot.send_message(call.message.chat.id, "📦 نام کتابخانه مورد نظر را وارد کنید:\n(مثال: requests, telebot, numpy, pandas, python-telegram-bot)")
     bot.register_next_step_handler(msg, process_install_library)
 
 def process_install_library(message):
@@ -1732,23 +1685,22 @@ def install_common_libs(call):
         return
     status_msg = bot.send_message(call.message.chat.id, "🔄 در حال نصب کتابخانه‌های پرکاربرد...\nاین عملیات ممکن است چند دقیقه طول بکشد.")
     
-    libs_to_install = list(COMMON_LIBRARIES.values())[:50]
     installed = []
     failed = []
     
-    for i, lib in enumerate(libs_to_install):
+    for i, lib in enumerate(POPULAR_LIBRARIES):
         try:
-            bot.edit_message_text(f"🔄 در حال نصب [{i+1}/{len(libs_to_install)}]: `{lib}`", call.message.chat.id, status_msg.message_id, parse_mode="Markdown")
+            bot.edit_message_text(f"🔄 در حال نصب [{i+1}/{len(POPULAR_LIBRARIES)}]: `{lib}`", call.message.chat.id, status_msg.message_id, parse_mode="Markdown")
             success, _ = install_library_with_retry(lib)
             if success:
                 installed.append(lib)
             else:
                 failed.append(lib)
-            time.sleep(1)
+            time.sleep(0.5)
         except:
             failed.append(lib)
     
-    bot.edit_message_text(f"✅ نصب کتابخانه‌ها کامل شد!\n\n📦 نصب شده: {len(installed)} مورد\n❌ ناموفق: {len(failed)} مورد", call.message.chat.id, status_msg.message_id)
+    bot.edit_message_text(f"✅ نصب کتابخانه‌ها کامل شد!\n\n📦 نصب شده: {len(installed)} مورد\n❌ ناموفق: {len(failed)} مورد\n\nکتابخانه‌های نصب شده:\n`{', '.join(installed[:15])}`", call.message.chat.id, status_msg.message_id, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: call.data == "update_libraries")
 def update_libraries(call):
@@ -2106,12 +2058,7 @@ def check_expired():
                     conn.execute('UPDATE users SET active_subscription = 0 WHERE user_id = ?', (user['user_id'],))
                     bots = conn.execute('SELECT id, server_id FROM bots WHERE user_id = ? AND status = "running"', (user['user_id'],)).fetchall()
                     for bot_info in bots:
-                        if bot_info['server_id'] and bot_info['server_id'] != 0:
-                            server = conn.execute('SELECT * FROM servers WHERE id = ?', (bot_info['server_id'],)).fetchone()
-                            if server:
-                                stop_bot_on_server(dict(server), bot_info['id'])
-                        else:
-                            stop_bot_on_mother(bot_info['id'])
+                        stop_bot_on_mother(bot_info['id'])
                         conn.execute('UPDATE bots SET status = "expired" WHERE id = ?', (bot_info['id'],))
                     try:
                         bot.send_message(user['user_id'], "❌ اشتراک شما منقضی شد!\nربات شما غیرفعال شد.\nبرای ادامه، اشتراک جدید بخرید.")
@@ -2137,14 +2084,13 @@ if __name__ == "__main__":
     check_and_create_pid()
     
     print("=" * 70)
-    print("🚀 ربات مادر نسخه نهایی 18.0 - نصب تضمینی کتابخانه‌ها")
+    print("🚀 ربات مادر نسخه نهایی 19.0 - نصب تضمینی تمام کتابخانه‌ها")
     print("=" * 70)
     print(f"✅ ادمین: {ADMIN_IDS}")
     print(f"✅ قیمت: {config.price:,} تومان")
     print(f"✅ مدت اشتراک: {config.subscription_days} روز")
     print(f"✅ نصب خودکار کتابخانه: {'فعال' if config.auto_install_libs else 'غیرفعال'}")
-    print(f"✅ درگاه زرین‌پال: {'فعال' if config.zarinpal_merchant else 'غیرفعال'}")
-    print(f"✅ کتابخانه‌های قابل نصب: {len(COMMON_LIBRARIES)} مورد")
+    print(f"✅ کتابخانه‌های قابل نصب: {len(POPULAR_LIBRARIES)} مورد")
     print("=" * 70)
     print("🟢 در حال بازیابی ربات‌های قبلی...")
     
@@ -2153,11 +2099,11 @@ if __name__ == "__main__":
     print("✅ ربات‌ها بازیابی شدند!")
     print("🟢 ربات مادر در حال اجراست...")
     print("=" * 70)
-    print("📌 ویژگی‌های جدید نسخه 18.0:")
-    print("🔹 نصب تضمینی کتابخانه‌ها با 3 بار تلاش مجدد")
-    print("🔹 تشخیص خودکار نام صحیح کتابخانه‌ها")
-    print("🔹 نمایش پیشرفت نصب کتابخانه‌ها در حین ساخت")
-    print("🔹 پشتیبانی از بیش از 100 کتابخانه پرکاربرد")
+    print("📌 ویژگی‌های جدید نسخه 19.0:")
+    print("🔹 نصب خودکار python-telegram-bot و تمام کتابخانه‌های تلگرام")
+    print("🔹 دیتابیس کامل 100+ کتابخانه با نام صحیح نصب")
+    print("🔹 تشخیص هوشمند کتابخانه‌های مورد نیاز از کد")
+    print("🔹 3 بار تلاش مجدد برای نصب هر کتابخانه")
     print("=" * 70)
     
     expiry_thread = threading.Thread(target=check_expired, daemon=True)
