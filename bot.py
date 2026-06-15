@@ -2357,5 +2357,85 @@ def weekly_optimize():
 
 # شروع بهینه‌سازی خودکار
 weekly_optimize()
+# ==================== دیتابیس قوی - جداول و توابع جدید ====================
+# ... (کد قبلی که اضافه کردی) ...
+# ==================== END دیتابیس قوی ====================
+
+# 👇👇👇 این کد جدید رو درست اینجا اضافه کن 👇👇👇
+
+# ==================== سیستم‌های پشت پرده قوی ====================
+
+# 1. بکاپ خودکار روزانه
+def auto_backup():
+    def backup():
+        while True:
+            time.sleep(24 * 3600)
+            try:
+                backup_name = f"backup_{datetime.now().strftime('%Y%m%d')}.db"
+                backup_path = os.path.join(BACKUP_DIR, backup_name)
+                shutil.copy2(DB_PATH, backup_path)
+                backups = sorted([f for f in os.listdir(BACKUP_DIR) if f.endswith('.db')])
+                for old in backups[:-7]:
+                    os.remove(os.path.join(BACKUP_DIR, old))
+                print(f"✅ بکاپ: {backup_name}")
+            except: pass
+    threading.Thread(target=backup, daemon=True).start()
+auto_backup()
+
+# 2. پاکسازی خودکار لاگ‌های قدیمی
+def clean_old_logs():
+    def cleaner():
+        while True:
+            time.sleep(30 * 24 * 3600)
+            try:
+                with get_db() as conn:
+                    cutoff = (datetime.now() - timedelta(days=90)).isoformat()
+                    conn.execute('DELETE FROM user_logs WHERE created_at < ?', (cutoff,))
+                    conn.execute('DELETE FROM notifications WHERE is_read = 1 AND created_at < ?', (cutoff,))
+                    conn.commit()
+                print("✅ لاگ‌های قدیمی پاک شدند")
+            except: pass
+    threading.Thread(target=cleaner, daemon=True).start()
+clean_old_logs()
+
+# 3. نمایش آمار دیتابیس در ترمینال
+def show_db_stats():
+    def stats():
+        while True:
+            time.sleep(24 * 3600)
+            try:
+                info = get_database_info()
+                print("\n" + "=" * 50)
+                print(f"📊 آمار دیتابیس - {datetime.now().strftime('%Y-%m-%d')}")
+                print(f"👥 کاربران: {info['users']}")
+                print(f"🤖 ربات‌ها: {info['bots']}")
+                print(f"💰 تراکنش‌ها: {info['transactions']}")
+                print(f"💵 مجموع موجودی: {info['total_balance']:,} تومان")
+                print("=" * 50 + "\n")
+            except: pass
+    threading.Thread(target=stats, daemon=True).start()
+show_db_stats()
+
+# 4. اعلان خودکار برای تراکنش‌ها (تابع log_transaction رو کاملتر کن)
+def log_transaction_enhanced(user_id, amount, trans_type, description, reference_id=None):
+    try:
+        with get_db() as conn:
+            balance_before = get_user_balance(user_id)
+            if trans_type == 'deposit':
+                conn.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (amount, user_id))
+                add_notification(user_id, '💰 واریز', f'{amount:,} تومان به کیف پول شما اضافه شد.')
+            elif trans_type == 'withdraw':
+                conn.execute('UPDATE users SET balance = balance - ? WHERE user_id = ?', (amount, user_id))
+                add_notification(user_id, '🏧 برداشت', f'درخواست برداشت {amount:,} تومان ثبت شد.')
+            balance_after = get_user_balance(user_id)
+            conn.execute('''
+                INSERT INTO transactions (user_id, amount, type, description, reference_id, balance_before, balance_after, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (user_id, amount, trans_type, description, reference_id, balance_before, balance_after, datetime.now().isoformat()))
+            conn.commit()
+            return True
+    except: return False
+
+# ==================== END سیستم‌های پشت پرده ====================
 
 # ==================== END دیتابیس قوی ====================            
