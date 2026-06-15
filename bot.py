@@ -27,114 +27,7 @@ from contextlib import contextmanager
 import paramiko
 from queue import Queue
 
-# تعریف توکن و ادمین‌ها و نمونه‌ی اولیه‌ی ربات برای ثبت هندلرها قبل از تعریف کامل
-BOT_TOKEN = "8691128478:AAE7eZ0vo5kkFcvrerHt3vjw-mvJ3CqxpWE"
-ADMIN_IDS = [327855654]
-try:
-    bot = telebot.TeleBot(BOT_TOKEN, num_threads=100)
-except Exception:
-    bot = None
 
-# ==================== دکمه فایل آماده (کاربران) ====================
-@bot.message_handler(func=lambda m: m.text == '📁 فایل آماده')
-def ready_files(message):
-    print(f"DEBUG: ready_files handler called by {getattr(message.from_user, 'id', None)} text={getattr(message, 'text', None)}")
-    # چک کردن وجود پوشه فایل‌ها
-    if not os.path.exists('ready_files'):
-        os.makedirs('ready_files', exist_ok=True)
-    
-    # گرفتن لیست فایل‌های آپلود شده
-    files = [f for f in os.listdir('ready_files') if f.endswith(('.py', '.zip'))]
-    
-    if not files:
-        bot.send_message(message.chat.id, 
-            "📁 **فایل آماده**\n\nهیچ فایلی موجود نیست.\nبه زودی اضافه می‌شود.", 
-            parse_mode="Markdown")
-        return
-    
-    # ساختن منوی فایل‌ها
-    text = "📁 **فایل‌های آماده ربات**\n\nلطفاً فایل مورد نظر را انتخاب کنید:\n\n"
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    
-    for f in files:
-        name = f.replace('.py', '').replace('.zip', '').replace('_', ' ')
-        markup.add(types.InlineKeyboardButton(f"📥 {name}", callback_data=f"download_{f}"))
-    
-    bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
-
-
-# ==================== دانلود فایل توسط کاربر ====================
-@bot.callback_query_handler(func=lambda call: call.data.startswith('download_'))
-def download_file(call):
-    file_name = call.data.replace('download_', '')
-    file_path = os.path.join('ready_files', file_name)
-    
-    if os.path.exists(file_path):
-        with open(file_path, 'rb') as f:
-            bot.send_document(call.message.chat.id, f, 
-                caption=f"📁 **{file_name}**\n\n✅ فایل آماده دانلود است.\n\n📌 توکن ربات خود را جایگزین کنید.",
-                parse_mode="Markdown")
-        bot.answer_callback_query(call.id, "✅ فایل ارسال شد!")
-    else:
-        bot.answer_callback_query(call.id, "❌ فایل یافت نشد!")
-
-
-# ==================== آپلود فایل توسط ادمین ====================
-@bot.callback_query_handler(func=lambda call: call.data == "admin_upload_file")
-def admin_upload_file(call):
-    print(f"DEBUG: admin_upload_file callback called by {getattr(call.from_user, 'id', None)} data={getattr(call, 'data', None)}")
-    if call.from_user.id not in ADMIN_IDS:
-        bot.answer_callback_query(call.id, "❌ دسترسی غیرمجاز!")
-        return
-    
-    msg = bot.send_message(call.message.chat.id, 
-        "📤 **آپلود فایل آماده**\n\n"
-        "فایل `.py` یا `.zip` خود را ارسال کنید.\n\n"
-        "📌 این فایل در بخش «📁 فایل آماده» به کاربران نمایش داده می‌شود.")
-    
-    bot.register_next_step_handler(msg, save_uploaded_file)
-
-
-def save_uploaded_file(message):
-    if message.from_user.id not in ADMIN_IDS:
-        return
-    
-    if not message.document:
-        bot.reply_to(message, "❌ لطفاً یک فایل ارسال کنید!")
-        return
-    
-    file = message.document
-    if not (file.file_name.endswith('.py') or file.file_name.endswith('.zip')):
-        bot.reply_to(message, "❌ فقط فایل `.py` یا `.zip` مجاز است!")
-        return
-    
-    if file.file_size > 20 * 1024 * 1024:
-        bot.reply_to(message, "❌ حجم فایل بیشتر از ۲۰ مگابایت است!")
-        return
-    
-    try:
-        # ساخت پوشه ready_files
-        os.makedirs('ready_files', exist_ok=True)
-        
-        # دانلود و ذخیره فایل
-        file_info = bot.get_file(file.file_id)
-        downloaded_file = bot.download_file(file_info.file_path)
-        
-        # پاک کردن کاراکترهای مشکل‌دار از نام فایل
-        safe_name = file.file_name.replace(' ', '_').replace('(', '').replace(')', '')
-        file_path = os.path.join('ready_files', safe_name)
-        
-        with open(file_path, 'wb') as f:
-            f.write(downloaded_file)
-        
-        bot.reply_to(message, 
-            f"✅ **فایل با موفقیت آپلود شد!**\n\n"
-            f"📄 نام فایل: `{safe_name}`\n\n"
-            f"📌 کاربران می‌توانند از منوی «📁 فایل آماده» آن را دانلود کنند.",
-            parse_mode="Markdown")
-        
-    except Exception as e:
-        bot.reply_to(message, f"❌ خطا در آپلود: {str(e)}")
 def safe_edit_message(chat_id, message_id, text, parse_mode=None, reply_markup=None):
     """ویرایش امن پیام بدون خطای تکرار محتوا"""
     try:
@@ -1377,15 +1270,15 @@ def restore_all_bots():
 
 # ==================== ایجاد و تنظیم ربات ====================
 def setup_bot():
-    # Use the already-created global `bot` so handlers stay registered on the same instance
+    bot_instance = telebot.TeleBot(BOT_TOKEN, num_threads=100)
     try:
-        bot.remove_webhook()
+        bot_instance.remove_webhook()
         time.sleep(1)
-        bot.delete_webhook()
+        bot_instance.delete_webhook()
         time.sleep(0.5)
     except Exception as e:
         print(f"⚠️ خطا در حذف وب‌هوک: {e}")
-    return bot
+    return bot_instance
 
 bot = setup_bot()
 
@@ -1401,8 +1294,7 @@ def get_main_menu(user_id):
         types.KeyboardButton('💰 کیف پول'),
         types.KeyboardButton('📚 راهنما'),
         types.KeyboardButton('📞 پشتیبانی'),
-        types.KeyboardButton('🗑 حذف ربات'),
-        types.KeyboardButton('📁 فایل آماده')
+        types.KeyboardButton('🗑 حذف ربات')
     ]
     if days_left > 0:
         buttons.insert(0, types.KeyboardButton(f'📅 {days_left} روز مونده'))
@@ -1772,7 +1664,7 @@ def admin_panel(message):
         queue_size = conn.execute('SELECT COUNT(*) FROM build_queue WHERE status = "pending"').fetchone()[0]
     text = f"👑 پنل ادمین\n\n👥 کاربران: {total_users}\n📸 فیش: {pending_payments}\n📥 فایل: {pending_files}\n🖥️ سرور: {servers_count}\n📊 بار: {total_load}/{max_load}\n⏳ صف ساخت: {queue_size}"
     markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(types.InlineKeyboardButton("📸 فیش‌ها", callback_data="admin_receipts"), types.InlineKeyboardButton("📥 فایل‌ها", callback_data="admin_files"), types.InlineKeyboardButton("📤 آپلود فایل", callback_data="admin_upload_file"), types.InlineKeyboardButton("🖥️ سرورها", callback_data="admin_servers"), types.InlineKeyboardButton("➕ سرور جدید", callback_data="admin_add_server"), types.InlineKeyboardButton("💰 برداشت‌ها", callback_data="admin_withdraws"), types.InlineKeyboardButton("📢 پیام همگانی", callback_data="admin_broadcast"), types.InlineKeyboardButton("📝 تنظیم متون", callback_data="admin_texts"), types.InlineKeyboardButton("⚙️ تنظیمات", callback_data="admin_settings"), types.InlineKeyboardButton("🎁 تایید اشتراک", callback_data="admin_manual_sub"), types.InlineKeyboardButton("💳 افزودن روش پرداخت", callback_data="admin_add_payment"), types.InlineKeyboardButton("✏️ تغییر متن خوش‌آمدگویی", callback_data="admin_edit_welcome"), types.InlineKeyboardButton("📦 مدیریت کتابخانه‌ها", callback_data="admin_libraries"))
+    markup.add(types.InlineKeyboardButton("📸 فیش‌ها", callback_data="admin_receipts"), types.InlineKeyboardButton("📥 فایل‌ها", callback_data="admin_files"), types.InlineKeyboardButton("🖥️ سرورها", callback_data="admin_servers"), types.InlineKeyboardButton("➕ سرور جدید", callback_data="admin_add_server"), types.InlineKeyboardButton("💰 برداشت‌ها", callback_data="admin_withdraws"), types.InlineKeyboardButton("📢 پیام همگانی", callback_data="admin_broadcast"), types.InlineKeyboardButton("📝 تنظیم متون", callback_data="admin_texts"), types.InlineKeyboardButton("⚙️ تنظیمات", callback_data="admin_settings"), types.InlineKeyboardButton("🎁 تایید اشتراک", callback_data="admin_manual_sub"), types.InlineKeyboardButton("💳 افزودن روش پرداخت", callback_data="admin_add_payment"), types.InlineKeyboardButton("✏️ تغییر متن خوش‌آمدگویی", callback_data="admin_edit_welcome"), types.InlineKeyboardButton("📦 مدیریت کتابخانه‌ها", callback_data="admin_libraries"))
     bot.send_message(message.chat.id, text, reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_libraries")
@@ -1995,14 +1887,9 @@ def admin_files_list(call):
     if call.from_user.id not in ADMIN_IDS:
         return
     files = get_pending_files()
-    upload_markup = types.InlineKeyboardMarkup()
-    upload_markup.add(types.InlineKeyboardButton("📤 آپلود فایل", callback_data="admin_upload_file"))
     if not files:
-        bot.send_message(call.message.chat.id, "📥 فایلی وجود ندارد", reply_markup=upload_markup)
+        bot.send_message(call.message.chat.id, "📥 فایلی وجود ندارد")
         return
-
-    # send upload button above the list
-    bot.send_message(call.message.chat.id, "📥 لیست فایل‌های ارسالی:", reply_markup=upload_markup)
     for f in files:
         text = f"📥 فایل #{f['id']}\n👤 کاربر: {f['user_id']}\n📄 {f['file_name']}\n📅 {f['submitted_at'][:10]}"
         markup = types.InlineKeyboardMarkup()
@@ -2118,7 +2005,6 @@ def admin_settings(call):
     if call.from_user.id not in ADMIN_IDS:
         return
     markup = types.InlineKeyboardMarkup(row_width=1)
-             
     markup.add(types.InlineKeyboardButton("💰 تغییر قیمت", callback_data="set_price"), types.InlineKeyboardButton("💳 تغییر کارت", callback_data="set_card"), types.InlineKeyboardButton("👤 تغییر صاحب کارت", callback_data="set_holder"), types.InlineKeyboardButton("⏰ تغییر مدت اشتراک", callback_data="set_duration"), types.InlineKeyboardButton("⚙️ نصب خودکار کتابخانه", callback_data="toggle_auto_install"), types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back"))
     auto_status = "✅ فعال" if config.auto_install_libs else "❌ غیرفعال"
     bot.edit_message_text(f"⚙️ تنظیمات\n\n💰 قیمت: {config.price:,} تومان\n💳 کارت: {config.card_number}\n👤 صاحب کارت: {config.card_holder}\n⏰ مدت اشتراک: {config.subscription_days} روز\n📦 نصب خودکار کتابخانه: {auto_status}", call.message.chat.id, call.message.message_id, reply_markup=markup)
@@ -2264,292 +2150,3 @@ if __name__ == "__main__":
             print(f"خطا: {e}")
             print("در حال تلاش مجدد در 5 ثانیه...")
             time.sleep(5)
-# ==================== دیتابیس قوی - جداول و توابع جدید ====================
-
-with get_db() as conn:
-    # جدول تراکنش‌های مالی
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS transactions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            amount INTEGER,
-            type TEXT,
-            description TEXT,
-            reference_id TEXT,
-            balance_before INTEGER,
-            balance_after INTEGER,
-            created_at TIMESTAMP
-        )
-    ''')
-    
-    # جدول لاگ فعالیت‌ها
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS user_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            action TEXT,
-            details TEXT,
-            created_at TIMESTAMP
-        )
-    ''')
-    
-    # جدول تیکت پشتیبانی
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS support_tickets (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            subject TEXT,
-            message TEXT,
-            status TEXT DEFAULT 'open',
-            admin_response TEXT,
-            created_at TIMESTAMP,
-            closed_at TIMESTAMP
-        )
-    ''')
-    
-    # جدول اعلان‌ها
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS notifications (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            title TEXT,
-            message TEXT,
-            is_read INTEGER DEFAULT 0,
-            created_at TIMESTAMP
-        )
-    ''')
-    
-    # ایندکس‌های جدید
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id, created_at)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, is_read)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_support_tickets_user ON support_tickets(user_id, status)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_user_logs_user ON user_logs(user_id, created_at)")
-    
-    conn.commit()
-
-# ==================== توابع جدید دیتابیس ====================
-
-def log_transaction(user_id, amount, trans_type, description, reference_id=None):
-    """ثبت تراکنش مالی"""
-    try:
-        with get_db() as conn:
-            balance_before = get_user_balance(user_id)
-            if trans_type == 'deposit':
-                conn.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (amount, user_id))
-            elif trans_type == 'withdraw':
-                conn.execute('UPDATE users SET balance = balance - ? WHERE user_id = ?', (amount, user_id))
-            balance_after = get_user_balance(user_id)
-            conn.execute('''
-                INSERT INTO transactions (user_id, amount, type, description, reference_id, balance_before, balance_after, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (user_id, amount, trans_type, description, reference_id, balance_before, balance_after, datetime.now().isoformat()))
-            conn.commit()
-            return True
-    except:
-        return False
-
-def get_transactions(user_id, limit=20):
-    """دریافت تراکنش‌های کاربر"""
-    try:
-        with get_db() as conn:
-            return [dict(t) for t in conn.execute('''
-                SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT ?
-            ''', (user_id, limit)).fetchall()]
-    except:
-        return []
-
-def log_user_action(user_id, action, details=None):
-    """ثبت فعالیت کاربر"""
-    try:
-        with get_db() as conn:
-            conn.execute('''
-                INSERT INTO user_logs (user_id, action, details, created_at)
-                VALUES (?, ?, ?, ?)
-            ''', (user_id, action, details, datetime.now().isoformat()))
-            conn.commit()
-            return True
-    except:
-        return False
-
-def create_ticket(user_id, subject, message):
-    """ایجاد تیکت پشتیبانی"""
-    try:
-        with get_db() as conn:
-            conn.execute('''
-                INSERT INTO support_tickets (user_id, subject, message, created_at)
-                VALUES (?, ?, ?, ?)
-            ''', (user_id, subject, message, datetime.now().isoformat()))
-            conn.commit()
-            return conn.execute('SELECT last_insert_rowid()').fetchone()[0]
-    except:
-        return None
-
-def get_user_tickets(user_id):
-    """دریافت تیکت‌های کاربر"""
-    try:
-        with get_db() as conn:
-            return [dict(t) for t in conn.execute('''
-                SELECT * FROM support_tickets WHERE user_id = ? ORDER BY created_at DESC
-            ''', (user_id,)).fetchall()]
-    except:
-        return []
-
-def add_notification(user_id, title, message):
-    """ارسال اعلان به کاربر"""
-    try:
-        with get_db() as conn:
-            conn.execute('''
-                INSERT INTO notifications (user_id, title, message, created_at)
-                VALUES (?, ?, ?, ?)
-            ''', (user_id, title, message, datetime.now().isoformat()))
-            conn.commit()
-            return True
-    except:
-        return False
-
-def get_notifications(user_id):
-    """دریافت اعلان‌های کاربر"""
-    try:
-        with get_db() as conn:
-            return [dict(n) for n in conn.execute('''
-                SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 20
-            ''', (user_id,)).fetchall()]
-    except:
-        return []
-
-def mark_notification_read(notif_id):
-    """علامت خوانده شدن اعلان"""
-    try:
-        with get_db() as conn:
-            conn.execute('UPDATE notifications SET is_read = 1 WHERE id = ?', (notif_id,))
-            conn.commit()
-            return True
-    except:
-        return False
-
-def get_user_stats_full(user_id):
-    """آمار کامل کاربر"""
-    try:
-        with get_db() as conn:
-            bot_count = conn.execute('SELECT COUNT(*) FROM bots WHERE user_id = ?', (user_id,)).fetchone()[0]
-            total_withdraw = conn.execute('SELECT IFNULL(SUM(amount), 0) FROM withdraw_requests WHERE user_id = ? AND status = "approved"', (user_id,)).fetchone()[0]
-            referral_count = conn.execute('SELECT COUNT(*) FROM users WHERE referred_by = ?', (user_id,)).fetchone()[0]
-            return {
-                'bot_count': bot_count,
-                'total_withdraw': total_withdraw,
-                'referral_count': referral_count
-            }
-    except:
-        return {'bot_count': 0, 'total_withdraw': 0, 'referral_count': 0}
-
-def get_database_info():
-    """اطلاعات دیتابیس"""
-    try:
-        with get_db() as conn:
-            return {
-                'users': conn.execute('SELECT COUNT(*) FROM users').fetchone()[0],
-                'bots': conn.execute('SELECT COUNT(*) FROM bots').fetchone()[0],
-                'transactions': conn.execute('SELECT COUNT(*) FROM transactions').fetchone()[0],
-                'total_balance': conn.execute('SELECT IFNULL(SUM(balance), 0) FROM users').fetchone()[0],
-            }
-    except:
-        return {}
-
-def weekly_optimize():
-    """بهینه‌سازی هفتگی دیتابیس"""
-    def optimize():
-        while True:
-            time.sleep(7 * 24 * 3600)
-            try:
-                with get_db() as conn:
-                    conn.execute("VACUUM")
-                    conn.execute("ANALYZE")
-                    conn.execute("PRAGMA optimize")
-                print("✅ دیتابیس بهینه شد")
-            except: pass
-    threading.Thread(target=optimize, daemon=True).start()
-
-# شروع بهینه‌سازی خودکار
-weekly_optimize()
-# ==================== دیتابیس قوی - جداول و توابع جدید ====================
-# ... (کد قبلی که اضافه کردی) ...
-# ==================== END دیتابیس قوی ====================
-
-# 👇👇👇 این کد جدید رو درست اینجا اضافه کن 👇👇👇
-
-# ==================== سیستم‌های پشت پرده قوی ====================
-
-# 1. بکاپ خودکار روزانه
-def auto_backup():
-    def backup():
-        while True:
-            time.sleep(24 * 3600)
-            try:
-                backup_name = f"backup_{datetime.now().strftime('%Y%m%d')}.db"
-                backup_path = os.path.join(BACKUP_DIR, backup_name)
-                shutil.copy2(DB_PATH, backup_path)
-                backups = sorted([f for f in os.listdir(BACKUP_DIR) if f.endswith('.db')])
-                for old in backups[:-7]:
-                    os.remove(os.path.join(BACKUP_DIR, old))
-                print(f"✅ بکاپ: {backup_name}")
-            except: pass
-    threading.Thread(target=backup, daemon=True).start()
-auto_backup()
-
-# 2. پاکسازی خودکار لاگ‌های قدیمی
-def clean_old_logs():
-    def cleaner():
-        while True:
-            time.sleep(30 * 24 * 3600)
-            try:
-                with get_db() as conn:
-                    cutoff = (datetime.now() - timedelta(days=90)).isoformat()
-                    conn.execute('DELETE FROM user_logs WHERE created_at < ?', (cutoff,))
-                    conn.execute('DELETE FROM notifications WHERE is_read = 1 AND created_at < ?', (cutoff,))
-                    conn.commit()
-                print("✅ لاگ‌های قدیمی پاک شدند")
-            except: pass
-    threading.Thread(target=cleaner, daemon=True).start()
-clean_old_logs()
-
-# 3. نمایش آمار دیتابیس در ترمینال
-def show_db_stats():
-    def stats():
-        while True:
-            time.sleep(24 * 3600)
-            try:
-                info = get_database_info()
-                print("\n" + "=" * 50)
-                print(f"📊 آمار دیتابیس - {datetime.now().strftime('%Y-%m-%d')}")
-                print(f"👥 کاربران: {info['users']}")
-                print(f"🤖 ربات‌ها: {info['bots']}")
-                print(f"💰 تراکنش‌ها: {info['transactions']}")
-                print(f"💵 مجموع موجودی: {info['total_balance']:,} تومان")
-                print("=" * 50 + "\n")
-            except: pass
-    threading.Thread(target=stats, daemon=True).start()
-show_db_stats()
-
-# 4. اعلان خودکار برای تراکنش‌ها (تابع log_transaction رو کاملتر کن)
-def log_transaction_enhanced(user_id, amount, trans_type, description, reference_id=None):
-    try:
-        with get_db() as conn:
-            balance_before = get_user_balance(user_id)
-            if trans_type == 'deposit':
-                conn.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (amount, user_id))
-                add_notification(user_id, '💰 واریز', f'{amount:,} تومان به کیف پول شما اضافه شد.')
-            elif trans_type == 'withdraw':
-                conn.execute('UPDATE users SET balance = balance - ? WHERE user_id = ?', (amount, user_id))
-                add_notification(user_id, '🏧 برداشت', f'درخواست برداشت {amount:,} تومان ثبت شد.')
-            balance_after = get_user_balance(user_id)
-            conn.execute('''
-                INSERT INTO transactions (user_id, amount, type, description, reference_id, balance_before, balance_after, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (user_id, amount, trans_type, description, reference_id, balance_before, balance_after, datetime.now().isoformat()))
-            conn.commit()
-            return True
-    except: return False
-
-# ==================== END سیستم‌های پشت پرده ====================
-
-# ==================== END دیتابیس قوی ====================            
