@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-ربات مادر نهایی نسخه 17.0 - با سیستم نصب خودکار کتابخانه‌ها و ثانیه‌شمار پویا
+ربات مادر نهایی نسخه 17.1 - با رفع خطای Conflict 409 و مدیریت نمونه همزمان
 """
 
 import telebot
@@ -27,6 +27,29 @@ from contextlib import contextmanager
 import paramiko
 from queue import Queue
 
+# ==================== فایل PID برای جلوگیری از اجرای همزمان ====================
+PID_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot.pid")
+
+def check_and_create_pid():
+    """بررسی و ایجاد فایل PID برای جلوگیری از اجرای همزمان"""
+    if os.path.exists(PID_FILE):
+        try:
+            with open(PID_FILE, 'r') as f:
+                old_pid = int(f.read().strip())
+            # بررسی اینکه فرآیند قبلی هنوز در حال اجراست یا نه
+            os.kill(old_pid, 0)
+            print(f"❌ خطا: نمونه دیگری از ربات با PID {old_pid} در حال اجراست!")
+            print("لطفاً آن را متوقف کنید یا فایل bot.pid را حذف کنید.")
+            sys.exit(1)
+        except (OSError, ValueError, ProcessLookupError):
+            # فرآیند قبلی وجود ندارد، فایل را حذف می‌کنیم
+            os.remove(PID_FILE)
+    
+    # ذخیره PID فعلی
+    with open(PID_FILE, 'w') as f:
+        f.write(str(os.getpid()))
+    print(f"✅ PID {os.getpid()} ذخیره شد")
+
 # ==================== تنظیمات پایه ====================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_DIR = os.path.join(BASE_DIR, "database")
@@ -43,9 +66,7 @@ for dir_path in [DB_DIR, FILES_DIR, RUNNING_DIR, LOGS_DIR, RECEIPTS_DIR, PENDING
     os.makedirs(dir_path, exist_ok=True)
 
 # ==================== توکن ربات مادر ====================
-BOT_TOKEN = "8787172986:AAHtlVXWZTTFUrvWc0OcVI-CehKxkPmF7nA"
-bot = telebot.TeleBot(BOT_TOKEN, num_threads=200)
-bot.delete_webhook()
+BOT_TOKEN = "7685135237:AAEmsHktRw9cEqrHTkCoPZk-fBimK7TDjOo"
 
 # ==================== آیدی ادمین ====================
 ADMIN_IDS = [327855654]
@@ -399,6 +420,33 @@ with get_db() as conn:
 config.load_from_db()
 texts.load_from_db()
 
+# ==================== ایجاد و تنظیم وب‌هوک و ربات ====================
+def setup_bot():
+    """تنظیم ربات با حذف وب‌هوک و اطمینان از عدم تداخل"""
+    bot_instance = telebot.TeleBot(BOT_TOKEN, num_threads=100)
+    
+    # حذف کامل وب‌هوک
+    try:
+        bot_instance.remove_webhook()
+        print("✅ وب‌هوک حذف شد")
+    except Exception as e:
+        print(f"⚠️ خطا در حذف وب‌هوک: {e}")
+    
+    # حذف هرگونه درخواست pending
+    time.sleep(1)
+    
+    # تنظیم مجدد
+    try:
+        bot_instance.delete_webhook()
+        time.sleep(0.5)
+    except:
+        pass
+    
+    return bot_instance
+
+# ایجاد نمونه ربات
+bot = setup_bot()
+
 # ==================== توابع دیتابیس ====================
 
 def generate_referral_code(user_id):
@@ -699,7 +747,6 @@ def detect_requirements(code):
     imports = set()
     lines = code.split('\n')
     
-    # کتابخانه‌های استاندارد پایتون که نیازی به نصب ندارند
     std_libs = {
         'os', 'sys', 'time', 'datetime', 'json', 're', 'math', 'random',
         'string', 'collections', 'itertools', 'functools', 'typing',
@@ -713,12 +760,6 @@ def detect_requirements(code):
         'asyncio', 'concurrent', 'unittest', 'doctest', 'pdb'
     }
     
-    # کتابخانه‌های معروف تلگرامی
-    telegram_libs = {
-        'telebot', 'pyTelegramBotAPI', 'telethon', 'pyrogram', 'aiogram',
-        'python-telegram-bot', 'telegram', 'telegram.ext'
-    }
-    
     for line in lines:
         line = line.strip()
         if line.startswith('import '):
@@ -727,22 +768,12 @@ def detect_requirements(code):
                 lib = parts[1].split('.')[0]
                 lib = lib.split(' as ')[0]
                 if lib not in std_libs and lib not in ['__future__', '__main__']:
-                    # تبدیل نام‌های خاص
                     if lib == 'PIL':
                         lib = 'Pillow'
                     elif lib == 'bs4':
                         lib = 'beautifulsoup4'
                     elif lib == 'cv2':
                         lib = 'opencv-python'
-                    elif lib in telegram_libs:
-                        if lib == 'telebot' or lib == 'pyTelegramBotAPI':
-                            lib = 'pyTelegramBotAPI'
-                        elif lib == 'telethon':
-                            lib = 'telethon'
-                        elif lib == 'pyrogram':
-                            lib = 'pyrogram'
-                        elif lib == 'aiogram':
-                            lib = 'aiogram'
                     imports.add(lib)
                     
         elif line.startswith('from '):
@@ -756,15 +787,6 @@ def detect_requirements(code):
                         lib = 'beautifulsoup4'
                     elif lib == 'cv2':
                         lib = 'opencv-python'
-                    elif lib in telegram_libs:
-                        if lib == 'telebot' or lib == 'pyTelegramBotAPI':
-                            lib = 'pyTelegramBotAPI'
-                        elif lib == 'telethon':
-                            lib = 'telethon'
-                        elif lib == 'pyrogram':
-                            lib = 'pyrogram'
-                        elif lib == 'aiogram':
-                            lib = 'aiogram'
                     imports.add(lib)
     
     return list(imports)
@@ -780,26 +802,22 @@ def install_libraries_on_server(server, libraries, bot_id):
         client.connect(server['ip'], port=server['port'], 
                       username=server['username'], password=server['password'], timeout=30)
         
-        for lib in libraries[:20]:  # حداکثر ۲۰ کتابخانه
+        for lib in libraries[:20]:
             lib_name = lib.strip()
             if not lib_name:
                 continue
             
-            # بررسی نصب بودن کتابخانه
             stdin, stdout, stderr = client.exec_command(f'pip3 show {lib_name} 2>/dev/null | grep Name')
             result = stdout.read().decode().strip()
             
             if not result:
-                # نصب کتابخانه
                 stdin, stdout, stderr = client.exec_command(f'pip3 install {lib_name} --quiet')
                 error = stderr.read().decode()
                 if 'Successfully installed' in error or not error:
                     installed.append(lib_name)
                     mark_library_installed(lib_name, server['id'])
-                    logger.info(f"کتابخانه {lib_name} روی سرور {server['name']} نصب شد")
                 else:
                     failed.append(lib_name)
-                    logger.error(f"خطا در نصب {lib_name}: {error[:100]}")
             else:
                 installed.append(lib_name)
         
@@ -820,39 +838,22 @@ def install_libraries_on_mother(libraries):
             continue
         
         try:
-            # بررسی نصب بودن
             result = subprocess.run([sys.executable, '-m', 'pip', 'show', lib_name], 
                                    capture_output=True, text=True)
             if result.returncode != 0:
-                # نصب کتابخانه
                 install_result = subprocess.run([sys.executable, '-m', 'pip', 'install', lib_name, '--quiet'],
                                                capture_output=True, text=True)
                 if install_result.returncode == 0:
                     installed.append(lib_name)
                     mark_library_installed(lib_name, 0)
-                    logger.info(f"کتابخانه {lib_name} روی مادر نصب شد")
                 else:
                     failed.append(lib_name)
-                    logger.error(f"خطا در نصب {lib_name}: {install_result.stderr[:100]}")
             else:
                 installed.append(lib_name)
         except Exception as e:
             failed.append(lib_name)
-            logger.error(f"install_libraries_on_mother error for {lib_name}: {e}")
     
     return installed, failed
-
-def validate_and_install_requirements(code, server=None):
-    """بررسی و نصب کتابخانه‌های مورد نیاز"""
-    libraries = detect_requirements(code)
-    
-    if not libraries:
-        return [], []
-    
-    if server:
-        return install_libraries_on_server(server, libraries, None)
-    else:
-        return install_libraries_on_mother(libraries)
 
 # ==================== سیستم مدیریت سرور و اجرا ====================
 
@@ -896,37 +897,30 @@ def add_new_server(name, ip, port, username, password):
         return False, f"❌ خطا: {str(e)}"
 
 def run_bot_on_server(server, bot_id, code, token):
-    """اجرای ربات روی سرور با نصب خودکار کتابخانه‌ها"""
     try:
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         client.connect(server['ip'], port=server['port'], 
                       username=server['username'], password=server['password'], timeout=30)
         
-        # ایجاد دایرکتوری ربات
         bot_dir = f"/home/ubuntu/bots/{bot_id}"
         client.exec_command(f'mkdir -p {bot_dir}')
         
-        # آپلود کد
         sftp = client.open_sftp()
         remote_path = f"{bot_dir}/bot.py"
         with sftp.open(remote_path, 'w') as f:
             f.write(code)
         sftp.close()
         
-        # تشخیص و نصب کتابخانه‌های مورد نیاز
         libraries = detect_requirements(code)
         if libraries:
-            logger.info(f"نصب کتابخانه‌های مورد نیاز برای ربات {bot_id}: {libraries}")
-            for lib in libraries[:15]:  # حداکثر ۱۵ کتابخانه
+            for lib in libraries[:15]:
                 client.exec_command(f'pip3 install {lib} --quiet')
                 time.sleep(0.5)
         
-        # اجرای ربات با nohup
         client.exec_command(f'cd {bot_dir} && nohup python3 bot.py > bot.log 2>&1 &')
         time.sleep(3)
         
-        # بررسی اجرا
         stdin, stdout, stderr = client.exec_command(f'pgrep -f "python3 {bot_dir}/bot.py"')
         pid = stdout.read().decode().strip()
         
@@ -941,7 +935,6 @@ def run_bot_on_server(server, bot_id, code, token):
         return None, str(e)
 
 def run_bot_on_mother_server(bot_id, code, token):
-    """اجرای ربات روی سرور مادر با نصب خودکار کتابخانه‌ها"""
     try:
         bot_dir = os.path.join(RUNNING_DIR, bot_id)
         os.makedirs(bot_dir, exist_ok=True)
@@ -950,10 +943,8 @@ def run_bot_on_mother_server(bot_id, code, token):
         with open(code_path, 'w', encoding='utf-8') as f:
             f.write(code)
         
-        # تشخیص و نصب کتابخانه‌های مورد نیاز
         libraries = detect_requirements(code)
         if libraries:
-            logger.info(f"نصب کتابخانه‌های مورد نیاز برای ربات {bot_id} روی مادر: {libraries}")
             for lib in libraries[:15]:
                 subprocess.run([sys.executable, '-m', 'pip', 'install', lib, '--quiet'], 
                              capture_output=True)
@@ -1102,7 +1093,6 @@ def extract_from_zip(zip_path, extract_to):
         return None, []
 
 def build_bot_from_pending(file_id, queue_id=None):
-    """ساخت ربات از فایل در انتظار با نصب خودکار کتابخانه‌ها"""
     result = {'success': False, 'error': None, 'name': None, 'username': None, 'bot_id': None}
     
     pending = get_pending_file_by_id(file_id)
@@ -1112,7 +1102,6 @@ def build_bot_from_pending(file_id, queue_id=None):
             update_build_queue_status(queue_id, 'failed', error_message=result['error'])
         return result
     
-    # استخراج کد
     code = None
     if pending['file_name'].endswith('.zip'):
         extract_dir = os.path.join(PENDING_FILES_DIR, f"extract_{file_id}")
@@ -1129,7 +1118,6 @@ def build_bot_from_pending(file_id, queue_id=None):
             update_build_queue_status(queue_id, 'failed', error_message=result['error'])
         return result
     
-    # استخراج توکن
     token = extract_token(code)
     if not token:
         result['error'] = "توکن ربات پیدا نشد"
@@ -1137,7 +1125,6 @@ def build_bot_from_pending(file_id, queue_id=None):
             update_build_queue_status(queue_id, 'failed', error_message=result['error'])
         return result
     
-    # بررسی توکن
     try:
         response = requests.get(f"https://api.telegram.org/bot{token}/getMe", timeout=10)
         if response.status_code != 200:
@@ -1154,26 +1141,14 @@ def build_bot_from_pending(file_id, queue_id=None):
             update_build_queue_status(queue_id, 'failed', error_message=result['error'])
         return result
     
-    # انتخاب سرور
     server = get_best_server()
     
-    # نصب کتابخانه‌های مورد نیاز
     if config.auto_install_libs:
-        if queue_id:
-            try:
-                bot.send_message(pending['user_id'], "📦 در حال نصب کتابخانه‌های مورد نیاز...")
-            except:
-                pass
-        
         if server:
             installed, failed = install_libraries_on_server(server, detect_requirements(code), None)
         else:
             installed, failed = install_libraries_on_mother(detect_requirements(code))
-        
-        if failed:
-            logger.warning(f"برخی کتابخانه‌ها نصب نشدند: {failed}")
     
-    # اجرای ربات
     bot_id = hashlib.md5(f"{pending['user_id']}_{token}_{time.time()}".encode()).hexdigest()[:12]
     
     if server:
@@ -1204,7 +1179,6 @@ def build_bot_from_pending(file_id, queue_id=None):
                 f"🤖 نام: {bot_name}\n"
                 f"🔗 لینک: https://t.me/{bot_username}\n"
                 f"🆔 آیدی: `{bot_id}`\n\n"
-                f"📦 کتابخانه‌های نصب شده: {len(detect_requirements(code))} مورد\n\n"
                 f"از منوی «ربات‌های من» می‌توانید آن را مدیریت کنید."
             )
         except:
@@ -1250,7 +1224,6 @@ def send_broadcast(message_text, admin_id):
 # ==================== تابع ثانیه‌شمار پویا ====================
 
 def update_countdown(chat_id, message_id, queue_id, start_time):
-    """به‌روزرسانی ثانیه‌شمار به صورت پویا"""
     try:
         queue_item = get_build_queue_item(queue_id)
         if not queue_item or queue_item['status'] != 'pending':
@@ -1403,18 +1376,9 @@ def update_subscription_payment_url(sub_id, authority, payment_url):
     except:
         return False
 
-def get_subscription_by_authority(authority):
-    try:
-        with get_db() as conn:
-            sub = conn.execute('SELECT * FROM subscriptions WHERE authority = ?', (authority,)).fetchone()
-            return dict(sub) if sub else None
-    except:
-        return None
-
 # ==================== بازگردانی ربات‌ها بعد از ریستارت ====================
 
 def restore_all_bots():
-    """بازیابی و راه‌اندازی مجدد تمام ربات‌های فعال بعد از ریستارت مادر"""
     try:
         with get_db() as conn:
             running_bots = conn.execute('''
@@ -1458,7 +1422,6 @@ def restore_all_bots():
                         
                         conn.execute('UPDATE bots SET status = "running" WHERE id = ?', (bot_info['id'],))
                         conn.commit()
-                        logger.info(f"ربات {bot_info['id']} بازگردانی شد")
                 except Exception as e:
                     logger.error(f"خطا در بازگردانی ربات {bot_info['id']}: {e}")
                     
@@ -2056,7 +2019,7 @@ def admin_panel(message):
     
     bot.send_message(message.chat.id, text, reply_markup=markup)
 
-# ==================== مدیریت کتابخانه‌ها (جدید) ====================
+# ==================== مدیریت کتابخانه‌ها ====================
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_libraries")
 def admin_libraries(call):
@@ -2146,7 +2109,7 @@ def install_common_libs(call):
     installed = []
     failed = []
     
-    for lib in COMMON_LIBRARIES[:30]:  # ۳۰ کتابخانه اول
+    for lib in COMMON_LIBRARIES[:30]:
         try:
             result = subprocess.run([sys.executable, '-m', 'pip', 'install', lib, '--quiet'], 
                                    capture_output=True, text=True)
@@ -2744,8 +2707,11 @@ def check_expired():
 # ==================== اجرا ====================
 
 if __name__ == "__main__":
+    # بررسی و ایجاد PID برای جلوگیری از اجرای همزمان
+    check_and_create_pid()
+    
     print("=" * 70)
-    print("🚀 ربات مادر نسخه نهایی 17.0 - با سیستم نصب خودکار کتابخانه‌ها")
+    print("🚀 ربات مادر نسخه نهایی 17.1 - با رفع خطای Conflict 409")
     print("=" * 70)
     print(f"✅ ادمین: {ADMIN_IDS}")
     print(f"✅ قیمت: {config.price:,} تومان")
@@ -2763,10 +2729,11 @@ if __name__ == "__main__":
     print("🟢 ربات مادر در حال اجراست...")
     print("=" * 70)
     print("📌 ویژگی‌های جدید:")
+    print("🔹 رفع خطای Conflict 409 (اجرای همزمان)")
+    print("🔹 فایل PID برای جلوگیری از اجرای چند نمونه")
+    print("🔹 حذف کامل وب‌هوک در شروع")
     print("🔹 تشخیص خودکار کتابخانه‌های مورد نیاز از کد ربات")
     print("🔹 نصب خودکار کتابخانه‌ها روی سرور قبل از اجرا")
-    print("🔹 دکمه مدیریت کتابخانه‌ها در پنل ادمین")
-    print("🔹 نصب بیش از ۱۰۰ کتابخانه پرکاربرد با یک کلیک")
     print("🔹 ثانیه‌شمار پویا ۶۰ ثانیه برای ساخت ربات")
     print("=" * 70)
     
@@ -2776,9 +2743,14 @@ if __name__ == "__main__":
     queue_worker_thread = threading.Thread(target=queue_worker, daemon=True)
     queue_worker_thread.start()
     
+    # استفاده از polling با تنظیمات مناسب برای جلوگیری از خطا
     while True:
         try:
-            bot.infinity_polling(timeout=60)
+            # حذف مجدد وب‌هوک قبل از شروع
+            bot.remove_webhook()
+            time.sleep(1)
+            bot.infinity_polling(timeout=60, skip_pending=True)
         except Exception as e:
             print(f"خطا: {e}")
+            print("در حال تلاش مجدد در 5 ثانیه...")
             time.sleep(5)
