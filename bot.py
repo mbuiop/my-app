@@ -2150,3 +2150,212 @@ if __name__ == "__main__":
             print(f"خطا: {e}")
             print("در حال تلاش مجدد در 5 ثانیه...")
             time.sleep(5)
+# ==================== دیتابیس قوی - جداول و توابع جدید ====================
+
+with get_db() as conn:
+    # جدول تراکنش‌های مالی
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            amount INTEGER,
+            type TEXT,
+            description TEXT,
+            reference_id TEXT,
+            balance_before INTEGER,
+            balance_after INTEGER,
+            created_at TIMESTAMP
+        )
+    ''')
+    
+    # جدول لاگ فعالیت‌ها
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS user_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            action TEXT,
+            details TEXT,
+            created_at TIMESTAMP
+        )
+    ''')
+    
+    # جدول تیکت پشتیبانی
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS support_tickets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            subject TEXT,
+            message TEXT,
+            status TEXT DEFAULT 'open',
+            admin_response TEXT,
+            created_at TIMESTAMP,
+            closed_at TIMESTAMP
+        )
+    ''')
+    
+    # جدول اعلان‌ها
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            title TEXT,
+            message TEXT,
+            is_read INTEGER DEFAULT 0,
+            created_at TIMESTAMP
+        )
+    ''')
+    
+    # ایندکس‌های جدید
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, is_read)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_support_tickets_user ON support_tickets(user_id, status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_user_logs_user ON user_logs(user_id, created_at)")
+    
+    conn.commit()
+
+# ==================== توابع جدید دیتابیس ====================
+
+def log_transaction(user_id, amount, trans_type, description, reference_id=None):
+    """ثبت تراکنش مالی"""
+    try:
+        with get_db() as conn:
+            balance_before = get_user_balance(user_id)
+            if trans_type == 'deposit':
+                conn.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (amount, user_id))
+            elif trans_type == 'withdraw':
+                conn.execute('UPDATE users SET balance = balance - ? WHERE user_id = ?', (amount, user_id))
+            balance_after = get_user_balance(user_id)
+            conn.execute('''
+                INSERT INTO transactions (user_id, amount, type, description, reference_id, balance_before, balance_after, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (user_id, amount, trans_type, description, reference_id, balance_before, balance_after, datetime.now().isoformat()))
+            conn.commit()
+            return True
+    except:
+        return False
+
+def get_transactions(user_id, limit=20):
+    """دریافت تراکنش‌های کاربر"""
+    try:
+        with get_db() as conn:
+            return [dict(t) for t in conn.execute('''
+                SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT ?
+            ''', (user_id, limit)).fetchall()]
+    except:
+        return []
+
+def log_user_action(user_id, action, details=None):
+    """ثبت فعالیت کاربر"""
+    try:
+        with get_db() as conn:
+            conn.execute('''
+                INSERT INTO user_logs (user_id, action, details, created_at)
+                VALUES (?, ?, ?, ?)
+            ''', (user_id, action, details, datetime.now().isoformat()))
+            conn.commit()
+            return True
+    except:
+        return False
+
+def create_ticket(user_id, subject, message):
+    """ایجاد تیکت پشتیبانی"""
+    try:
+        with get_db() as conn:
+            conn.execute('''
+                INSERT INTO support_tickets (user_id, subject, message, created_at)
+                VALUES (?, ?, ?, ?)
+            ''', (user_id, subject, message, datetime.now().isoformat()))
+            conn.commit()
+            return conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+    except:
+        return None
+
+def get_user_tickets(user_id):
+    """دریافت تیکت‌های کاربر"""
+    try:
+        with get_db() as conn:
+            return [dict(t) for t in conn.execute('''
+                SELECT * FROM support_tickets WHERE user_id = ? ORDER BY created_at DESC
+            ''', (user_id,)).fetchall()]
+    except:
+        return []
+
+def add_notification(user_id, title, message):
+    """ارسال اعلان به کاربر"""
+    try:
+        with get_db() as conn:
+            conn.execute('''
+                INSERT INTO notifications (user_id, title, message, created_at)
+                VALUES (?, ?, ?, ?)
+            ''', (user_id, title, message, datetime.now().isoformat()))
+            conn.commit()
+            return True
+    except:
+        return False
+
+def get_notifications(user_id):
+    """دریافت اعلان‌های کاربر"""
+    try:
+        with get_db() as conn:
+            return [dict(n) for n in conn.execute('''
+                SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 20
+            ''', (user_id,)).fetchall()]
+    except:
+        return []
+
+def mark_notification_read(notif_id):
+    """علامت خوانده شدن اعلان"""
+    try:
+        with get_db() as conn:
+            conn.execute('UPDATE notifications SET is_read = 1 WHERE id = ?', (notif_id,))
+            conn.commit()
+            return True
+    except:
+        return False
+
+def get_user_stats_full(user_id):
+    """آمار کامل کاربر"""
+    try:
+        with get_db() as conn:
+            bot_count = conn.execute('SELECT COUNT(*) FROM bots WHERE user_id = ?', (user_id,)).fetchone()[0]
+            total_withdraw = conn.execute('SELECT IFNULL(SUM(amount), 0) FROM withdraw_requests WHERE user_id = ? AND status = "approved"', (user_id,)).fetchone()[0]
+            referral_count = conn.execute('SELECT COUNT(*) FROM users WHERE referred_by = ?', (user_id,)).fetchone()[0]
+            return {
+                'bot_count': bot_count,
+                'total_withdraw': total_withdraw,
+                'referral_count': referral_count
+            }
+    except:
+        return {'bot_count': 0, 'total_withdraw': 0, 'referral_count': 0}
+
+def get_database_info():
+    """اطلاعات دیتابیس"""
+    try:
+        with get_db() as conn:
+            return {
+                'users': conn.execute('SELECT COUNT(*) FROM users').fetchone()[0],
+                'bots': conn.execute('SELECT COUNT(*) FROM bots').fetchone()[0],
+                'transactions': conn.execute('SELECT COUNT(*) FROM transactions').fetchone()[0],
+                'total_balance': conn.execute('SELECT IFNULL(SUM(balance), 0) FROM users').fetchone()[0],
+            }
+    except:
+        return {}
+
+def weekly_optimize():
+    """بهینه‌سازی هفتگی دیتابیس"""
+    def optimize():
+        while True:
+            time.sleep(7 * 24 * 3600)
+            try:
+                with get_db() as conn:
+                    conn.execute("VACUUM")
+                    conn.execute("ANALYZE")
+                    conn.execute("PRAGMA optimize")
+                print("✅ دیتابیس بهینه شد")
+            except: pass
+    threading.Thread(target=optimize, daemon=True).start()
+
+# شروع بهینه‌سازی خودکار
+weekly_optimize()
+
+# ==================== END دیتابیس قوی ====================            
