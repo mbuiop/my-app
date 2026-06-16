@@ -71,8 +71,8 @@ logger = logging.getLogger(__name__)
 class Config:
     """تنظیمات مرکزی سیستم"""
     # تلگرام
-    TELEGRAM_TOKEN = "YOUR_BOT_TOKEN_HERE"
-    ADMIN_IDS = [123456789, 987654321]  # آیدی ادمین‌ها
+    TELEGRAM_TOKEN = "8691128478:AAE7eZ0vo5kkFcvrerHt3vjw-mvJ3CqxpWE"
+    ADMIN_IDS = [327855654, ]  # آیدی ادمین‌ها
     
     # دیتابیس‌ها
     REDIS_HOST = "localhost"
