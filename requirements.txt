@@ -1,0 +1,5 @@
+telebot
+redis
+pymongo
+numpy
+scikit-learn
