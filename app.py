@@ -1772,7 +1772,7 @@ if __name__ == "__main__":
         logger.info("🚀 راه‌اندازی سیستم فوق‌پیشرفته MON...")
         
         # راه‌اندازی ربات
-        bot = UltraTelegramBot("YOUR_BOT_TOKEN_HERE")
+        bot = UltraTelegramBot("8691128478:AAE7eZ0vo5kkFcvrerHt3vjw-mvJ3CqxpWE")
         
         # راه‌اندازی پنل مدیریت
         admin = AdminPanel(bot)
