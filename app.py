@@ -35,7 +35,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ==================== توکن و آیدی ادمین ====================
-TOKEN = "YOUR_BOT_TOKEN_HERE"  # توکن خود را وارد کنید
+TOKEN = "8691128478:AAE7eZ0vo5kkFcvrerHt3vjw-mvJ3CqxpWE"  # توکن خود را وارد کنید
 ADMIN_ID = 327855654  # آیدی شما
 
 # ==================== کلاس مغز ====================
