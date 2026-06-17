@@ -1,6 +1,6 @@
 """
-🤖 هوش مصنوعی MON تلگرام - نسخه فوق‌پیشرفته با معماری میکروسرویس
-طراحی شده با بالاترین تکنولوژی برای یادگیری و پاسخگویی هوشمند
+🤖 هوش مصنوعی MON - نسخه فوق‌پیشرفته با قابلیت یادگیری خودکار و تحلیل رفتار
+طراحی شده با معماری Neuro-Symbolic AI
 """
 
 import os
@@ -12,36 +12,48 @@ import asyncio
 import threading
 import queue
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple, Any
-from dataclasses import dataclass, asdict
+from typing import Dict, List, Optional, Tuple, Any, Set
+from dataclasses import dataclass, asdict, field
 from collections import defaultdict, Counter
 import logging
 import pickle
 from pathlib import Path
+import random
+import time
+from enum import Enum
 
 # ==================== کتابخانه‌های اصلی ====================
 import telebot
 from telebot import types
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 
 # ==================== دیتابیس و کش ====================
 import redis
 from pymongo import MongoClient
 from pymongo.errors import DuplicateKeyError
 import sqlite3
-from elasticsearch import Elasticsearch, helpers
 
 # ==================== پردازش زبان طبیعی ====================
 import numpy as np
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-from sklearn.cluster import KMeans
-import jieba  # برای تجزیه کلمات فارسی
-import hazm  # برای پردازش زبان فارسی
-from transformers import AutoTokenizer, AutoModel  # برای embedding
+from sklearn.cluster import KMeans, DBSCAN
+from sklearn.decomposition import LatentDirichletAllocation
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestClassifier
+import jieba
+import hazm
+from hazm import *
+
+# ==================== یادگیری عمیق ====================
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers, models
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
 
 # ==================== وب سرویس ====================
-from flask import Flask, request, jsonify, render_template, session
+from flask import Flask, request, jsonify, render_template, session, send_from_directory
 from flask_cors import CORS
 import jwt
 from functools import wraps
@@ -52,966 +64,316 @@ import requests
 import aiohttp
 import aiofiles
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
-import asyncio
-import uvloop
-asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+import gc
 
-# ==================== تنظیمات لاگ ====================
+# ==================== تنظیمات ====================
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('ai_bot.log'),
+        logging.FileHandler('ultra_bot.log', encoding='utf-8'),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
 
-# ==================== تنظیمات اصلی ====================
-class Config:
-    """تنظیمات مرکزی سیستم"""
-    # تلگرام
-    TELEGRAM_TOKEN = "8691128478:AAE7eZ0vo5kkFcvrerHt3vjw-mvJ3CqxpWE"
-    ADMIN_IDS = [327855654, ]  # آیدی ادمین‌ها
-    
-    # دیتابیس‌ها
-    REDIS_HOST = "localhost"
-    REDIS_PORT = 6379
-    REDIS_DB = 0
-    
-    MONGODB_URI = "mongodb://localhost:27017"
-    MONGODB_DB = "ai_brain"
-    
-    ELASTICSEARCH_HOST = "http://localhost:9200"
-    
-    # امنیت
-    JWT_SECRET = secrets.token_urlsafe(32)
-    JWT_EXPIRATION = 3600  # 1 ساعت
-    
-    # مسیرها
-    KNOWLEDGE_PATH = "./knowledge"
-    FILES_PATH = "./files"
-    MODELS_PATH = "./models"
-    BACKUP_PATH = "./backups"
-    
-    # تنظیمات هوش مصنوعی
-    MEMORY_THRESHOLD = 0.6
-    KEYWORD_BOOST = 2.0
-    MAX_RESULTS = 10
-    LEARNING_RATE = 0.1
-    
-    # ایجاد پوشه‌ها
-    for path in [KNOWLEDGE_PATH, FILES_PATH, MODELS_PATH, BACKUP_PATH]:
-        Path(path).mkdir(parents=True, exist_ok=True)
+# ==================== کلاس‌های دیتا ====================
+class UserBehavior(Enum):
+    """رفتارهای کاربر"""
+    NEW = "جدید"
+    LEARNING = "در حال یادگیری"
+    EXPERT = "حرفه‌ای"
+    CURIOUS = "کنجکاو"
+    NEEDY = "نیازمند راهنما"
+    NEGATIVE = "منفی"
+    POSITIVE = "مثبت"
 
-# ==================== کلاس‌های اصلی دیتا ====================
 @dataclass
-class KnowledgeItem:
-    """ساختار دانش"""
-    id: str
-    question: str
-    answer: str
+class UserProfile:
+    """پروفایل کاربر"""
+    user_id: int
+    first_seen: datetime
+    last_seen: datetime
+    total_queries: int = 0
+    successful_queries: int = 0
+    failed_queries: int = 0
+    topics: Dict[str, int] = field(default_factory=dict)
+    keywords: Dict[str, int] = field(default_factory=dict)
+    behavior: UserBehavior = UserBehavior.NEW
+    avg_response_time: float = 0.0
+    satisfaction_score: float = 0.0
+    learning_pattern: List[str] = field(default_factory=list)
+    preferred_categories: List[str] = field(default_factory=list)
+    complexity_level: float = 0.5
+    emotional_state: str = "neutral"
+    
+    def to_dict(self):
+        return {
+            'user_id': self.user_id,
+            'first_seen': self.first_seen.isoformat(),
+            'last_seen': self.last_seen.isoformat(),
+            'total_queries': self.total_queries,
+            'successful_queries': self.successful_queries,
+            'failed_queries': self.failed_queries,
+            'topics': self.topics,
+            'keywords': self.keywords,
+            'behavior': self.behavior.value,
+            'avg_response_time': self.avg_response_time,
+            'satisfaction_score': self.satisfaction_score,
+            'learning_pattern': self.learning_pattern,
+            'preferred_categories': self.preferred_categories,
+            'complexity_level': self.complexity_level,
+            'emotional_state': self.emotional_state
+        }
+
+@dataclass
+class LearningHistory:
+    """تاریخچه یادگیری"""
+    query: str
+    response: str
+    timestamp: datetime
+    confidence: float
     category: str
     keywords: List[str]
-    embedding: List[float]
-    usage_count: int
-    created_at: datetime
-    updated_at: datetime
-    weight: float = 1.0
+    user_feedback: Optional[str] = None
+    was_learned: bool = False
     
     def to_dict(self):
         return {
-            'id': self.id,
-            'question': self.question,
-            'answer': self.answer,
+            'query': self.query,
+            'response': self.response,
+            'timestamp': self.timestamp.isoformat(),
+            'confidence': self.confidence,
             'category': self.category,
             'keywords': self.keywords,
-            'embedding': self.embedding,
-            'usage_count': self.usage_count,
-            'created_at': self.created_at.isoformat(),
-            'updated_at': self.updated_at.isoformat(),
-            'weight': self.weight
+            'user_feedback': self.user_feedback,
+            'was_learned': self.was_learned
         }
 
-@dataclass
-class KeywordItem:
-    """ساختار کلمات کلیدی"""
-    keyword: str
-    response: str
-    category: str
-    weight: float
-    related: List[str]
-    created_at: datetime
-    
-    def to_dict(self):
-        return {
-            'keyword': self.keyword,
-            'response': self.response,
-            'category': self.category,
-            'weight': self.weight,
-            'related': self.related,
-            'created_at': self.created_at.isoformat()
-        }
-
-# ==================== مغز اول: حافظه فوق‌پیشرفته ====================
-class UltraMemory:
-    """مغز حافظه با قابلیت‌های فوق‌پیشرفته"""
+# ==================== مغز اصلی: Neuro-Symbolic AI ====================
+class NeuroSymbolicBrain:
+    """مغز فوق‌پیشرفته با ترکیب شبکه‌های عصبی و سیستم نمادین"""
     
     def __init__(self):
-        self.redis = redis.Redis(
-            host=Config.REDIS_HOST,
-            port=Config.REDIS_PORT,
-            db=Config.REDIS_DB,
-            decode_responses=True,
-            socket_keepalive=True,
-            socket_timeout=10
-        )
+        # ======== بخش نمادین (Symbolic) ========
+        self.symbolic_memory = {}
+        self.keyword_graph = defaultdict(set)
+        self.category_tree = defaultdict(set)
+        self.semantic_network = {}
         
-        # مدل‌های NLP
-        self.tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
-        self.model = AutoModel.from_pretrained("distilbert-base-uncased")
+        # ======== بخش عصبی (Neural) ========
+        self._init_neural_networks()
         
-        # Cache برای سرعت بیشتر
+        # ======== بخش تحلیلی ========
+        self.tfidf_vectorizer = TfidfVectorizer(max_features=2000, ngram_range=(1, 3))
+        self.lda_model = LatentDirichletAllocation(n_components=10, random_state=42)
+        self.cluster_model = None
+        
+        # ======== حافظه‌های پیشرفته ========
+        self.redis = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+        self.mongo = MongoClient('mongodb://localhost:27017')['ultra_ai']
+        self.knowledge_collection = self.mongo['knowledge']
+        self.profile_collection = self.mongo['profiles']
+        self.history_collection = self.mongo['history']
+        
+        # ======== کش ========
         self.cache = {}
-        self.cache_size = 1000
+        self.cache_size = 2000
         
-        logger.info("🧠 مغز حافظه فوق‌پیشرفته راه‌اندازی شد")
+        # ======== سیستم یادگیری ========
+        self.auto_learning_queue = queue.Queue()
+        self.learning_thread = threading.Thread(target=self._auto_learn, daemon=True)
+        self.learning_thread.start()
+        
+        # ======== تحلیلگر رفتار ========
+        self.behavior_analyzer = BehaviorAnalyzer()
+        
+        # ======== آمار ========
+        self.stats = {
+            'total_learned': 0,
+            'auto_learned': 0,
+            'user_taught': 0,
+            'success_rate': 0.0,
+            'avg_confidence': 0.0
+        }
+        
+        logger.info("🧠 مغز Neuro-Symbolic راه‌اندازی شد")
     
-    def save_qa(self, question: str, answer: str, category: str = "general") -> str:
-        """ذخیره سوال و جواب با تحلیل عمیق"""
+    def _init_neural_networks(self):
+        """راه‌اندازی شبکه‌های عصبی"""
         try:
-            # تولید ID یکتا
-            q_id = hashlib.sha256(f"{question}{datetime.now().isoformat()}".encode()).hexdigest()
+            # مدل ۱: تشخیص موضوع
+            self.topic_classifier = self._build_topic_classifier()
             
-            # استخراج کلمات کلیدی پیشرفته
-            keywords = self._extract_keywords_advanced(question)
+            # مدل ۲: تولید پاسخ
+            self.response_generator = self._build_response_generator()
             
-            # تولید embedding
-            embedding = self._generate_embedding(question)
+            # مدل ۳: تشخیص احساسات
+            self.emotion_classifier = self._build_emotion_classifier()
             
-            # ایجاد آیتم دانش
-            item = KnowledgeItem(
-                id=q_id,
-                question=question,
-                answer=answer,
-                category=category,
-                keywords=keywords,
-                embedding=embedding.tolist(),
-                usage_count=0,
-                created_at=datetime.now(),
-                updated_at=datetime.now(),
-                weight=1.0
-            )
+            # مدل ۴: امتیازدهی
+            self.scoring_model = self._build_scoring_model()
             
-            # ذخیره در Redis با ساختار پیشرفته
-            key = f"qa:{q_id}"
-            self.redis.hset(key, mapping=item.to_dict())
-            
-            # ایندکس‌گذاری کلمات کلیدی
-            for keyword in keywords:
-                self.redis.sadd(f"index:{keyword}", q_id)
-                # ذخیره وزنی
-                self.redis.zadd(f"weight:{keyword}", {q_id: 1.0})
-            
-            # ذخیره در کش
-            self.cache[question] = item
-            
-            # اطمینان از permanence
-            self.redis.persist(key)
-            
-            logger.info(f"✅ دانش جدید ذخیره شد: {question[:50]}...")
-            return q_id
+            logger.info("✅ شبکه‌های عصبی راه‌اندازی شدند")
             
         except Exception as e:
-            logger.error(f"❌ خطا در ذخیره‌سازی: {e}")
-            return None
+            logger.error(f"❌ خطا در راه‌اندازی شبکه‌های عصبی: {e}")
+            self._init_fallback_models()
     
-    def search(self, query: str, threshold: float = 0.6) -> List[Dict]:
-        """جستجوی هوشمند با ترکیب چندین روش"""
-        try:
-            # روش ۱: جستجوی کلمات کلیدی
-            keyword_results = self._keyword_search(query)
-            
-            # روش ۲: جستجوی معنایی (embedding)
-            semantic_results = self._semantic_search(query)
-            
-            # روش ۳: جستجوی ترکیبی
-            combined_results = self._combined_search(query)
-            
-            # ادغام و امتیازدهی
-            all_results = self._merge_results(
-                keyword_results,
-                semantic_results,
-                combined_results
-            )
-            
-            # فیلتر بر اساس آستانه
-            filtered = [r for r in all_results if r.get('score', 0) >= threshold]
-            
-            # مرتب‌سازی نهایی
-            sorted_results = sorted(
-                filtered,
-                key=lambda x: (x['score'], x.get('usage_count', 0)),
-                reverse=True
-            )
-            
-            # آپدیت تعداد استفاده
-            if sorted_results:
-                best = sorted_results[0]
-                self._increment_usage(best['id'])
-            
-            return sorted_results[:Config.MAX_RESULTS]
-            
-        except Exception as e:
-            logger.error(f"❌ خطا در جستجو: {e}")
-            return []
+    def _build_topic_classifier(self):
+        """ساخت مدل تشخیص موضوع"""
+        model = models.Sequential([
+            layers.Dense(256, activation='relu', input_shape=(2000,)),
+            layers.Dropout(0.3),
+            layers.Dense(128, activation='relu'),
+            layers.Dropout(0.3),
+            layers.Dense(64, activation='relu'),
+            layers.Dense(10, activation='softmax')
+        ])
+        model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+        return model
     
-    def _keyword_search(self, query: str) -> List[Dict]:
-        """جستجوی مبتنی بر کلمات کلیدی"""
-        keywords = self._extract_keywords_advanced(query)
-        results = []
-        
-        for keyword in keywords:
-            q_ids = self.redis.smembers(f"index:{keyword}")
-            for q_id in q_ids:
-                data = self.redis.hgetall(f"qa:{q_id}")
-                if data:
-                    score = self._calculate_keyword_score(query, data['question'], keywords)
-                    results.append({
-                        'id': q_id,
-                        'question': data['question'],
-                        'answer': data['answer'],
-                        'score': score,
-                        'usage_count': int(data.get('usage_count', 0))
-                    })
-        
-        # حذف تکراری‌ها
-        seen = set()
-        unique_results = []
-        for r in results:
-            if r['id'] not in seen:
-                seen.add(r['id'])
-                unique_results.append(r)
-        
-        return unique_results
+    def _build_response_generator(self):
+        """ساخت مدل تولید پاسخ"""
+        model = models.Sequential([
+            layers.LSTM(256, return_sequences=True, input_shape=(100, 300)),
+            layers.LSTM(256, return_sequences=True),
+            layers.LSTM(256),
+            layers.Dense(512, activation='relu'),
+            layers.Dropout(0.3),
+            layers.Dense(256, activation='relu'),
+            layers.Dense(100, activation='softmax')
+        ])
+        model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+        return model
     
-    def _semantic_search(self, query: str) -> List[Dict]:
-        """جستجوی معنایی با استفاده از embedding"""
-        query_embedding = self._generate_embedding(query)
-        
-        # گرفتن همه آیتم‌ها (برای دقت بالا)
-        all_items = []
-        keys = self.redis.keys("qa:*")
-        
-        for key in keys:
-            data = self.redis.hgetall(key)
-            if data:
-                # تبدیل embedding از string به list
-                embedding = json.loads(data.get('embedding', '[]'))
-                if embedding:
-                    similarity = cosine_similarity(
-                        [query_embedding],
-                        [embedding]
-                    )[0][0]
-                    
-                    all_items.append({
-                        'id': data['id'],
-                        'question': data['question'],
-                        'answer': data['answer'],
-                        'score': similarity,
-                        'usage_count': int(data.get('usage_count', 0))
-                    })
-        
-        return sorted(all_items, key=lambda x: x['score'], reverse=True)[:Config.MAX_RESULTS]
+    def _build_emotion_classifier(self):
+        """ساخت مدل تشخیص احساسات"""
+        model = models.Sequential([
+            layers.Dense(128, activation='relu', input_shape=(2000,)),
+            layers.Dropout(0.3),
+            layers.Dense(64, activation='relu'),
+            layers.Dense(7, activation='softmax')  # 7 احساس مختلف
+        ])
+        model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+        return model
     
-    def _combined_search(self, query: str) -> List[Dict]:
-        """جستجوی ترکیبی با روش‌های مختلف"""
-        # ترکیب نتایج keyword و semantic
-        keyword_results = self._keyword_search(query)
-        semantic_results = self._semantic_search(query)
-        
-        return self._merge_results(keyword_results, semantic_results, [])
+    def _build_scoring_model(self):
+        """ساخت مدل امتیازدهی"""
+        model = models.Sequential([
+            layers.Dense(64, activation='relu', input_shape=(10,)),
+            layers.Dense(32, activation='relu'),
+            layers.Dense(1, activation='sigmoid')
+        ])
+        model.compile(optimizer='adam', loss='mse', metrics=['mae'])
+        return model
     
-    def _merge_results(self, *result_lists) -> List[Dict]:
-        """ادغام هوشمند نتایج مختلف"""
-        merged = {}
-        
-        for results in result_lists:
-            for r in results:
-                q_id = r['id']
-                if q_id not in merged:
-                    merged[q_id] = r
-                    merged[q_id]['score'] = 0
+    def _init_fallback_models(self):
+        """مدل‌های جایگزین ساده"""
+        self.topic_classifier = None
+        self.response_generator = None
+        self.emotion_classifier = None
+        self.scoring_model = None
+        logger.warning("⚠️ استفاده از مدل‌های جایگزین ساده")
+    
+    # ==================== یادگیری خودکار ====================
+    def auto_learn(self, query: str, response: str):
+        """افزودن به صف یادگیری خودکار"""
+        self.auto_learning_queue.put({
+            'query': query,
+            'response': response,
+            'timestamp': datetime.now()
+        })
+    
+    def _auto_learn(self):
+        """پردازش خودکار یادگیری"""
+        while True:
+            try:
+                item = self.auto_learning_queue.get(timeout=5)
                 
-                # ترکیب امتیازات با وزن‌های مختلف
-                if 'score' in r:
-                    merged[q_id]['score'] += r['score'] * 0.5
-        
-        return list(merged.values())
+                # تحلیل عمیق سوال
+                analysis = self._deep_analyze(item['query'])
+                
+                # استخراج دانش
+                knowledge = self._extract_knowledge(
+                    item['query'],
+                    item['response'],
+                    analysis
+                )
+                
+                # ذخیره در حافظه
+                self._store_knowledge(knowledge)
+                
+                # به‌روزرسانی آمار
+                self.stats['auto_learned'] += 1
+                self.stats['total_learned'] += 1
+                
+                logger.info(f"✅ یادگیری خودکار: {item['query'][:50]}...")
+                
+            except queue.Empty:
+                continue
+            except Exception as e:
+                logger.error(f"❌ خطا در یادگیری خودکار: {e}")
+    
+    def _deep_analyze(self, text: str) -> Dict:
+        """تحلیل عمیق متن"""
+        try:
+            # ۱. استخراج کلمات کلیدی
+            keywords = self._extract_keywords_advanced(text)
+            
+            # ۲. تشخیص موضوع
+            topics = self._detect_topics(text)
+            
+            # ۳. تشخیص احساسات
+            emotion = self._detect_emotion(text)
+            
+            # ۴. تحلیل پیچیدگی
+            complexity = self._analyze_complexity(text)
+            
+            # ۵. استخراج موجودیت‌ها (NER)
+            entities = self._extract_entities(text)
+            
+            # ۶. تشخیص الگوهای زبانی
+            patterns = self._detect_patterns(text)
+            
+            return {
+                'keywords': keywords,
+                'topics': topics,
+                'emotion': emotion,
+                'complexity': complexity,
+                'entities': entities,
+                'patterns': patterns
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ خطا در تحلیل عمیق: {e}")
+            return {
+                'keywords': [],
+                'topics': [],
+                'emotion': 'neutral',
+                'complexity': 0.5,
+                'entities': [],
+                'patterns': []
+            }
     
     def _extract_keywords_advanced(self, text: str) -> List[str]:
-        """استخراج کلمات کلیدی با روش‌های پیشرفته"""
-        # پاکسازی متن
-        text = re.sub(r'[^\w\s]', '', text)
-        
-        # تجزیه با hazm
-        normalizer = hazm.Normalizer()
+        """استخراج پیشرفته کلمات کلیدی با چند روش"""
+        # روش ۱: Hazel (پردازش زبان فارسی)
+        normalizer = Normalizer()
         text = normalizer.normalize(text)
         
-        # استفاده از jieba برای کلمات کلیدی
-        words = jieba.cut(text)
+        # روش ۲: Tokenization
+        tokenizer = WordTokenizer()
+        tokens = tokenizer.tokenize(text)
         
-        # حذف کلمات بی‌معنی
-        stopwords = set(hazm.stopwords_list())
-        keywords = [w for w in words if w not in stopwords and len(w) > 2]
+        # روش ۳: حذف کلمات بی‌معنی
+        stopwords = set(stopwords_list())
+        cleaned = [t for t in tokens if t not in stopwords and len(t) > 2]
         
-        # TF-IDF برای کلمات مهم‌تر
-        if len(keywords) > 5:
+        # روش ۴: TF-IDF برای اهمیت
+        if len(cleaned) > 3:
             vectorizer = TfidfVectorizer()
-            tfidf_matrix = vectorizer.fit_transform([' '.join(keywords)])
-            feature_names = vectorizer.get_feature_names_out()
-            tfidf_scores = tfidf_matrix.toarray()[0]
-            
-            # انتخاب کلمات با بالاترین TF-IDF
-            important = sorted(
-                zip(feature_names, tfidf_scores),
-                key=lambda x: x[1],
-                reverse=True
-            )[:5]
-            
-            keywords = [k for k, _ in important]
-        
-        return keywords[:10]
-    
-    def _generate_embedding(self, text: str) -> np.ndarray:
-        """تولید embedding با استفاده از transformer"""
-        try:
-            # Tokenize
-            inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
-            
-            # تولید embedding
-            outputs = self.model(**inputs)
-            embedding = outputs.last_hidden_state.mean(dim=1).detach().numpy()
-            
-            return embedding[0]
-            
-        except Exception as e:
-            logger.error(f"❌ خطا در تولید embedding: {e}")
-            # Fallback به روش ساده
-            return np.random.randn(768)
-    
-    def _calculate_keyword_score(self, query: str, stored_q: str, query_keywords: List[str]) -> float:
-        """محاسبه امتیاز بر اساس کلمات کلیدی"""
-        stored_keywords = self._extract_keywords_advanced(stored_q)
-        
-        # Jaccard similarity
-        intersection = set(query_keywords) & set(stored_keywords)
-        union = set(query_keywords) | set(stored_keywords)
-        
-        if not union:
-            return 0.0
-        
-        jaccard = len(intersection) / len(union)
-        
-        # ضریب تشابه متنی
-        text_sim = self._text_similarity(query, stored_q)
-        
-        # ترکیب امتیازات
-        final_score = (jaccard * 0.7) + (text_sim * 0.3)
-        
-        return final_score
-    
-    def _text_similarity(self, text1: str, text2: str) -> float:
-        """محاسبه شباهت متنی"""
-        words1 = set(text1.split())
-        words2 = set(text2.split())
-        
-        intersection = words1 & words2
-        union = words1 | words2
-        
-        return len(intersection) / len(union) if union else 0.0
-    
-    def _increment_usage(self, q_id: str):
-        """افزایش شمارنده استفاده"""
-        try:
-            key = f"qa:{q_id}"
-            self.redis.hincrby(key, 'usage_count', 1)
-            
-            # به‌روزرسانی زمان
-            self.redis.hset(key, 'updated_at', datetime.now().isoformat())
-            
-        except Exception as e:
-            logger.error(f"❌ خطا در بروزرسانی استفاده: {e}")
-    
-    def get_statistics(self) -> Dict:
-        """دریافت آمار حافظه"""
-        try:
-            total_items = len(self.redis.keys("qa:*"))
-            total_keywords = len(self.redis.keys("index:*"))
-            
-            # بیشترین سوالات استفاده شده
-            usage_stats = []
-            keys = self.redis.keys("qa:*")
-            for key in keys:
-                data = self.redis.hgetall(key)
-                if data:
-                    usage_stats.append({
-                        'question': data.get('question', ''),
-                        'usage_count': int(data.get('usage_count', 0))
-                    })
-            
-            usage_stats.sort(key=lambda x: x['usage_count'], reverse=True)
-            
-            return {
-                'total_items': total_items,
-                'total_keywords': total_keywords,
-                'most_used': usage_stats[:10],
-                'cache_size': len(self.cache)
-            }
-            
-        except Exception as e:
-            logger.error(f"❌ خطا در دریافت آمار: {e}")
-            return {}
-
-# ==================== مغز دوم: کلمات کلیدی فوق‌پیشرفته ====================
-class UltraKeywordBrain:
-    """مغز کلمات کلیدی با Elasticsearch و الگوریتم‌های پیشرفته"""
-    
-    def __init__(self):
-        self.es = Elasticsearch([Config.ELASTICSEARCH_HOST])
-        self._create_index()
-        self.keyword_cache = {}
-        
-        # مدل پیشرفته برای کلمات کلیدی
-        self.vectorizer = TfidfVectorizer(max_features=1000)
-        self.keyword_vectors = None
-        
-        logger.info("🔑 مغز کلمات کلیدی فوق‌پیشرفته راه‌اندازی شد")
-    
-    def _create_index(self):
-        """ایجاد ایندکس با تنظیمات پیشرفته"""
-        settings = {
-            'settings': {
-                'number_of_shards': 2,
-                'number_of_replicas': 1,
-                'analysis': {
-                    'analyzer': {
-                        'persian_analyzer': {
-                            'type': 'custom',
-                            'tokenizer': 'standard',
-                            'filter': ['lowercase', 'stop', 'persian_stemmer']
-                        }
-                    },
-                    'filter': {
-                        'persian_stemmer': {
-                            'type': 'stemmer',
-                            'language': 'persian'
-                        }
-                    }
-                }
-            },
-            'mappings': {
-                'properties': {
-                    'keyword': {
-                        'type': 'text',
-                        'analyzer': 'persian_analyzer',
-                        'fields': {
-                            'keyword': {'type': 'keyword'},
-                            'completion': {'type': 'completion'}
-                        }
-                    },
-                    'response': {'type': 'text', 'analyzer': 'persian_analyzer'},
-                    'category': {'type': 'keyword'},
-                    'weight': {'type': 'float'},
-                    'related_keywords': {'type': 'keyword'},
-                    'created_at': {'type': 'date'},
-                    'usage_count': {'type': 'integer'},
-                    'embedding': {'type': 'dense_vector', 'dims': 768}
-                }
-            }
-        }
-        
-        if not self.es.indices.exists(index='ultra_keywords'):
-            self.es.indices.create(index='ultra_keywords', body=settings)
-    
-    def add_keyword(self, keyword: str, response: str, category: str = "general", weight: float = 1.0):
-        """افزودن کلمه کلیدی با تحلیل عمیق"""
-        try:
-            # تولید embedding برای کلمه
-            embedding = self._generate_keyword_embedding(keyword)
-            
-            # پیدا کردن کلمات مرتبط
-            related = self._find_related_keywords(keyword)
-            
-            doc = {
-                'keyword': keyword,
-                'response': response,
-                'category': category,
-                'weight': weight,
-                'related_keywords': related,
-                'created_at': datetime.now().isoformat(),
-                'usage_count': 0,
-                'embedding': embedding
-            }
-            
-            # ذخیره در Elasticsearch
-            doc_id = hashlib.md5(keyword.encode()).hexdigest()
-            self.es.index(index='ultra_keywords', id=doc_id, body=doc)
-            
-            # ذخیره در کش
-            self.keyword_cache[keyword] = response
-            
-            logger.info(f"✅ کلمه کلیدی ذخیره شد: {keyword}")
-            
-        except Exception as e:
-            logger.error(f"❌ خطا در افزودن کلمه کلیدی: {e}")
-    
-    def search_keywords(self, query: str, min_score: float = 0.3) -> List[Dict]:
-        """جستجوی پیشرفته کلمات کلیدی با ترکیب روش‌ها"""
-        try:
-            # روش ۱: جستجوی فازی
-            fuzzy_results = self._fuzzy_search(query)
-            
-            # روش ۲: جستجوی معنایی
-            semantic_results = self._semantic_search(query)
-            
-            # روش ۳: جستجوی مرتبط
-            related_results = self._related_search(query)
-            
-            # ادغام نتایج
-            merged = self._merge_keyword_results(
-                fuzzy_results,
-                semantic_results,
-                related_results
-            )
-            
-            # فیلتر بر اساس امتیاز
-            filtered = [r for r in merged if r.get('score', 0) >= min_score]
-            
-            # مرتب‌سازی نهایی
-            sorted_results = sorted(
-                filtered,
-                key=lambda x: (x['score'], x.get('weight', 0)),
-                reverse=True
-            )
-            
-            return sorted_results[:Config.MAX_RESULTS]
-            
-        except Exception as e:
-            logger.error(f"❌ خطا در جستجوی کلمات کلیدی: {e}")
-            return []
-    
-    def _fuzzy_search(self, query: str) -> List[Dict]:
-        """جستجوی فازی با Elasticsearch"""
-        body = {
-            'query': {
-                'bool': {
-                    'should': [
-                        {
-                            'match': {
-                                'keyword': {
-                                    'query': query,
-                                    'fuzziness': 'AUTO',
-                                    'boost': 2.0
-                                }
-                            }
-                        },
-                        {
-                            'match_phrase': {
-                                'keyword': {
-                                    'query': query,
-                                    'slop': 2,
-                                    'boost': 3.0
-                                }
-                            }
-                        }
-                    ]
-                }
-            },
-            'sort': [
-                {'_score': {'order': 'desc'}},
-                {'weight': {'order': 'desc'}}
-            ],
-            'size': 20
-        }
-        
-        response = self.es.search(index='ultra_keywords', body=body)
-        return [{
-            'keyword': hit['_source']['keyword'],
-            'response': hit['_source']['response'],
-            'score': hit['_score'] / 10,
-            'weight': hit['_source'].get('weight', 1.0)
-        } for hit in response['hits']['hits']]
-    
-    def _semantic_search(self, query: str) -> List[Dict]:
-        """جستجوی معنایی با embedding"""
-        query_embedding = self._generate_keyword_embedding(query)
-        
-        body = {
-            'query': {
-                'script_score': {
-                    'query': {'match_all': {}},
-                    'script': {
-                        'source': "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
-                        'params': {'query_vector': query_embedding}
-                    }
-                }
-            },
-            'size': 20
-        }
-        
-        response = self.es.search(index='ultra_keywords', body=body)
-        return [{
-            'keyword': hit['_source']['keyword'],
-            'response': hit['_source']['response'],
-            'score': hit['_score'] / 2,
-            'weight': hit['_source'].get('weight', 1.0)
-        } for hit in response['hits']['hits']]
-    
-    def _related_search(self, query: str) -> List[Dict]:
-        """جستجوی کلمات مرتبط"""
-        # پیدا کردن کلمات کلیدی مرتبط با query
-        body = {
-            'query': {
-                'match': {
-                    'related_keywords': query
-                }
-            },
-            'size': 10
-        }
-        
-        response = self.es.search(index='ultra_keywords', body=body)
-        return [{
-            'keyword': hit['_source']['keyword'],
-            'response': hit['_source']['response'],
-            'score': hit['_score'] / 10 * 0.8,
-            'weight': hit['_source'].get('weight', 1.0)
-        } for hit in response['hits']['hits']]
-    
-    def _merge_keyword_results(self, *result_lists) -> List[Dict]:
-        """ادغام نتایج کلمات کلیدی"""
-        merged = {}
-        
-        for results in result_lists:
-            for r in results:
-                keyword = r['keyword']
-                if keyword not in merged:
-                    merged[keyword] = r
-                    merged[keyword]['score'] = 0
-                
-                merged[keyword]['score'] += r['score'] * 0.3
-        
-        return list(merged.values())
-    
-    def _generate_keyword_embedding(self, text: str) -> List[float]:
-        """تولید embedding برای کلمات کلیدی"""
-        # استفاده از مدل ساده‌تر برای سرعت
-        from sklearn.feature_extraction.text import CountVectorizer
-        vectorizer = CountVectorizer(max_features=768)
-        embedding = vectorizer.fit_transform([text]).toarray()[0]
-        return embedding.tolist() if len(embedding) == 768 else [0.0] * 768
-    
-    def _find_related_keywords(self, keyword: str) -> List[str]:
-        """پیدا کردن کلمات مرتبط با استفاده از شباهت"""
-        # جستجو در کش
-        all_keywords = list(self.keyword_cache.keys())
-        if not all_keywords:
-            return [keyword]
-        
-        # محاسبه شباهت
-        similar = []
-        for k in all_keywords:
-            similarity = self._text_similarity(keyword, k)
-            if similarity > 0.5 and k != keyword:
-                similar.append(k)
-        
-        return similar[:5]
-    
-    def _text_similarity(self, text1: str, text2: str) -> float:
-        """محاسبه شباهت متنی"""
-        words1 = set(text1.split())
-        words2 = set(text2.split())
-        
-        intersection = words1 & words2
-        union = words1 | words2
-        
-        return len(intersection) / len(union) if union else 0.0
-    
-    def get_keyword_stats(self) -> Dict:
-        """دریافت آمار کلمات کلیدی"""
-        try:
-            # تعداد کل کلمات
-            response = self.es.count(index='ultra_keywords')
-            total = response['count']
-            
-            # پرکاربردترین کلمات
-            body = {
-                'aggs': {
-                    'top_keywords': {
-                        'terms': {
-                            'field': 'keyword.keyword',
-                            'size': 10
-                        }
-                    }
-                },
-                'size': 0
-            }
-            
-            response = self.es.search(index='ultra_keywords', body=body)
-            top_keywords = [
-                {'keyword': bucket['key'], 'count': bucket['doc_count']}
-                for bucket in response['aggregations']['top_keywords']['buckets']
-            ]
-            
-            return {
-                'total_keywords': total,
-                'top_keywords': top_keywords,
-                'cache_size': len(self.keyword_cache)
-            }
-            
-        except Exception as e:
-            logger.error(f"❌ خطا در دریافت آمار کلمات کلیدی: {e}")
-            return {}
-
-# ==================== مغز سوم: یادگیری از فایل ====================
-class UltraFileLearner:
-    """مغز یادگیری از فایل با پردازش فوق‌پیشرفته"""
-    
-    def __init__(self):
-        self.client = MongoClient(Config.MONGODB_URI)
-        self.db = self.client[Config.MONGODB_DB]
-        self.collection = self.db['file_knowledge']
-        
-        # ایجاد ایندکس‌های پیشرفته
-        self.collection.create_index([('content', 'text')])
-        self.collection.create_index('keywords')
-        self.collection.create_index('category')
-        self.collection.create_index('embedding')
-        
-        # مدل‌های پردازش
-        self.tfidf_vectorizer = TfidfVectorizer(max_features=500)
-        self.word_vectors = {}
-        
-        logger.info("📚 مغز یادگیری از فایل فوق‌پیشرفته راه‌اندازی شد")
-    
-    def learn_from_txt(self, file_path: str, category: str = "document") -> Dict:
-        """یادگیری از فایل TXT با تحلیل عمیق"""
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-            
-            # پیش‌پردازش
-            processed = self._preprocess_text(content)
-            
-            # تقسیم به بخش‌های معنایی
-            sections = self._split_semantic_sections(processed)
-            
-            results = []
-            for section in sections:
-                if len(section.strip()) < 20:
-                    continue
-                
-                # استخراج کلمات کلیدی
-                keywords = self._extract_keywords_advanced(section)
-                
-                # تولید embedding
-                embedding = self._generate_embedding(section)
-                
-                doc = {
-                    'content': section,
-                    'category': category,
-                    'keywords': keywords,
-                    'embedding': embedding,
-                    'source_file': file_path,
-                    'created_at': datetime.now(),
-                    'updated_at': datetime.now(),
-                    'usage_count': 0,
-                    'weight': 1.0
-                }
-                
-                # ذخیره در MongoDB
-                doc_id = hashlib.md5(section.encode()).hexdigest()
-                self.collection.update_one(
-                    {'_id': doc_id},
-                    {'$set': doc},
-                    upsert=True
-                )
-                results.append(doc_id)
-            
-            logger.info(f"✅ یادگیری از فایل {file_path}: {len(results)} بخش")
-            return {
-                'file': file_path,
-                'sections': len(results),
-                'ids': results
-            }
-            
-        except Exception as e:
-            logger.error(f"❌ خطا در یادگیری از فایل: {e}")
-            return {'error': str(e)}
-    
-    def learn_from_csv(self, file_path: str, question_col: str = 'question', answer_col: str = 'answer'):
-        """یادگیری از فایل CSV"""
-        try:
-            import pandas as pd
-            df = pd.read_csv(file_path)
-            
-            results = []
-            for _, row in df.iterrows():
-                question = row.get(question_col, '')
-                answer = row.get(answer_col, '')
-                
-                if question and answer:
-                    # ذخیره در حافظه اصلی
-                    self._save_qa_pair(question, answer)
-                    results.append({'question': question, 'answer': answer})
-            
-            logger.info(f"✅ یادگیری از CSV: {len(results)} جفت سوال-جواب")
-            return {'total': len(results), 'results': results}
-            
-        except Exception as e:
-            logger.error(f"❌ خطا در یادگیری از CSV: {e}")
-            return {'error': str(e)}
-    
-    def learn_from_json(self, file_path: str):
-        """یادگیری از فایل JSON"""
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            
-            results = []
-            if isinstance(data, list):
-                for item in data:
-                    if 'question' in item and 'answer' in item:
-                        self._save_qa_pair(item['question'], item['answer'])
-                        results.append(item)
-            
-            logger.info(f"✅ یادگیری از JSON: {len(results)} جفت سوال-جواب")
-            return {'total': len(results), 'results': results}
-            
-        except Exception as e:
-            logger.error(f"❌ خطا در یادگیری از JSON: {e}")
-            return {'error': str(e)}
-    
-    def learn_from_folder(self, folder_path: str, recursive: bool = True):
-        """یادگیری از تمام فایل‌های یک پوشه"""
-        try:
-            results = []
-            path = Path(folder_path)
-            
-            # فایل‌های پشتیبانی شده
-            extensions = ['.txt', '.csv', '.json', '.md', '.docx']
-            
-            files = list(path.rglob('*')) if recursive else list(path.glob('*'))
-            
-            for file in files:
-                if file.suffix in extensions:
-                    if file.suffix == '.txt':
-                        result = self.learn_from_txt(str(file))
-                    elif file.suffix == '.csv':
-                        result = self.learn_from_csv(str(file))
-                    elif file.suffix == '.json':
-                        result = self.learn_from_json(str(file))
-                    else:
-                        continue
-                    
-                    results.append({
-                        'file': str(file),
-                        'result': result
-                    })
-            
-            logger.info(f"✅ یادگیری از پوشه {folder_path}: {len(results)} فایل")
-            return {'total_files': len(results), 'results': results}
-            
-        except Exception as e:
-            logger.error(f"❌ خطا در یادگیری از پوشه: {e}")
-            return {'error': str(e)}
-    
-    def search_in_files(self, query: str, limit: int = 10) -> List[Dict]:
-        """جستجوی پیشرفته در داده‌های یادگرفته شده"""
-        try:
-            # جستجوی متنی با MongoDB
-            text_results = list(self.collection.find(
-                {'$text': {'$search': query}},
-                {'score': {'$meta': 'textScore'}}
-            ).sort([('score', {'$meta': 'textScore'})]).limit(limit))
-            
-            # جستجوی کلمات کلیدی
-            keywords = self._extract_keywords_advanced(query)
-            keyword_results = list(self.collection.find({
-                'keywords': {'$in': keywords}
-            }).limit(limit))
-            
-            # جستجوی معنایی (embedding)
-            query_embedding = self._generate_embedding(query)
-            
-            # ترکیب نتایج
-            combined = {}
-            for doc in text_results + keyword_results:
-                doc_id = doc['_id']
-                if doc_id not in combined:
-                    combined[doc_id] = {
-                        'content': doc.get('content', '')[:200] + '...',
-                        'category': doc.get('category', 'unknown'),
-                        'score': doc.get('score', 0)
-                    }
-                else:
-                    combined[doc_id]['score'] += 0.5
-            
-            # تبدیل به لیست و مرتب‌سازی
-            results = list(combined.values())
-            results.sort(key=lambda x: x['score'], reverse=True)
-            
-            return results[:limit]
-            
-        except Exception as e:
-            logger.error(f"❌ خطا در جستجوی فایل‌ها: {e}")
-            return []
-    
-    def _preprocess_text(self, text: str) -> str:
-        """پیش‌پردازش متن"""
-        # حذف کاراکترهای اضافی
-        text = re.sub(r'\n{3,}', '\n\n', text)
-        text = re.sub(r' +', ' ', text)
-        text = re.sub(r'[^\w\s\.\?\!]', '', text)
-        return text
-    
-    def _split_semantic_sections(self, text: str) -> List[str]:
-        """تقسیم متن به بخش‌های معنایی"""
-        # تقسیم بر اساس پاراگراف‌ها
-        paragraphs = text.split('\n\n')
-        
-        # ترکیب پاراگراف‌های کوچک
-        sections = []
-        current = []
-        
-        for para in paragraphs:
-            if len(para.strip()) > 50:
-                if current:
-                    sections.append('\n'.join(current))
-                    current = []
-                sections.append(para)
-            else:
-                current.append(para)
-        
-        if current:
-            sections.append('\n'.join(current))
-        
-        return sections
-    
-    def _extract_keywords_advanced(self, text: str) -> List[str]:
-        """استخراج پیشرفته کلمات کلیدی"""
-        # ساده‌سازی
-        text = re.sub(r'[^\w\s]', '', text)
-        words = text.split()
-        
-        # حذف کلمات بی‌معنی
-        stopwords = set(['و', 'با', 'به', 'از', 'برای', 'که', 'این', 'آن', 'در'])
-        keywords = [w for w in words if w not in stopwords and len(w) > 2]
-        
-        # TF-IDF برای انتخاب کلمات مهم
-        if len(keywords) > 5:
-            vectorizer = TfidfVectorizer()
-            tfidf = vectorizer.fit_transform([' '.join(keywords)])
+            tfidf = vectorizer.fit_transform([' '.join(cleaned)])
             feature_names = vectorizer.get_feature_names_out()
             scores = tfidf.toarray()[0]
             
@@ -1022,83 +384,675 @@ class UltraFileLearner:
                 reverse=True
             )[:10]
             
-            keywords = [k for k, _ in important]
+            keywords = [k for k, _ in important if k not in stopwords]
+        else:
+            keywords = cleaned[:5]
         
         return keywords
     
-    def _generate_embedding(self, text: str) -> List[float]:
-        """تولید embedding با روش ساده"""
-        # برای سرعت بالا از روش ساده استفاده می‌کنیم
-        words = text.split()[:50]  # محدودیت برای سرعت
-        vector = [0.0] * 100
+    def _detect_topics(self, text: str) -> List[str]:
+        """تشخیص موضوعات متن"""
+        topics = []
         
-        for word in words:
-            # هش کردن کلمه به عدد
-            h = hash(word) % 100
-            vector[h] += 1
+        # لیست موضوعات
+        topic_keywords = {
+            'پزشکی': ['دارو', 'بیماری', 'درمان', 'سلامت', 'پزشک', 'درد', 'علائم'],
+            'برنامه‌نویسی': ['کد', 'پایتون', 'برنامه', 'الگوریتم', 'وب', 'سایت', 'طراحی'],
+            'آموزشی': ['یادگیری', 'آموزش', 'درس', 'مدرسه', 'دانشجو', 'تمرین'],
+            'فنی': ['سیستم', 'سخت‌افزار', 'نرم‌افزار', 'اینترنت', 'شبکه'],
+            'عمومی': ['سلام', 'خوبی', 'احوال', 'روز', 'زندگی'],
+            'روانشناسی': ['احساس', 'افسردگی', 'اضطراب', 'خوشحالی', 'استرس'],
+            'اقتصاد': ['پول', 'درآمد', 'بازار', 'کار', 'شغل', 'حقوق'],
+            'سیاسی': ['انتخابات', 'وزیر', 'رییس‌جمهور', 'مجلس'],
+            'علمی': ['تحقیق', 'دانشمندان', 'پژوهش', 'اکتشاف'],
+            'هنری': ['نقاشی', 'موسیقی', 'فیلم', 'کتاب', 'شعر']
+        }
         
-        # نرمال‌سازی
-        norm = np.linalg.norm(vector)
-        if norm > 0:
-            vector = [v / norm for v in vector]
+        detected = []
+        for topic, keywords in topic_keywords.items():
+            for keyword in keywords:
+                if keyword in text:
+                    detected.append(topic)
+                    break
         
-        return vector
+        return detected[:3]
     
-    def _save_qa_pair(self, question: str, answer: str):
-        """ذخیره جفت سوال-جواب در حافظه اصلی"""
-        # اینجا می‌توانید به مغز حافظه متصل شوید
-        logger.info(f"📝 ذخیره جفت سوال-جواب: {question[:50]}...")
+    def _detect_emotion(self, text: str) -> str:
+        """تشخیص احساسات متن"""
+        # لیست کلمات احساسی
+        emotions = {
+            'happy': ['خوشحال', 'عالی', 'خوب', 'شاد', 'خنده', 'لذت'],
+            'sad': ['ناراحت', 'غمگین', 'درد', 'افسرده', 'گریه'],
+            'angry': ['عصبانی', 'خشم', 'کتک', 'ناراضی', 'بد'],
+            'fear': ['ترس', 'وحشت', 'اضطراب', 'استرس', 'نگران'],
+            'surprise': ['تعجب', 'شگفت', 'عجیب', 'باورنکردنی'],
+            'love': ['عشق', 'دوست', 'مهربان', 'زیبا', 'دوستت دارم'],
+            'neutral': ['سلام', 'چطوری', 'هست', 'بود', 'شد']
+        }
+        
+        scores = defaultdict(int)
+        for emotion, words in emotions.items():
+            for word in words:
+                if word in text:
+                    scores[emotion] += 1
+        
+        if scores:
+            return max(scores.items(), key=lambda x: x[1])[0]
+        return 'neutral'
     
-    def get_file_stats(self) -> Dict:
-        """دریافت آمار فایل‌ها"""
+    def _analyze_complexity(self, text: str) -> float:
+        """تحلیل پیچیدگی متن"""
+        words = text.split()
+        
+        # ۱. طول متن
+        length_score = min(len(words) / 20, 1.0)
+        
+        # ۲. کلمات تخصصی
+        specialized = len([w for w in words if len(w) > 7])
+        specialized_score = specialized / max(len(words), 1)
+        
+        # ۳. تنوع کلمات
+        unique_ratio = len(set(words)) / max(len(words), 1)
+        
+        # ۴. پیچیدگی دستوری
+        # (ساده‌سازی)
+        punctuation = text.count('،') + text.count('.') + text.count('؟')
+        grammar_score = min(punctuation / 5, 1.0)
+        
+        # ترکیب امتیازات
+        complexity = (length_score * 0.3 + specialized_score * 0.3 + 
+                     unique_ratio * 0.2 + grammar_score * 0.2)
+        
+        return min(complexity, 1.0)
+    
+    def _extract_entities(self, text: str) -> List[Dict]:
+        """استخراج موجودیت‌ها (ساده)"""
+        entities = []
+        
+        # تشخیص اعداد
+        numbers = re.findall(r'\d+', text)
+        for num in numbers:
+            entities.append({'type': 'NUMBER', 'value': num})
+        
+        # تشخیص کلمات خاص
+        special = re.findall(r'[آ-ی]{5,}', text)
+        for item in special[:3]:
+            entities.append({'type': 'WORD', 'value': item})
+        
+        return entities
+    
+    def _detect_patterns(self, text: str) -> List[str]:
+        """تشخیص الگوهای زبانی"""
+        patterns = []
+        
+        # الگوی سوال
+        if '؟' in text or 'چرا' in text or 'چطور' in text or 'چه' in text:
+            patterns.append('question')
+        
+        # الگوی درخواست
+        if 'می‌خواهم' in text or 'لطفاً' in text or 'ممنون' in text:
+            patterns.append('request')
+        
+        # الگوی توضیح
+        if len(text.split()) > 20:
+            patterns.append('explanation')
+        
+        return patterns
+    
+    def _extract_knowledge(self, query: str, response: str, analysis: Dict) -> Dict:
+        """استخراج دانش از تحلیل"""
+        return {
+            'query': query,
+            'response': response,
+            'keywords': analysis['keywords'],
+            'topics': analysis['topics'],
+            'emotion': analysis['emotion'],
+            'complexity': analysis['complexity'],
+            'entities': analysis['entities'],
+            'patterns': analysis['patterns'],
+            'timestamp': datetime.now().isoformat()
+        }
+    
+    def _store_knowledge(self, knowledge: Dict):
+        """ذخیره دانش در دیتابیس"""
         try:
-            total_docs = self.collection.count_documents({})
+            # ۱. ذخیره در MongoDB
+            doc_id = hashlib.md5(knowledge['query'].encode()).hexdigest()
+            self.knowledge_collection.update_one(
+                {'_id': doc_id},
+                {'$set': knowledge},
+                upsert=True
+            )
             
-            # آمار بر اساس دسته‌بندی
-            categories = self.collection.aggregate([
-                {'$group': {'_id': '$category', 'count': {'$sum': 1}}}
-            ])
+            # ۲. ذخیره در Redis (برای دسترسی سریع)
+            key = f"knowledge:{doc_id}"
+            self.redis.hset(key, mapping={
+                'query': knowledge['query'],
+                'response': knowledge['response'],
+                'keywords': json.dumps(knowledge['keywords']),
+                'topics': json.dumps(knowledge['topics']),
+                'emotion': knowledge['emotion'],
+                'complexity': knowledge['complexity']
+            })
             
+            # ۳. به‌روزرسانی ایندکس کلمات کلیدی
+            for keyword in knowledge['keywords']:
+                self.redis.sadd(f"index:{keyword}", doc_id)
+                # افزایش وزن
+                self.redis.zincrby(f"weight:{keyword}", 1, doc_id)
+            
+            # ۴. به‌روزرسانی گراف دانش
+            for topic in knowledge['topics']:
+                self.category_tree[topic].add(doc_id)
+            
+            # ۵. به‌روزرسانی کش
+            self.cache[knowledge['query']] = knowledge['response']
+            if len(self.cache) > self.cache_size:
+                # حذف قدیمی‌ترین
+                oldest = next(iter(self.cache))
+                del self.cache[oldest]
+            
+        except Exception as e:
+            logger.error(f"❌ خطا در ذخیره دانش: {e}")
+    
+    # ==================== جستجوی هوشمند ====================
+    def search(self, query: str) -> Dict:
+        """جستجوی فوق‌پیشرفته با ترکیب چندین روش"""
+        try:
+            start_time = time.time()
+            
+            # ====== ۱. تحلیل سوال ======
+            analysis = self._deep_analyze(query)
+            
+            # ====== ۲. جستجو در کش ======
+            if query in self.cache:
+                logger.info(f"⚡ پاسخ از کش: {query[:50]}...")
+                return {
+                    'found': True,
+                    'response': self.cache[query],
+                    'confidence': 1.0,
+                    'source': 'cache',
+                    'analysis': analysis
+                }
+            
+            # ====== ۳. جستجوی کلمات کلیدی ======
+            keyword_results = self._keyword_search(query, analysis['keywords'])
+            
+            # ====== ۴. جستجوی معنایی ======
+            semantic_results = self._semantic_search(query)
+            
+            # ====== ۵. جستجوی موضوعی ======
+            topic_results = self._topic_search(query, analysis['topics'])
+            
+            # ====== ۶. جستجوی ترکیبی ======
+            combined = self._combine_search_results(
+                keyword_results,
+                semantic_results,
+                topic_results,
+                analysis
+            )
+            
+            # ====== ۷. امتیازدهی نهایی ======
+            if combined:
+                best = max(combined, key=lambda x: x['score'])
+                
+                if best['score'] > 0.7:
+                    # پاسخ با اطمینان بالا
+                    self.cache[query] = best['response']
+                    return {
+                        'found': True,
+                        'response': best['response'],
+                        'confidence': best['score'],
+                        'source': best.get('source', 'combined'),
+                        'analysis': analysis
+                    }
+            
+            # ====== ۸. تولید پاسخ هوشمند ======
+            generated = self._generate_response(query, analysis)
+            
+            if generated:
+                # یادگیری خودکار
+                self.auto_learn(query, generated)
+                
+                return {
+                    'found': True,
+                    'response': generated,
+                    'confidence': 0.6,
+                    'source': 'generated',
+                    'analysis': analysis
+                }
+            
+            # ====== ۹. پاسخ پیش‌فرض ======
             return {
-                'total_documents': total_docs,
-                'categories': [{'category': c['_id'], 'count': c['count']} for c in categories],
-                'collection_size': self.collection.count_documents({})
+                'found': False,
+                'response': self._generate_fallback(query, analysis),
+                'confidence': 0.0,
+                'source': 'fallback',
+                'analysis': analysis
             }
             
         except Exception as e:
-            logger.error(f"❌ خطا در دریافت آمار فایل‌ها: {e}")
+            logger.error(f"❌ خطا در جستجو: {e}")
+            return {
+                'found': False,
+                'response': "⚠️ خطا در پردازش سوال. لطفاً دوباره تلاش کنید.",
+                'confidence': 0.0,
+                'source': 'error'
+            }
+    
+    def _keyword_search(self, query: str, keywords: List[str]) -> List[Dict]:
+        """جستجوی مبتنی بر کلمات کلیدی"""
+        results = []
+        
+        for keyword in keywords:
+            # پیدا کردن داکیومنت‌های مرتبط
+            doc_ids = self.redis.smembers(f"index:{keyword}")
+            
+            for doc_id in doc_ids:
+                data = self.redis.hgetall(f"knowledge:{doc_id}")
+                if data:
+                    # محاسبه امتیاز
+                    stored_keywords = json.loads(data.get('keywords', '[]'))
+                    score = len(set(keywords) & set(stored_keywords)) / len(set(keywords) | set(stored_keywords))
+                    
+                    results.append({
+                        'id': doc_id,
+                        'query': data['query'],
+                        'response': data['response'],
+                        'score': score,
+                        'source': 'keyword',
+                        'keywords': stored_keywords
+                    })
+        
+        # مرتب‌سازی
+        results.sort(key=lambda x: x['score'], reverse=True)
+        return results[:10]
+    
+    def _semantic_search(self, query: str) -> List[Dict]:
+        """جستجوی معنایی با استفاده از TF-IDF"""
+        try:
+            # گرفتن نمونه‌های از دیتابیس
+            samples = list(self.knowledge_collection.find().limit(100))
+            
+            if not samples:
+                return []
+            
+            # آماده‌سازی متن‌ها
+            texts = [s.get('query', '') for s in samples]
+            texts.append(query)
+            
+            # محاسبه TF-IDF
+            tfidf_matrix = self.tfidf_vectorizer.fit_transform(texts)
+            
+            # شباهت کسینوسی
+            similarities = cosine_similarity(tfidf_matrix[-1:], tfidf_matrix[:-1])[0]
+            
+            results = []
+            for i, sim in enumerate(similarities):
+                if sim > 0.1:
+                    results.append({
+                        'id': samples[i].get('_id'),
+                        'query': samples[i].get('query'),
+                        'response': samples[i].get('response'),
+                        'score': sim,
+                        'source': 'semantic'
+                    })
+            
+            results.sort(key=lambda x: x['score'], reverse=True)
+            return results[:10]
+            
+        except Exception as e:
+            logger.error(f"❌ خطا در جستجوی معنایی: {e}")
+            return []
+    
+    def _topic_search(self, query: str, topics: List[str]) -> List[Dict]:
+        """جستجوی مبتنی بر موضوع"""
+        results = []
+        
+        for topic in topics:
+            if topic in self.category_tree:
+                doc_ids = self.category_tree[topic]
+                
+                for doc_id in doc_ids:
+                    data = self.redis.hgetall(f"knowledge:{doc_id}")
+                    if data:
+                        stored_topics = json.loads(data.get('topics', '[]'))
+                        score = len(set(topics) & set(stored_topics)) / len(set(topics) | set(stored_topics))
+                        
+                        results.append({
+                            'id': doc_id,
+                            'query': data['query'],
+                            'response': data['response'],
+                            'score': score * 0.8,
+                            'source': 'topic'
+                        })
+        
+        results.sort(key=lambda x: x['score'], reverse=True)
+        return results[:10]
+    
+    def _combine_search_results(self, *result_lists, analysis: Dict) -> List[Dict]:
+        """ادغام هوشمند نتایج جستجو"""
+        combined = {}
+        
+        for results in result_lists:
+            for r in results:
+                r_id = r['id']
+                if r_id not in combined:
+                    combined[r_id] = r
+                    combined[r_id]['score'] = 0
+                
+                # اضافه کردن امتیاز با وزن‌های مختلف
+                if r['source'] == 'keyword':
+                    combined[r_id]['score'] += r['score'] * 0.5
+                elif r['source'] == 'semantic':
+                    combined[r_id]['score'] += r['score'] * 0.3
+                elif r['source'] == 'topic':
+                    combined[r_id]['score'] += r['score'] * 0.2
+        
+        # مرتب‌سازی
+        results = list(combined.values())
+        results.sort(key=lambda x: x['score'], reverse=True)
+        
+        return results[:10]
+    
+    def _generate_response(self, query: str, analysis: Dict) -> Optional[str]:
+        """تولید پاسخ هوشمند"""
+        try:
+            # ====== ۱. پیدا کردن پاسخ مشابه ======
+            similar = []
+            
+            # جستجوی در MongoDB
+            cursor = self.knowledge_collection.find({
+                'keywords': {'$in': analysis['keywords'][:3]}
+            }).limit(5)
+            
+            for doc in cursor:
+                similar.append(doc)
+            
+            if not similar:
+                return None
+            
+            # ====== ۲. ترکیب بهترین پاسخ‌ها ======
+            responses = [doc.get('response', '') for doc in similar[:3]]
+            
+            # ====== ۳. تولید پاسخ ترکیبی ======
+            if len(responses) == 1:
+                return responses[0]
+            elif len(responses) == 2:
+                return f"{responses[0]}\n\nهمچنین:\n{responses[1]}"
+            else:
+                return f"{responses[0]}\n\nهمچنین:\n{responses[1]}\n\nو:\n{responses[2]}"
+            
+        except Exception as e:
+            logger.error(f"❌ خطا در تولید پاسخ: {e}")
+            return None
+    
+    def _generate_fallback(self, query: str, analysis: Dict) -> str:
+        """تولید پاسخ پیش‌فرض"""
+        # تشخیص نوع سوال
+        if 'چرا' in query:
+            return f"""
+🤔 سوال جالبی پرسیدید: "{query}"
+
+من هنوز پاسخ دقیقی برای این سوال یاد نگرفته‌ام، اما:
+1️⃣ می‌توانید با دستور `/learn` به من پاسخ را یاد دهید
+2️⃣ یا سوال را کمی ساده‌تر بپرسید
+
+📚 من هر روز چیزهای جدیدی یاد می‌گیرم!
+"""
+        elif 'چطور' in query or 'چگونه' in query:
+            return f"""
+💡 سوال شما: "{query}"
+
+برای پاسخ به این سوال باید بیشتر یاد بگیرم! 
+اما می‌توانید:
+- با `/learn` پاسخ را به من یاد دهید
+- یا از من به صورت مرحله‌ای بپرسید
+
+🧠 من در حال یادگیری هستم...
+"""
+        else:
+            return f"""
+🌟 سوال خوبی پرسیدید!
+
+من هنوز جواب "{query}" را نمی‌دانم، اما:
+✅ با `/learn` به من یاد دهید
+✅ یا سوال را دقیق‌تر بپرسید
+
+💪 هر روز هوشمندتر می‌شوم!
+"""
+    
+    # ==================== تحلیل رفتار کاربر ====================
+    def analyze_user_behavior(self, user_id: int, query: str, response: str, success: bool) -> UserProfile:
+        """تحلیل رفتار کاربر و به‌روزرسانی پروفایل"""
+        try:
+            # دریافت پروفایل
+            profile = self._get_user_profile(user_id)
+            
+            # به‌روزرسانی آمار
+            profile.total_queries += 1
+            profile.last_seen = datetime.now()
+            
+            if success:
+                profile.successful_queries += 1
+            else:
+                profile.failed_queries += 1
+            
+            # تحلیل موضوعات
+            analysis = self._deep_analyze(query)
+            for topic in analysis['topics']:
+                profile.topics[topic] = profile.topics.get(topic, 0) + 1
+            
+            # تحلیل کلمات کلیدی
+            for keyword in analysis['keywords']:
+                profile.keywords[keyword] = profile.keywords.get(keyword, 0) + 1
+            
+            # تشخیص رفتار
+            profile.behavior = self._classify_behavior(profile)
+            
+            # تشخیص علایق
+            if profile.topics:
+                sorted_topics = sorted(profile.topics.items(), key=lambda x: x[1], reverse=True)
+                profile.preferred_categories = [t[0] for t in sorted_topics[:3]]
+            
+            # بروزرسانی سطح پیچیدگی
+            avg_complexity = analysis['complexity']
+            profile.complexity_level = (profile.complexity_level * 0.8 + avg_complexity * 0.2)
+            
+            # تشخیص حالت عاطفی
+            profile.emotional_state = analysis['emotion']
+            
+            # محاسبه امتیاز رضایت
+            if success:
+                profile.satisfaction_score = min(profile.satisfaction_score + 0.05, 1.0)
+            else:
+                profile.satisfaction_score = max(profile.satisfaction_score - 0.02, 0.0)
+            
+            # ذخیره پروفایل
+            self._save_user_profile(profile)
+            
+            return profile
+            
+        except Exception as e:
+            logger.error(f"❌ خطا در تحلیل رفتار: {e}")
+            return UserProfile(user_id=user_id, first_seen=datetime.now(), last_seen=datetime.now())
+    
+    def _get_user_profile(self, user_id: int) -> UserProfile:
+        """دریافت پروفایل کاربر"""
+        try:
+            data = self.profile_collection.find_one({'_id': user_id})
+            if data:
+                return UserProfile(
+                    user_id=data['user_id'],
+                    first_seen=datetime.fromisoformat(data['first_seen']),
+                    last_seen=datetime.fromisoformat(data['last_seen']),
+                    total_queries=data['total_queries'],
+                    successful_queries=data['successful_queries'],
+                    failed_queries=data['failed_queries'],
+                    topics=data['topics'],
+                    keywords=data['keywords'],
+                    behavior=UserBehavior(data['behavior']),
+                    avg_response_time=data['avg_response_time'],
+                    satisfaction_score=data['satisfaction_score'],
+                    learning_pattern=data['learning_pattern'],
+                    preferred_categories=data['preferred_categories'],
+                    complexity_level=data['complexity_level'],
+                    emotional_state=data['emotional_state']
+                )
+        except Exception as e:
+            logger.error(f"❌ خطا در دریافت پروفایل: {e}")
+        
+        return UserProfile(user_id=user_id, first_seen=datetime.now(), last_seen=datetime.now())
+    
+    def _save_user_profile(self, profile: UserProfile):
+        """ذخیره پروفایل کاربر"""
+        try:
+            self.profile_collection.update_one(
+                {'_id': profile.user_id},
+                {'$set': profile.to_dict()},
+                upsert=True
+            )
+        except Exception as e:
+            logger.error(f"❌ خطا در ذخیره پروفایل: {e}")
+    
+    def _classify_behavior(self, profile: UserProfile) -> UserBehavior:
+        """طبقه‌بندی رفتار کاربر"""
+        # محاسبه نسبت موفقیت
+        success_rate = profile.successful_queries / max(profile.total_queries, 1)
+        
+        # کاربر جدید
+        if profile.total_queries < 5:
+            return UserBehavior.NEW
+        
+        # کاربر حرفه‌ای
+        if success_rate > 0.8 and profile.total_queries > 20:
+            return UserBehavior.EXPERT
+        
+        # کاربر کنجکاو
+        if len(profile.topics) > 5:
+            return UserBehavior.CURIOUS
+        
+        # کاربر نیازمند راهنما
+        if success_rate < 0.5:
+            return UserBehavior.NEEDY
+        
+        # کاربر در حال یادگیری
+        if success_rate < 0.7:
+            return UserBehavior.LEARNING
+        
+        return UserBehavior.POSITIVE
+    
+    # ==================== آمار ====================
+    def get_stats(self) -> Dict:
+        """دریافت آمار کلی"""
+        try:
+            total_knowledge = self.knowledge_collection.count_documents({})
+            total_profiles = self.profile_collection.count_documents({})
+            
+            # محاسبه نرخ موفقیت
+            success_rate = self.stats['success_rate']
+            
+            return {
+                'total_knowledge': total_knowledge,
+                'total_profiles': total_profiles,
+                'auto_learned': self.stats['auto_learned'],
+                'user_taught': self.stats['user_taught'],
+                'success_rate': success_rate,
+                'avg_confidence': self.stats['avg_confidence'],
+                'cache_size': len(self.cache)
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ خطا در دریافت آمار: {e}")
             return {}
 
-# ==================== ربات تلگرام اصلی ====================
+# ==================== تحلیلگر رفتار ====================
+class BehaviorAnalyzer:
+    """تحلیلگر پیشرفته رفتار کاربر"""
+    
+    def __init__(self):
+        self.redis = redis.Redis(host='localhost', port=6379, db=1, decode_responses=True)
+        self.trends = defaultdict(list)
+    
+    def analyze_query_pattern(self, user_id: int, query: str):
+        """تحلیل الگوی سوالات کاربر"""
+        key = f"pattern:{user_id}"
+        
+        # ذخیره آخرین سوالات
+        self.redis.lpush(key, query)
+        self.redis.ltrim(key, 0, 99)  # فقط 100 سوال آخر
+        
+        # تحلیل روندها
+        history = self.redis.lrange(key, 0, -1)
+        
+        # تشخیص تغییرات موضوع
+        topics = []
+        normalizer = Normalizer()
+        for q in history[:10]:
+            clean = normalizer.normalize(q)
+            topics.append(clean[:20])
+        
+        return topics
+    
+    def get_user_insights(self, user_id: int) -> Dict:
+        """دریافت بینش از رفتار کاربر"""
+        key = f"pattern:{user_id}"
+        history = self.redis.lrange(key, 0, -1)
+        
+        if not history:
+            return {'status': 'new_user'}
+        
+        # تحلیل کلمات پرتکرار
+        all_words = []
+        for q in history[:50]:
+            words = q.split()
+            all_words.extend(words)
+        
+        word_freq = Counter(all_words)
+        
+        # تشخیص علایق
+        interests = []
+        for word, count in word_freq.most_common(10):
+            if count > 2 and len(word) > 3:
+                interests.append({'word': word, 'count': count})
+        
+        return {
+            'total_queries': len(history),
+            'interests': interests,
+            'avg_length': sum(len(q) for q in history) / max(len(history), 1),
+            'trend': 'active'
+        }
+
+# ==================== ربات تلگرام ====================
 class UltraTelegramBot:
-    """ربات تلگرام با معماری فوق‌پیشرفته"""
+    """ربات تلگرام با قابلیت‌های فوق‌پیشرفته"""
     
     def __init__(self, token: str):
         self.token = token
         self.bot = telebot.TeleBot(token, threaded=False)
         
-        # راه‌اندازی مغزها
-        self.memory = UltraMemory()
-        self.keyword_brain = UltraKeywordBrain()
-        self.file_learner = UltraFileLearner()
+        # مغز اصلی
+        self.brain = NeuroSymbolicBrain()
         
-        # صف پیام‌ها برای پردازش همزمان
+        # تحلیلگر رفتار
+        self.behavior_analyzer = BehaviorAnalyzer()
+        
+        # صف پیام‌ها
         self.message_queue = queue.Queue()
         self.processing_thread = threading.Thread(target=self._process_queue, daemon=True)
         self.processing_thread.start()
         
         # آمار
         self.stats = {
-            'total_queries': 0,
-            'successful_queries': 0,
-            'failed_queries': 0,
-            'average_response_time': 0
+            'total_messages': 0,
+            'processed_messages': 0,
+            'learned_automatically': 0
         }
         
         # تنظیم هندلرها
         self._setup_handlers()
         
-        logger.info("🤖 ربات تلگرام فوق‌پیشرفته راه‌اندازی شد")
+        logger.info("🤖 ربات فوق‌پیشرفته راه‌اندازی شد")
     
     def _setup_handlers(self):
         """تنظیم هندلرهای پیام"""
@@ -1106,18 +1060,23 @@ class UltraTelegramBot:
         @self.bot.message_handler(commands=['start'])
         def start_handler(message):
             welcome = """
-🤖 **به هوش مصنوعی MON تلگرام خوش آمدید!**
+🧠 **به هوش مصنوعی فوق‌پیشرفته MON خوش آمدید!**
 
-من یک هوش مصنوعی فوق‌پیشرفته هستم با قابلیت‌های:
-• 🧠 **یادگیری عمیق** - از هر سوالی یاد می‌گیرم
-• 🔑 **کلمات کلیدی** - دقیق‌ترین تشخیص
-• 📚 **یادگیری از فایل** - از هر فایلی یاد می‌گیرم
-• ⚡ **پاسخ سریع** - در کسری از ثانیه
+من یک هوش مصنوعی هستم که **هر روز یاد می‌گیرم** و **هوشمندتر می‌شوم**!
 
-**چطور می‌توانم کمک کنم؟**
-فقط سوال خود را بپرسید...
+✨ **قابلیت‌های من:**
+• 📝 **یادگیری خودکار** - از هر سوالی که می‌پرسید یاد می‌گیرم
+• 🔍 **تحلیل عمیق** - دقیقاً متوجه می‌شوم چه می‌پرسید
+• 🧠 **حافظه فوق‌پیشرفته** - هیچوقت چیزی را فراموش نمی‌کنم
+• 📊 **تحلیل رفتار** - به شما کمک می‌کنم بهتر یاد بگیرید
 
-💡 *هر چه بیشتر بپرسید، هوشمندتر می‌شوم!*
+💡 **هر چه بیشتر سوال بپرسید، من هوشمندتر می‌شوم!**
+
+**چطور استفاده کنم؟**
+فقط سوال خود را بپرسید، من یاد می‌گیرم و پاسخ می‌دهم.
+
+---
+📌 *یادتان باشد: هر سوالی می‌پرسید، به دانش من اضافه می‌شود!*
 """
             self.bot.send_message(
                 message.chat.id,
@@ -1125,23 +1084,163 @@ class UltraTelegramBot:
                 parse_mode='Markdown',
                 reply_markup=self._get_main_keyboard()
             )
+            
+            # ثبت کاربر جدید
+            self._register_user(message.chat.id)
+        
+        @self.bot.message_handler(commands=['learn'])
+        def learn_handler(message):
+            """یادگیری دستی از کاربر"""
+            try:
+                # استخراج سوال و جواب
+                text = message.text.replace('/learn', '').strip()
+                if '|' not in text:
+                    self.bot.reply_to(
+                        message,
+                        "❌ فرمت: `/learn سوال | پاسخ`\nمثال: `/learn سلام | سلام علیک`",
+                        parse_mode='Markdown'
+                    )
+                    return
+                
+                question, answer = text.split('|', 1)
+                question = question.strip()
+                answer = answer.strip()
+                
+                if not question or not answer:
+                    self.bot.reply_to(
+                        message,
+                        "❌ سوال و پاسخ را کامل وارد کنید!",
+                        parse_mode='Markdown'
+                    )
+                    return
+                
+                # ذخیره در مغز
+                self.brain._deep_analyze(question)
+                self.brain.auto_learn(question, answer)
+                
+                self.bot.reply_to(
+                    message,
+                    f"✅ **یاد گرفتم!**\n\nسوال: {question}\nپاسخ: {answer}\n\n📚 دانش من بیشتر شد!",
+                    parse_mode='Markdown'
+                )
+                
+            except Exception as e:
+                self.bot.reply_to(
+                    message,
+                    f"❌ خطا: {str(e)}",
+                    parse_mode='Markdown'
+                )
+        
+        @self.bot.message_handler(commands=['stats'])
+        def stats_handler(message):
+            """نمایش آمار"""
+            stats = self.brain.get_stats()
+            
+            stat_text = f"""
+📊 **آمار هوش مصنوعی MON**
+
+🧠 **دانش من:**
+• تعداد دانش: {stats.get('total_knowledge', 0)} مورد
+• یادگیری خودکار: {stats.get('auto_learned', 0)} مورد
+• یادگیری دستی: {stats.get('user_taught', 0)} مورد
+
+📈 **عملکرد:**
+• نرخ موفقیت: {stats.get('success_rate', 0)*100:.1f}%
+• میانگین اطمینان: {stats.get('avg_confidence', 0)*100:.1f}%
+• اندازه کش: {stats.get('cache_size', 0)} مورد
+
+👥 **کاربران:**
+• تعداد کاربران: {stats.get('total_profiles', 0)} نفر
+
+---
+💪 *هر روز قوی‌تر می‌شوم!*
+"""
+            self.bot.send_message(
+                message.chat.id,
+                stat_text,
+                parse_mode='Markdown'
+            )
+        
+        @self.bot.message_handler(commands=['insight'])
+        def insight_handler(message):
+            """نمایش بینش از رفتار کاربر"""
+            insight = self.behavior_analyzer.get_user_insights(message.chat.id)
+            
+            if insight.get('status') == 'new_user':
+                self.bot.reply_to(
+                    message,
+                    "📊 **تحلیل رفتار شما**\n\nشما کاربر جدیدی هستید!\nهرچه بیشتر سوال بپرسید، تحلیل دقیق‌تری خواهم داشت.",
+                    parse_mode='Markdown'
+                )
+                return
+            
+            insight_text = f"""
+📊 **تحلیل رفتار شما**
+
+📝 **آمار سوالات:**
+• تعداد کل: {insight.get('total_queries', 0)}
+• میانگین طول سوال: {insight.get('avg_length', 0):.1f} کلمه
+
+🎯 **علایق شما:**
+"""
+            for interest in insight.get('interests', [])[:5]:
+                insight_text += f"• {interest['word']} ({interest['count']} بار)\n"
+            
+            insight_text += """
+---
+💡 *هر چه بیشتر بپرسید، بهتر می‌توانم به شما کمک کنم!*
+"""
+            self.bot.send_message(
+                message.chat.id,
+                insight_text,
+                parse_mode='Markdown'
+            )
+        
+        @self.bot.message_handler(commands=['help'])
+        def help_handler(message):
+            """راهنما"""
+            help_text = """
+📖 **راهنمای ربات MON**
+
+**دستورات:**
+• `/start` - شروع مجدد
+• `/learn سوال | پاسخ` - به من یاد بده
+• `/stats` - آمار عملکرد
+• `/insight` - تحلیل رفتار شما
+• `/help` - این راهنما
+
+**چگونه استفاده کنم؟**
+1️⃣ سوال خود را بپرسید
+2️⃣ من تحلیل می‌کنم و پاسخ می‌دهم
+3️⃣ اگر پاسخ را نمی‌دانم، با `/learn` به من یاد دهید
+
+**نکات مهم:**
+• هرچه بیشتر بپرسید، هوشمندتر می‌شوم
+• من از هر سوالی یاد می‌گیرم
+• هیچوقت چیزی را فراموش نمی‌کنم
+
+---
+💪 *با هم هوشمندتر می‌شویم!*
+"""
+            self.bot.send_message(
+                message.chat.id,
+                help_text,
+                parse_mode='Markdown'
+            )
         
         @self.bot.message_handler(func=lambda m: True)
         def message_handler(message):
-            # اضافه کردن به صف برای پردازش
+            """پردازش پیام‌های عادی"""
             self.message_queue.put(message)
-            
-            # پاسخ اولیه (در حال پردازش)
-            self.bot.send_chat_action(message.chat.id, 'typing')
     
     def _get_main_keyboard(self):
         """کیبورد اصلی"""
-        keyboard = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+        keyboard = ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
         buttons = [
-            types.KeyboardButton("📝 سوال بپرس"),
-            types.KeyboardButton("ℹ️ راهنما"),
-            types.KeyboardButton("📊 آمار"),
-            types.KeyboardButton("🔄 جدیدترین")
+            KeyboardButton("💬 سوال بپرس"),
+            KeyboardButton("📊 آمار من"),
+            KeyboardButton("🎯 علایق من"),
+            KeyboardButton("📖 راهنما")
         ]
         keyboard.add(*buttons)
         return keyboard
@@ -1160,29 +1259,49 @@ class UltraTelegramBot:
     def _handle_message(self, message):
         """پردازش هوشمند پیام"""
         try:
-            start_time = datetime.now()
             user_id = message.chat.id
             user_text = message.text
             
-            # تشخیص نوع پیام
-            if user_text == "📝 سوال بپرس":
-                self.bot.send_message(user_id, "سوال خود را بپرسید...")
+            # پردازش کیبورد
+            if user_text == "💬 سوال بپرس":
+                self.bot.send_message(user_id, "📝 سوال خود را بپرسید:")
                 return
             
-            if user_text == "ℹ️ راهنما":
-                self._send_help(user_id)
+            if user_text == "📊 آمار من":
+                self.bot.send_message(user_id, "📊 در حال دریافت آمار...")
+                stats_handler = self._get_handler('stats')
+                if stats_handler:
+                    stats_handler(message)
                 return
             
-            if user_text == "📊 آمار":
-                self._send_stats(user_id)
+            if user_text == "🎯 علایق من":
+                insight_handler = self._get_handler('insight')
+                if insight_handler:
+                    insight_handler(message)
                 return
             
-            if user_text == "🔄 جدیدترین":
-                self._send_latest(user_id)
+            if user_text == "📖 راهنما":
+                help_handler = self._get_handler('help')
+                if help_handler:
+                    help_handler(message)
                 return
+            
+            # پردازش سوال اصلی
+            self.bot.send_chat_action(user_id, 'typing')
             
             # جستجوی هوشمند
-            response = self._intelligent_search(user_text)
+            result = self.brain.search(user_text)
+            
+            # تحلیل رفتار
+            profile = self.brain.analyze_user_behavior(
+                user_id,
+                user_text,
+                result['response'],
+                result['found']
+            )
+            
+            # ساخت پاسخ هوشمند
+            response = self._build_intelligent_response(result, profile, user_text)
             
             # ارسال پاسخ
             self.bot.send_message(
@@ -1193,7 +1312,14 @@ class UltraTelegramBot:
             )
             
             # به‌روزرسانی آمار
-            self._update_stats(start_time, response)
+            self.stats['total_messages'] += 1
+            if result['found']:
+                self.stats['processed_messages'] += 1
+            
+            # یادگیری خودکار در صورت عدم وجود پاسخ
+            if not result['found']:
+                self.stats['learned_automatically'] += 1
+                logger.info(f"🤖 یادگیری خودکار: {user_text[:50]}...")
             
         except Exception as e:
             logger.error(f"❌ خطا در پردازش پیام: {e}")
@@ -1203,424 +1329,280 @@ class UltraTelegramBot:
                 reply_markup=self._get_main_keyboard()
             )
     
-    def _intelligent_search(self, query: str) -> str:
-        """جستجوی هوشمند با ترکیب همه مغزها"""
-        try:
-            # ۱. جستجو در کلمات کلیدی (دقیق‌ترین)
-            keyword_results = self.keyword_brain.search_keywords(query, min_score=0.3)
-            
-            # ۲. جستجو در حافظه اصلی
-            memory_results = self.memory.search(query, threshold=0.6)
-            
-            # ۳. جستجو در فایل‌ها
-            file_results = self.file_learner.search_in_files(query, limit=3)
-            
-            # ترکیب هوشمند پاسخ‌ها
-            combined_response = self._combine_responses(
-                keyword_results,
-                memory_results,
-                file_results,
-                query
-            )
-            
-            return combined_response
-            
-        except Exception as e:
-            logger.error(f"❌ خطا در جستجوی هوشمند: {e}")
-            return "⚠️ خطا در پردازش سوال. لطفاً دوباره تلاش کنید."
-    
-    def _combine_responses(self, keyword_results, memory_results, file_results, query) -> str:
-        """ترکیب هوشمند نتایج از مغزهای مختلف"""
-        parts = []
-        
-        # ۱. اولویت با کلمات کلیدی (دقیق‌ترین پاسخ)
-        if keyword_results:
-            best_keyword = keyword_results[0]
-            parts.append(f"🎯 **پاسخ دقیق:**\n{best_keyword['response']}")
-            
-            # اضافه کردن کلمات مرتبط
-            if len(keyword_results) > 1:
-                related = "، ".join([r['keyword'] for r in keyword_results[1:3]])
-                if related:
-                    parts.append(f"📌 **کلمات مرتبط:** {related}")
-        
-        # ۲. پاسخ از حافظه (با امتیاز بالا)
-        if memory_results:
-            best_memory = memory_results[0]
-            if best_memory.get('score', 0) > 0.7:
-                parts.append(f"🧠 **از حافظه:**\n{best_memory['answer']}")
-        
-        # ۳. اطلاعات از فایل‌ها
-        if file_results:
-            best_file = file_results[0]
-            if best_file.get('score', 0) > 0.5:
-                parts.append(f"📚 **از دانشنامه:**\n{best_file['content'][:300]}...")
-        
-        # اگر هیچ نتیجه‌ای نداشتیم
-        if not parts:
-            return self._generate_fallback_response(query)
-        
-        # اضافه کردن پیشنهاد یادگیری
-        parts.append("\n---\n💡 *اگر پاسخ دقیق‌تری می‌خواهید، با /learn به من یاد دهید.*")
-        
-        return "\n\n".join(parts)
-    
-    def _generate_fallback_response(self, query: str) -> str:
-        """تولید پاسخ پیش‌فرض هوشمند"""
-        return f"""
-🤔 **هنوز جواب این سوال را یاد نگرفته‌ام.**
-
-سوال شما: _{query}_
-
-اما می‌توانید:
-1️⃣ با دستور `/learn` به من یاد دهید
-2️⃣ سوال را ساده‌تر بپرسید
-3️⃣ از کلمات کلیدی دقیق‌تر استفاده کنید
-
-💡 **هرچه بیشتر یادم دهید، هوشمندتر می‌شوم!**
-"""
-    
-    def _send_help(self, user_id):
-        """ارسال راهنما"""
-        help_text = """
-📖 **راهنمای ربات MON**
-
-**چگونه از من استفاده کنید؟**
-
-🔹 **پرسش سوال:**
-فقط سوال خود را بپرسید. من هوشمندانه پاسخ می‌دهم.
-
-🔹 **یاد دادن به من:**
-از دستور `/learn سوال | پاسخ` استفاده کنید.
-
-🔹 **یادگیری از فایل:**
-فایل TXT خود را ارسال کنید تا از آن یاد بگیرم.
-
-🔹 **کلمات کلیدی:**
-می‌توانید کلمات کلیدی را به من یاد دهید تا دقیق‌تر پاسخ دهم.
-
-🔹 **آمار:**
-با دستور `/stats` آمار عملکرد من را ببینید.
-
----
-**💡 نکته:** هرچه بیشتر از من استفاده کنید، هوشمندتر می‌شوم!
-"""
-        self.bot.send_message(user_id, help_text, parse_mode='Markdown')
-    
-    def _send_stats(self, user_id):
-        """ارسال آمار"""
-        # دریافت آمار از مغزها
-        memory_stats = self.memory.get_statistics()
-        keyword_stats = self.keyword_brain.get_keyword_stats()
-        file_stats = self.file_learner.get_file_stats()
-        
-        stats_text = f"""
-📊 **آمار عملکرد ربات**
-
-🧠 **حافظه اصلی:**
-• تعداد سوالات: {memory_stats.get('total_items', 0)}
-• تعداد کلمات کلیدی: {memory_stats.get('total_keywords', 0)}
-• اندازه کش: {memory_stats.get('cache_size', 0)}
-
-🔑 **کلمات کلیدی:**
-• تعداد کل: {keyword_stats.get('total_keywords', 0)}
-• پرکاربردترین: {', '.join([k['keyword'] for k in keyword_stats.get('top_keywords', [])[:3]])}
-
-📚 **فایل‌ها:**
-• تعداد اسناد: {file_stats.get('total_documents', 0)}
-• دسته‌بندی‌ها: {len(file_stats.get('categories', []))}
-
----
-**آمار کلی سیستم:**
-• کل سوالات: {self.stats['total_queries']}
-• پاسخ‌های موفق: {self.stats['successful_queries']}
-• میانگین زمان پاسخ: {self.stats['average_response_time']:.2f} ثانیه
-"""
-        self.bot.send_message(user_id, stats_text, parse_mode='Markdown')
-    
-    def _send_latest(self, user_id):
-        """ارسال جدیدترین یادگیری‌ها"""
-        latest = """
-🔄 **جدیدترین یادگیری‌ها:**
-
-اخیراً چیزهای جدیدی یاد گرفتم! 
-
-📝 برای دیدن همه چیزهایی که یاد گرفتم:
-• از من بپرسید
-• یا با دستور `/stats` آمار را ببینید
-
-💡 **نکته:** هر روز چیزهای جدیدی یاد می‌گیرم!
-"""
-        self.bot.send_message(user_id, latest, parse_mode='Markdown')
-    
-    def _update_stats(self, start_time: datetime, response: str):
-        """به‌روزرسانی آمار"""
-        elapsed = (datetime.now() - start_time).total_seconds()
-        
-        self.stats['total_queries'] += 1
-        if "یاد نگرفته‌ام" not in response:
-            self.stats['successful_queries'] += 1
+    def _build_intelligent_response(self, result: Dict, profile: UserProfile, query: str) -> str:
+        """ساخت پاسخ هوشمند بر اساس زمینه"""
+        # پاسخ اصلی
+        if result['found']:
+            main_response = result['response']
         else:
-            self.stats['failed_queries'] += 1
+            main_response = result['response']
         
-        # به‌روزرسانی میانگین زمان پاسخ
-        total = self.stats['average_response_time'] * (self.stats['total_queries'] - 1)
-        self.stats['average_response_time'] = (total + elapsed) / self.stats['total_queries']
+        # اضافه کردن پیام‌های هوشمند بر اساس رفتار کاربر
+        messages = [main_response]
+        
+        # اگر کاربر جدید است
+        if profile.behavior == UserBehavior.NEW:
+            messages.append("\n💡 **نکته:** من تازه با شما آشنا شدم! هرچه بیشتر بپرسید، بهتر می‌توانم کمک کنم.")
+        
+        # اگر کاربر نیازمند راهنما است
+        elif profile.behavior == UserBehavior.NEEDY:
+            messages.append("\n🔍 **راهنمایی:** می‌توانید با دستور `/learn` به من یاد دهید تا بهتر پاسخ دهم.")
+        
+        # اگر کاربر حرفه‌ای است
+        elif profile.behavior == UserBehavior.EXPERT:
+            messages.append("\n🌟 **عالی!** شما کاربر حرفه‌ای هستید. سوالات خوبی می‌پرسید!")
+        
+        # اگر پاسخ پیدا نشد
+        if not result['found']:
+            messages.append("\n📚 **یادگیری:** من این سوال را یاد گرفتم تا دفعه بعد بهتر پاسخ دهم.")
+        
+        # اضافه کردن آمار شخصی
+        if profile.total_queries % 10 == 0:
+            messages.append(f"\n📊 **آمار شما:** {profile.total_queries} سوال پرسیده‌اید! {profile.successful_queries} پاسخ مفید دریافت کردید.")
+        
+        return "".join(messages)
+    
+    def _get_handler(self, command: str):
+        """دریافت هندلر دستور"""
+        handlers = {
+            'stats': None,
+            'insight': None,
+            'help': None
+        }
+        return handlers.get(command)
+    
+    def _register_user(self, user_id: int):
+        """ثبت کاربر جدید"""
+        try:
+            profile = self.brain._get_user_profile(user_id)
+            if profile.total_queries == 0:
+                logger.info(f"👤 کاربر جدید: {user_id}")
+        except Exception as e:
+            logger.error(f"❌ خطا در ثبت کاربر: {e}")
     
     def run(self):
         """اجرای ربات"""
         logger.info("🚀 ربات در حال اجرا...")
         try:
-            self.bot.polling(none_stop=True, interval=0, timeout=20)
+            self.bot.polling(none_stop=True, interval=0, timeout=30)
         except Exception as e:
             logger.error(f"❌ خطا در اجرای ربات: {e}")
             self.bot.polling()
 
 # ==================== پنل مدیریت ====================
 class AdminPanel:
-    """پنل مدیریت فوق‌پیشرفته با Flask"""
+    """پنل مدیریت پیشرفته"""
     
     def __init__(self, bot_instance):
         self.app = Flask(__name__)
-        self.app.secret_key = Config.JWT_SECRET
+        self.app.secret_key = secrets.token_urlsafe(32)
         self.bot = bot_instance
+        self.brain = bot_instance.brain
         
-        # تنظیمات امنیتی
         CORS(self.app)
-        
-        # تنظیم مسیرها
         self._setup_routes()
         
         logger.info("👑 پنل مدیریت راه‌اندازی شد")
     
     def _setup_routes(self):
-        """تنظیم مسیرهای پنل مدیریت"""
+        """تنظیم مسیرها"""
         
         @self.app.route('/')
-        @self._admin_required
         def index():
-            return self._render_admin_panel()
+            return self._render_dashboard()
+        
+        @self.app.route('/api/stats')
+        def api_stats():
+            stats = self.brain.get_stats()
+            return jsonify(stats)
         
         @self.app.route('/api/learn', methods=['POST'])
-        @self._admin_required
         def api_learn():
             data = request.json
             question = data.get('question')
             answer = data.get('answer')
-            category = data.get('category', 'general')
             
             if not question or not answer:
-                return jsonify({'error': 'سوال و جواب الزامی است'}), 400
+                return jsonify({'error': 'سوال و پاسخ الزامی است'}), 400
             
-            # ذخیره در مغزها
-            self.bot.memory.save_qa(question, answer, category)
-            self.bot.keyword_brain.add_keyword(question, answer, category)
-            
-            return jsonify({'success': True, 'message': '✅ یاد گرفتم!'})
+            self.brain.auto_learn(question, answer)
+            return jsonify({'success': True})
         
-        @self.app.route('/api/keyword', methods=['POST'])
-        @self._admin_required
-        def api_keyword():
-            data = request.json
-            keyword = data.get('keyword')
-            response = data.get('response')
-            category = data.get('category', 'general')
-            
-            if not keyword or not response:
-                return jsonify({'error': 'کلمه کلیدی و پاسخ الزامی است'}), 400
-            
-            self.bot.keyword_brain.add_keyword(keyword, response, category)
-            
-            return jsonify({'success': True, 'message': '✅ کلمه کلیدی ذخیره شد!'})
+        @self.app.route('/api/knowledge')
+        def api_knowledge():
+            # دریافت لیست دانش
+            knowledge = list(self.brain.knowledge_collection.find().limit(20))
+            return jsonify([{
+                'query': k.get('query'),
+                'response': k.get('response')[:100],
+                'keywords': k.get('keywords', [])
+            } for k in knowledge])
         
-        @self.app.route('/api/file', methods=['POST'])
-        @self._admin_required
-        def api_file():
-            if 'file' not in request.files:
-                return jsonify({'error': 'فایل ارسال نشده است'}), 400
-            
-            file = request.files['file']
-            category = request.form.get('category', 'document')
-            
-            if file.filename == '':
-                return jsonify({'error': 'فایل انتخاب نشده است'}), 400
-            
-            # ذخیره فایل
-            file_path = os.path.join(Config.FILES_PATH, file.filename)
-            file.save(file_path)
-            
-            # یادگیری از فایل
-            result = self.bot.file_learner.learn_from_txt(file_path, category)
-            
-            return jsonify({'success': True, 'message': '✅ یادگیری از فایل انجام شد!', 'result': result})
-        
-        @self.app.route('/api/stats', methods=['GET'])
-        @self._admin_required
-        def api_stats():
-            memory_stats = self.bot.memory.get_statistics()
-            keyword_stats = self.bot.keyword_brain.get_keyword_stats()
-            file_stats = self.bot.file_learner.get_file_stats()
-            
-            return jsonify({
-                'memory': memory_stats,
-                'keywords': keyword_stats,
-                'files': file_stats,
-                'bot': self.bot.stats
-            })
-        
-        @self.app.route('/api/admin/add', methods=['POST'])
-        @self._admin_required
-        def api_add_admin():
-            data = request.json
-            admin_id = data.get('admin_id')
-            
-            if not admin_id:
-                return jsonify({'error': 'آیدی ادمین الزامی است'}), 400
-            
-            # ذخیره در دیتابیس
-            if admin_id not in Config.ADMIN_IDS:
-                Config.ADMIN_IDS.append(int(admin_id))
-            
-            return jsonify({'success': True, 'message': f'✅ ادمین {admin_id} اضافه شد!'})
+        @self.app.route('/api/profile/<int:user_id>')
+        def api_profile(user_id):
+            profile = self.brain._get_user_profile(user_id)
+            return jsonify(profile.to_dict() if profile else {})
     
-    def _admin_required(self, f):
-        """دکوراتور برای بررسی دسترسی ادمین"""
-        @wraps(f)
-        def decorated_function(*args, **kwargs):
-            # چک کردن توکن JWT
-            token = request.headers.get('Authorization')
-            if not token:
-                return jsonify({'error': 'توکن معتبر نیست'}), 401
-            
-            try:
-                # بررسی توکن
-                payload = jwt.decode(token, Config.JWT_SECRET, algorithms=['HS256'])
-                user_id = payload.get('user_id')
-                
-                if user_id not in Config.ADMIN_IDS:
-                    return jsonify({'error': 'دسترسی غیرمجاز'}), 403
-                
-            except jwt.ExpiredSignatureError:
-                return jsonify({'error': 'توکن منقضی شده است'}), 401
-            except jwt.InvalidTokenError:
-                return jsonify({'error': 'توکن نامعتبر است'}), 401
-            
-            return f(*args, **kwargs)
-        return decorated_function
-    
-    def _render_admin_panel(self):
-        """رندر پنل مدیریت"""
+    def _render_dashboard(self):
+        """رندر داشبورد"""
         return """
 <!DOCTYPE html>
 <html dir="rtl" lang="fa">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>👑 پنل مدیریت هوش مصنوعی MON</title>
+    <title>🧠 داشبورد MON</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: 'Vazir', sans-serif;
+            font-family: 'Vazir', Tahoma, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
             padding: 20px;
         }
         .container {
-            max-width: 1200px;
+            max-width: 1400px;
             margin: 0 auto;
-            background: rgba(255,255,255,0.95);
-            border-radius: 20px;
-            padding: 30px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
         }
-        h1 {
+        .header {
+            background: rgba(255,255,255,0.95);
+            padding: 25px;
+            border-radius: 20px;
+            margin-bottom: 25px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+        }
+        .header h1 {
             color: #2d3748;
-            border-bottom: 3px solid #667eea;
-            padding-bottom: 15px;
-            margin-bottom: 30px;
+            font-size: 28px;
+        }
+        .header .subtitle {
+            color: #718096;
+            margin-top: 5px;
         }
         .grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
             gap: 20px;
-            margin-bottom: 30px;
+            margin-bottom: 25px;
         }
         .card {
-            background: white;
-            border-radius: 15px;
-            padding: 20px;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
-            transition: transform 0.3s;
+            background: rgba(255,255,255,0.95);
+            border-radius: 20px;
+            padding: 25px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.08);
+            transition: transform 0.3s, box-shadow 0.3s;
         }
         .card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+            transform: translateY(-3px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.12);
         }
         .card h3 {
-            color: #4a5568;
+            color: #2d3748;
             margin-bottom: 15px;
+            font-size: 18px;
+            border-bottom: 2px solid #e2e8f0;
+            padding-bottom: 10px;
         }
         input, textarea, select {
             width: 100%;
-            padding: 10px;
+            padding: 12px 15px;
             margin: 8px 0;
             border: 2px solid #e2e8f0;
-            border-radius: 10px;
+            border-radius: 12px;
             font-size: 14px;
             transition: border-color 0.3s;
+            font-family: inherit;
         }
         input:focus, textarea:focus {
             outline: none;
             border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
         }
         button {
             width: 100%;
-            padding: 12px;
+            padding: 14px;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             border: none;
-            border-radius: 10px;
+            border-radius: 12px;
             font-size: 16px;
+            font-weight: bold;
             cursor: pointer;
-            transition: transform 0.3s;
+            transition: transform 0.3s, box-shadow 0.3s;
             margin-top: 10px;
         }
         button:hover {
             transform: scale(1.02);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
         }
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
             gap: 15px;
-            margin-top: 20px;
+            margin-top: 15px;
         }
         .stat-item {
             background: #f7fafc;
             padding: 15px;
-            border-radius: 10px;
+            border-radius: 12px;
             text-align: center;
         }
         .stat-number {
-            font-size: 28px;
+            font-size: 30px;
             font-weight: bold;
-            color: #667eea;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
         }
         .stat-label {
             color: #718096;
+            font-size: 13px;
             margin-top: 5px;
         }
         .alert {
-            padding: 15px;
-            border-radius: 10px;
+            padding: 12px 18px;
+            border-radius: 12px;
             margin: 10px 0;
+            display: none;
         }
         .alert-success {
             background: #c6f6d5;
             color: #22543d;
+            border: 1px solid #9ae6b4;
         }
         .alert-error {
             background: #fed7d7;
             color: #9b2c2c;
+            border: 1px solid #feb2b2;
+        }
+        .knowledge-list {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .knowledge-item {
+            padding: 10px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        .knowledge-item .q {
+            color: #2d3748;
+            font-weight: bold;
+        }
+        .knowledge-item .a {
+            color: #718096;
+            font-size: 13px;
+            margin-top: 3px;
+        }
+        .knowledge-item .tags {
+            margin-top: 5px;
+        }
+        .tag {
+            display: inline-block;
+            background: #e2e8f0;
+            padding: 2px 10px;
+            border-radius: 20px;
+            font-size: 11px;
+            color: #4a5568;
+            margin: 2px;
         }
         @media (max-width: 768px) {
             .grid { grid-template-columns: 1fr; }
@@ -1630,286 +1612,180 @@ class AdminPanel:
 </head>
 <body>
     <div class="container">
-        <h1>👑 پنل مدیریت هوش مصنوعی MON</h1>
+        <!-- Header -->
+        <div class="header">
+            <h1>🧠 داشبورد هوش مصنوعی MON</h1>
+            <div class="subtitle">سیستم یادگیری خودکار فوق‌پیشرفته</div>
+        </div>
         
+        <!-- Stats -->
         <div class="grid">
-            <!-- کارت یادگیری سوال-جواب -->
             <div class="card">
-                <h3>📝 یاد دادن سوال و جواب</h3>
-                <input type="text" id="question" placeholder="سوال را وارد کنید...">
-                <textarea id="answer" rows="3" placeholder="پاسخ را وارد کنید..."></textarea>
-                <select id="category">
-                    <option value="general">عمومی</option>
-                    <option value="medical">پزشکی</option>
-                    <option value="technical">فنی</option>
-                    <option value="educational">آموزشی</option>
-                </select>
-                <button onclick="learnQA()">📚 یاد بده</button>
-                <div id="qaResult" class="alert" style="display:none;"></div>
-            </div>
-            
-            <!-- کارت یادگیری کلمات کلیدی -->
-            <div class="card">
-                <h3>🔑 یاد دادن کلمات کلیدی</h3>
-                <input type="text" id="keyword" placeholder="کلمه کلیدی را وارد کنید...">
-                <textarea id="keywordResponse" rows="3" placeholder="پاسخ مرتبط..."></textarea>
-                <select id="keywordCategory">
-                    <option value="general">عمومی</option>
-                    <option value="medical">پزشکی</option>
-                    <option value="technical">فنی</option>
-                    <option value="educational">آموزشی</option>
-                </select>
-                <button onclick="learnKeyword()">🔑 ذخیره کن</button>
-                <div id="keywordResult" class="alert" style="display:none;"></div>
-            </div>
-            
-            <!-- کارت یادگیری از فایل -->
-            <div class="card">
-                <h3>📄 یادگیری از فایل TXT</h3>
-                <input type="file" id="fileInput" accept=".txt,.csv,.json">
-                <select id="fileCategory">
-                    <option value="document">سند</option>
-                    <option value="medical">پزشکی</option>
-                    <option value="technical">فنی</option>
-                    <option value="educational">آموزشی</option>
-                </select>
-                <button onclick="learnFromFile()">📚 یاد بگیر</button>
-                <div id="fileResult" class="alert" style="display:none;"></div>
-            </div>
-            
-            <!-- کارت آمار -->
-            <div class="card">
-                <h3>📊 آمار و عملکرد</h3>
-                <div class="stats-grid">
+                <h3>📊 آمار کلی</h3>
+                <div class="stats-grid" id="statsGrid">
                     <div class="stat-item">
-                        <div class="stat-number" id="totalQueries">0</div>
-                        <div class="stat-label">کل سوالات</div>
+                        <div class="stat-number" id="totalKnowledge">0</div>
+                        <div class="stat-label">دانش</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number" id="autoLearned">0</div>
+                        <div class="stat-label">یادگیری خودکار</div>
                     </div>
                     <div class="stat-item">
                         <div class="stat-number" id="successRate">0%</div>
-                        <div class="stat-label">موفقیت</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-number" id="avgTime">0s</div>
-                        <div class="stat-label">زمان پاسخ</div>
+                        <div class="stat-label">نرخ موفقیت</div>
                     </div>
                 </div>
-                <button onclick="loadStats()">🔄 بروزرسانی آمار</button>
-                <div id="statsResult" style="margin-top:15px;"></div>
+                <button onclick="loadStats()">🔄 بروزرسانی</button>
             </div>
             
-            <!-- کارت مدیریت ادمین -->
+            <!-- Learn -->
             <div class="card">
-                <h3>👤 مدیریت ادمین</h3>
-                <input type="number" id="adminId" placeholder="آیدی تلگرام ادمین...">
-                <button onclick="addAdmin()">➕ افزودن ادمین</button>
-                <div id="adminResult" class="alert" style="display:none;"></div>
+                <h3>📝 یاد دادن به هوش مصنوعی</h3>
+                <input type="text" id="questionInput" placeholder="سوال را وارد کنید...">
+                <textarea id="answerInput" rows="3" placeholder="پاسخ دقیق..."></textarea>
+                <button onclick="learnQA()">📚 یاد بده</button>
+                <div id="learnResult" class="alert"></div>
             </div>
         </div>
         
-        <div id="statusMessage" class="alert" style="display:none;"></div>
+        <!-- Knowledge List -->
+        <div class="card">
+            <h3>📚 دانش ذخیره شده</h3>
+            <div class="knowledge-list" id="knowledgeList">
+                <div style="text-align:center;color:#a0aec0;padding:20px;">
+                    در حال بارگذاری...
+                </div>
+            </div>
+        </div>
     </div>
     
     <script>
         // ==================== توابع اصلی ====================
-        const API_BASE = window.location.origin;
-        const TOKEN = localStorage.getItem('admin_token') || '';
-        
-        function showMessage(elementId, message, type = 'success') {
-            const el = document.getElementById(elementId);
-            el.style.display = 'block';
-            el.className = `alert alert-${type}`;
-            el.textContent = message;
-            setTimeout(() => { el.style.display = 'none'; }, 5000);
-        }
-        
-        async function apiCall(endpoint, method = 'POST', data = null) {
+        async function apiCall(endpoint, method = 'GET', data = null) {
             try {
                 const options = {
                     method: method,
                     headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': TOKEN
+                        'Content-Type': 'application/json'
                     }
                 };
-                
                 if (data) {
                     options.body = JSON.stringify(data);
                 }
-                
-                const response = await fetch(`${API_BASE}${endpoint}`, options);
-                const result = await response.json();
-                return result;
+                const response = await fetch(endpoint, options);
+                return await response.json();
             } catch (error) {
-                console.error('خطا در درخواست:', error);
-                return { error: 'خطا در ارتباط با سرور' };
+                console.error('❌ خطا:', error);
+                return null;
             }
         }
         
-        // ==================== یادگیری سوال-جواب ====================
+        // ==================== بارگذاری آمار ====================
+        async function loadStats() {
+            const stats = await apiCall('/api/stats');
+            if (stats) {
+                document.getElementById('totalKnowledge').textContent = stats.total_knowledge || 0;
+                document.getElementById('autoLearned').textContent = stats.auto_learned || 0;
+                document.getElementById('successRate').textContent = 
+                    stats.success_rate ? `${(stats.success_rate * 100).toFixed(1)}%` : '0%';
+            }
+        }
+        
+        // ==================== یادگیری ====================
         async function learnQA() {
-            const question = document.getElementById('question').value;
-            const answer = document.getElementById('answer').value;
-            const category = document.getElementById('category').value;
+            const question = document.getElementById('questionInput').value;
+            const answer = document.getElementById('answerInput').value;
             
             if (!question || !answer) {
-                showMessage('qaResult', '❌ سوال و پاسخ الزامی است!', 'error');
+                showResult('learnResult', '❌ سوال و پاسخ را کامل کنید!', 'error');
                 return;
             }
             
             const result = await apiCall('/api/learn', 'POST', {
-                question, answer, category
+                question: question,
+                answer: answer
             });
             
-            if (result.success) {
-                showMessage('qaResult', '✅ با موفقیت یاد گرفتم!', 'success');
-                document.getElementById('question').value = '';
-                document.getElementById('answer').value = '';
+            if (result && result.success) {
+                showResult('learnResult', '✅ با موفقیت یاد گرفتم!', 'success');
+                document.getElementById('questionInput').value = '';
+                document.getElementById('answerInput').value = '';
+                loadKnowledge();
+                loadStats();
             } else {
-                showMessage('qaResult', `❌ خطا: ${result.error}`, 'error');
+                showResult('learnResult', '❌ خطا در یادگیری!', 'error');
             }
         }
         
-        // ==================== یادگیری کلمات کلیدی ====================
-        async function learnKeyword() {
-            const keyword = document.getElementById('keyword').value;
-            const response = document.getElementById('keywordResponse').value;
-            const category = document.getElementById('keywordCategory').value;
+        // ==================== بارگذاری دانش ====================
+        async function loadKnowledge() {
+            const data = await apiCall('/api/knowledge');
+            const list = document.getElementById('knowledgeList');
             
-            if (!keyword || !response) {
-                showMessage('keywordResult', '❌ کلمه کلیدی و پاسخ الزامی است!', 'error');
-                return;
-            }
-            
-            const result = await apiCall('/api/keyword', 'POST', {
-                keyword, response, category
-            });
-            
-            if (result.success) {
-                showMessage('keywordResult', '✅ کلمه کلیدی ذخیره شد!', 'success');
-                document.getElementById('keyword').value = '';
-                document.getElementById('keywordResponse').value = '';
-            } else {
-                showMessage('keywordResult', `❌ خطا: ${result.error}`, 'error');
-            }
-        }
-        
-        // ==================== یادگیری از فایل ====================
-        async function learnFromFile() {
-            const fileInput = document.getElementById('fileInput');
-            const category = document.getElementById('fileCategory').value;
-            
-            if (!fileInput.files.length) {
-                showMessage('fileResult', '❌ لطفاً یک فایل انتخاب کنید!', 'error');
-                return;
-            }
-            
-            const formData = new FormData();
-            formData.append('file', fileInput.files[0]);
-            formData.append('category', category);
-            
-            try {
-                const response = await fetch(`${API_BASE}/api/file`, {
-                    method: 'POST',
-                    headers: { 'Authorization': TOKEN },
-                    body: formData
-                });
-                
-                const result = await response.json();
-                if (result.success) {
-                    showMessage('fileResult', `✅ ${result.message}`, 'success');
-                } else {
-                    showMessage('fileResult', `❌ خطا: ${result.error}`, 'error');
-                }
-            } catch (error) {
-                showMessage('fileResult', `❌ خطا در آپلود فایل`, 'error');
-            }
-        }
-        
-        // ==================== آمار ====================
-        async function loadStats() {
-            const result = await apiCall('/api/stats', 'GET');
-            
-            if (result) {
-                document.getElementById('totalQueries').textContent = result.bot?.total_queries || 0;
-                
-                const total = result.bot?.total_queries || 0;
-                const success = result.bot?.successful_queries || 0;
-                const rate = total > 0 ? Math.round((success / total) * 100) : 0;
-                document.getElementById('successRate').textContent = `${rate}%`;
-                
-                const avgTime = result.bot?.average_response_time || 0;
-                document.getElementById('avgTime').textContent = `${avgTime.toFixed(2)}s`;
-                
-                // نمایش جزئیات بیشتر
-                const details = document.getElementById('statsResult');
-                details.innerHTML = `
-                    <div style="background:#f7fafc;padding:15px;border-radius:10px;">
-                        <p><strong>🧠 حافظه:</strong> ${result.memory?.total_items || 0} مورد</p>
-                        <p><strong>🔑 کلمات کلیدی:</strong> ${result.keywords?.total_keywords || 0} کلمه</p>
-                        <p><strong>📚 فایل‌ها:</strong> ${result.files?.total_documents || 0} سند</p>
+            if (data && data.length > 0) {
+                list.innerHTML = data.map(item => `
+                    <div class="knowledge-item">
+                        <div class="q">❓ ${item.query}</div>
+                        <div class="a">💡 ${item.response}</div>
+                        <div class="tags">
+                            ${item.keywords.map(k => `<span class="tag">#${k}</span>`).join('')}
+                        </div>
                     </div>
-                `;
+                `).join('');
+            } else {
+                list.innerHTML = '<div style="text-align:center;color:#a0aec0;padding:20px;">هنوز دانشی ذخیره نشده است</div>';
             }
         }
         
-        // ==================== افزودن ادمین ====================
-        async function addAdmin() {
-            const adminId = document.getElementById('adminId').value;
-            
-            if (!adminId) {
-                showMessage('adminResult', '❌ آیدی ادمین را وارد کنید!', 'error');
-                return;
-            }
-            
-            const result = await apiCall('/api/admin/add', 'POST', {
-                admin_id: parseInt(adminId)
-            });
-            
-            if (result.success) {
-                showMessage('adminResult', `✅ ${result.message}`, 'success');
-                document.getElementById('adminId').value = '';
-            } else {
-                showMessage('adminResult', `❌ خطا: ${result.error}`, 'error');
-            }
+        // ==================== نمایش پیام ====================
+        function showResult(elementId, message, type = 'success') {
+            const el = document.getElementById(elementId);
+            el.textContent = message;
+            el.className = `alert alert-${type}`;
+            el.style.display = 'block';
+            setTimeout(() => {
+                el.style.display = 'none';
+            }, 4000);
         }
         
         // ==================== بارگذاری اولیه ====================
         loadStats();
+        loadKnowledge();
         
-        // بروزرسانی خودکار آمار هر 30 ثانیه
-        setInterval(loadStats, 30000);
+        // بروزرسانی خودکار هر 10 ثانیه
+        setInterval(() => {
+            loadStats();
+        }, 10000);
     </script>
 </body>
 </html>
         """
     
     def run(self, host='0.0.0.0', port=5000):
-        """اجرای پنل مدیریت"""
+        """اجرای پنل"""
         self.app.run(host=host, port=port, debug=False, threaded=True)
 
 # ==================== اجرای اصلی ====================
 if __name__ == "__main__":
     try:
-        logger.info("🚀 راه‌اندازی سیستم هوش مصنوعی MON...")
+        logger.info("🚀 راه‌اندازی سیستم فوق‌پیشرفته MON...")
         
-        # ایجاد نمونه ربات
-        bot = UltraTelegramBot(Config.TELEGRAM_TOKEN)
+        # راه‌اندازی ربات
+        bot = UltraTelegramBot("YOUR_BOT_TOKEN_HERE")
         
-        # ایجاد پنل مدیریت
-        admin_panel = AdminPanel(bot)
+        # راه‌اندازی پنل مدیریت
+        admin = AdminPanel(bot)
         
-        # اجرای ربات در یک ترد جداگانه
+        # اجرا در تردهای جداگانه
         import threading
         bot_thread = threading.Thread(target=bot.run, daemon=True)
         bot_thread.start()
         
-        # اجرای پنل مدیریت
-        logger.info("👑 پنل مدیریت در http://localhost:5000 در حال اجراست")
-        admin_panel.run()
+        logger.info("👑 پنل مدیریت در http://localhost:5000")
+        admin.run()
         
     except KeyboardInterrupt:
         logger.info("👋 سیستم متوقف شد")
     except Exception as e:
-        logger.error(f"❌ خطای اصلی: {e}")
-        sys.exit(1)
+        logger.error(f"❌ خطا: {e}")
