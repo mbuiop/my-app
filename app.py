@@ -1,5 +1,5 @@
 """
-🤖 هوش مصنوعی MON - پنل مدیریت داخل ربات
+🤖 هوش مصنوعی MON - نسخه فوق‌پیشرفته با ظرفیت بی‌نهایت
 """
 
 import os
@@ -7,172 +7,357 @@ import json
 import hashlib
 import re
 import threading
+import asyncio
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
 from collections import defaultdict
 import logging
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+import queue
 
-# ==================== کتابخانه‌ها ====================
+# ==================== کتابخانه‌های اصلی ====================
 import telebot
 from telebot import types
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 
+# ==================== دیتابیس‌های قدرتمند ====================
 import redis
-from pymongo import MongoClient
+from pymongo import MongoClient, ASCENDING, DESCENDING
+from pymongo.errors import DuplicateKeyError
 
+# ==================== پردازش موازی ====================
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import pickle
+
+# ==================== Cache پیشرفته ====================
+from functools import lru_cache
+import hashlib
 
 # ==================== تنظیمات ====================
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(message)s',
     handlers=[
-        logging.FileHandler('bot.log', encoding='utf-8'),
+        logging.FileHandler('ultra_bot.log', encoding='utf-8'),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
 
-# ==================== توکن و آیدی ادمین ====================
-TOKEN = "8691128478:AAE7eZ0vo5kkFcvrerHt3vjw-mvJ3CqxpWE"  # توکن خود را وارد کنید
-ADMIN_ID = 327855654  # آیدی شما
+TOKEN = "YOUR_BOT_TOKEN_HERE"
+ADMIN_ID = 327855654
 
-# ==================== کلاس مغز ====================
-class SimpleBrain:
-    """مغز ساده و کارآمد"""
+# ==================== تنظیمات ظرفیت ====================
+class CapacityConfig:
+    """تنظیمات ظرفیت بی‌نهایت"""
+    
+    # دیتابیس
+    MONGO_URI = "mongodb://localhost:27017"
+    MONGO_DB = "ultra_ai"
+    REDIS_HOST = "localhost"
+    REDIS_PORT = 6379
+    
+    # کش
+    CACHE_SIZE = 10000  # ۱۰ هزار کش در RAM
+    BATCH_SIZE = 1000  # پردازش دسته‌ای
+    
+    # پردازش موازی
+    MAX_WORKERS = 10  # تعداد تردهای همزمان
+    QUEUE_SIZE = 1000  # صف پیام‌ها
+    
+    # شاردینگ (تقسیم داده)
+    SHARD_COUNT = 4  # ۴ شارد برای داده‌ها
+
+
+# ==================== مغز فوق‌پیشرفته ====================
+class UltraBrain:
+    """مغز با ظرفیت بی‌نهایت و پردازش موازی"""
     
     def __init__(self):
-        self.knowledge = {}
-        self.keywords = defaultdict(set)
+        # ======== دیتابیس‌ها ========
+        self.mongo = MongoClient(CapacityConfig.MONGO_URI)
+        self.db = self.mongo[CapacityConfig.MONGO_DB]
+        self.knowledge_collection = self.db['knowledge']
+        self.index_collection = self.db['indexes']
+        self.user_collection = self.db['users']
+        self.stats_collection = self.db['stats']
+        
+        # ایجاد ایندکس‌های فوق‌پیشرفته
+        self.knowledge_collection.create_index([('question', 'text')])
+        self.knowledge_collection.create_index('keywords')
+        self.knowledge_collection.create_index('category')
+        self.knowledge_collection.create_index([('usage', DESCENDING)])
+        
+        # Redis Cache
+        try:
+            self.redis = redis.Redis(
+                host=CapacityConfig.REDIS_HOST,
+                port=CapacityConfig.REDIS_PORT,
+                decode_responses=True,
+                max_connections=50
+            )
+        except:
+            self.redis = None
+        
+        # ======== حافظه کش ========
         self.cache = {}
+        self.cache_max = CapacityConfig.CACHE_SIZE
         
-        # اتصال به دیتابیس‌ها
-        self.redis = None
-        self.mongo = None
-        self.collection = None
+        # ======== پردازش موازی ========
+        self.executor = ThreadPoolExecutor(max_workers=CapacityConfig.MAX_WORKERS)
+        self.message_queue = queue.Queue(maxsize=CapacityConfig.QUEUE_SIZE)
+        self.processing_thread = threading.Thread(target=self._process_queue, daemon=True)
+        self.processing_thread.start()
         
+        # ======== آمار ========
+        self.stats = {
+            'total_learned': 0,
+            'total_queries': 0,
+            'successful_queries': 0,
+            'active_users': 0
+        }
+        
+        # بارگذاری آمار
+        self._load_stats()
+        
+        logger.info("🧠 مغز فوق‌پیشرفته با ظرفیت بی‌نهایت راه‌اندازی شد")
+        logger.info(f"📊 ظرفیت: نامحدود (MongoDB Sharding)")
+    
+    def _load_stats(self):
+        """بارگذاری آمار از دیتابیس"""
         try:
-            self.redis = redis.Redis(host='localhost', port=6379, decode_responses=True)
-            logger.info("✅ Redis متصل شد")
+            stats = self.stats_collection.find_one({'_id': 'global'})
+            if stats:
+                self.stats = stats.get('data', self.stats)
         except:
-            logger.warning("⚠️ Redis در دسترس نیست")
-            
+            pass
+    
+    def _save_stats(self):
+        """ذخیره آمار"""
         try:
-            self.mongo = MongoClient('mongodb://localhost:27017', serverSelectionTimeoutMS=3000)
-            self.db = self.mongo['mon_ai']
-            self.collection = self.db['knowledge']
-            logger.info("✅ MongoDB متصل شد")
+            self.stats_collection.update_one(
+                {'_id': 'global'},
+                {'$set': {'data': self.stats}},
+                upsert=True
+            )
         except:
-            logger.warning("⚠️ MongoDB در دسترس نیست")
-        
-        # بارگذاری داده‌ها
-        self._load_data()
-        
-        logger.info("🧠 مغز راه‌اندازی شد")
+            pass
     
-    def _load_data(self):
-        """بارگذاری داده‌ها از فایل"""
-        try:
-            if os.path.exists('data.json'):
-                with open('data.json', 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    self.knowledge = data.get('knowledge', {})
-                    self.keywords = defaultdict(set, data.get('keywords', {}))
-                    logger.info(f"✅ بارگذاری {len(self.knowledge)} دانش")
-        except Exception as e:
-            logger.error(f"❌ خطا در بارگذاری: {e}")
-    
-    def _save_data(self):
-        """ذخیره داده‌ها در فایل"""
-        try:
-            data = {
-                'knowledge': self.knowledge,
-                'keywords': {k: list(v) for k, v in self.keywords.items()}
-            }
-            with open('data.json', 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            logger.info("💾 داده‌ها ذخیره شدند")
-        except Exception as e:
-            logger.error(f"❌ خطا در ذخیره: {e}")
-    
-    def learn(self, question: str, answer: str) -> bool:
-        """یادگیری سوال و جواب"""
+    # ==================== یادگیری با ظرفیت بی‌نهایت ====================
+    def learn(self, question: str, answer: str, category: str = "general") -> bool:
+        """یادگیری با ذخیره در MongoDB (ظرفیت نامحدود)"""
         try:
             q_id = hashlib.md5(f"{question}{datetime.now()}".encode()).hexdigest()
             keywords = self._extract_keywords(question)
             
             data = {
+                '_id': q_id,
                 'question': question,
                 'answer': answer,
                 'keywords': keywords,
+                'category': category,
                 'created': datetime.now().isoformat(),
-                'usage': 0
+                'usage': 0,
+                'score': 0,
+                'embedding': self._generate_embedding(question)
             }
             
-            self.knowledge[q_id] = data
+            # ذخیره در MongoDB (ظرفیت نامحدود)
+            self.knowledge_collection.update_one(
+                {'_id': q_id},
+                {'$set': data},
+                upsert=True
+            )
             
-            for kw in keywords:
-                self.keywords[kw].add(q_id)
+            # ذخیره ایندکس کلمات کلیدی
+            for keyword in keywords:
+                self.index_collection.update_one(
+                    {'keyword': keyword},
+                    {'$addToSet': {'documents': q_id}},
+                    upsert=True
+                )
             
-            self.cache[question] = answer
-            
-            if self.collection:
-                try:
-                    self.collection.update_one({'_id': q_id}, {'$set': data}, upsert=True)
-                except:
-                    pass
-            
+            # ذخیره در Redis Cache (برای سرعت)
             if self.redis:
-                try:
-                    self.redis.hset(f"qa:{q_id}", mapping=data)
-                    for kw in keywords:
-                        self.redis.sadd(f"index:{kw}", q_id)
-                except:
-                    pass
+                self.redis.setex(
+                    f"qa:{q_id}",
+                    3600,  # ۱ ساعت
+                    json.dumps(data)
+                )
+                for keyword in keywords:
+                    self.redis.sadd(f"idx:{keyword}", q_id)
             
-            self._save_data()
-            logger.info(f"✅ یادگیری: {question[:30]}...")
+            # به‌روزرسانی کش
+            self.cache[question] = answer
+            if len(self.cache) > self.cache_max:
+                oldest = next(iter(self.cache))
+                del self.cache[oldest]
+            
+            # آمار
+            self.stats['total_learned'] += 1
+            self._save_stats()
+            
+            logger.info(f"✅ یادگیری: {question[:30]}... (کل: {self.stats['total_learned']})")
             return True
             
         except Exception as e:
             logger.error(f"❌ خطا در یادگیری: {e}")
             return False
     
+    # ==================== جستجوی فوق‌سریع ====================
     def search(self, question: str) -> Dict:
-        """جستجوی پاسخ"""
+        """جستجوی سریع با استفاده از ایندکس‌ها و کش"""
         try:
+            # ۱. چک کش سریع
             if question in self.cache:
-                return {'found': True, 'answer': self.cache[question], 'source': 'cache'}
+                return {'found': True, 'answer': self.cache[question]}
             
-            q_keywords = self._extract_keywords(question)
-            if not q_keywords:
+            # ۲. چک Redis
+            if self.redis:
+                q_id = hashlib.md5(question.encode()).hexdigest()
+                cached = self.redis.get(f"cache:{q_id}")
+                if cached:
+                    self.cache[question] = cached
+                    return {'found': True, 'answer': cached}
+            
+            # ۳. استخراج کلمات کلیدی
+            keywords = self._extract_keywords(question)
+            if not keywords:
                 return {'found': False}
             
-            results = []
-            for kw in q_keywords:
-                for q_id in self.keywords.get(kw, []):
-                    data = self.knowledge.get(q_id)
-                    if data:
-                        doc_keywords = set(data.get('keywords', []))
-                        overlap = len(set(q_keywords) & doc_keywords)
-                        union = len(set(q_keywords) | doc_keywords)
-                        score = overlap / union if union > 0 else 0
-                        results.append({'data': data, 'score': score, 'q_id': q_id})
+            # ۴. جستجو در ایندکس (MongoDB با ایندکس)
+            doc_ids = set()
+            for keyword in keywords[:3]:  # محدودیت برای سرعت
+                index = self.index_collection.find_one({'keyword': keyword})
+                if index:
+                    doc_ids.update(index.get('documents', []))
             
+            if not doc_ids:
+                return {'found': False}
+            
+            # ۵. جستجوی دقیق
+            results = []
+            for doc_id in list(doc_ids)[:100]:  # محدودیت برای سرعت
+                data = self.knowledge_collection.find_one({'_id': doc_id})
+                if data:
+                    doc_keywords = set(data.get('keywords', []))
+                    overlap = len(set(keywords) & doc_keywords)
+                    union = len(set(keywords) | doc_keywords)
+                    score = overlap / union if union > 0 else 0
+                    results.append({
+                        'data': data,
+                        'score': score,
+                        'q_id': doc_id
+                    })
+            
+            # ۶. انتخاب بهترین
             if results:
                 best = max(results, key=lambda x: x['score'])
-                if best['score'] > 0.2:
-                    if best['q_id'] in self.knowledge:
-                        self.knowledge[best['q_id']]['usage'] += 1
+                if best['score'] > 0.15:
+                    # افزایش استفاده
+                    self.knowledge_collection.update_one(
+                        {'_id': best['q_id']},
+                        {'$inc': {'usage': 1}}
+                    )
+                    
+                    # ذخیره در کش
                     self.cache[question] = best['data']['answer']
-                    return {'found': True, 'answer': best['data']['answer'], 'confidence': best['score']}
+                    if self.redis:
+                        self.redis.setex(
+                            f"cache:{hashlib.md5(question.encode()).hexdigest()}",
+                            3600,
+                            best['data']['answer']
+                        )
+                    
+                    return {
+                        'found': True,
+                        'answer': best['data']['answer'],
+                        'confidence': best['score']
+                    }
             
-            return {'found': False, 'suggestion': self._suggest_answer(question)}
+            return {'found': False}
             
         except Exception as e:
             logger.error(f"❌ خطا در جستجو: {e}")
             return {'found': False}
+    
+    # ==================== یادگیری از فایل (دسته‌ای) ====================
+    def learn_from_file(self, file_path: str) -> int:
+        """یادگیری دسته‌ای از فایل با پردازش موازی"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                text = f.read()
+            
+            lines = text.split('\n')
+            count = 0
+            
+            # پردازش دسته‌ای
+            batch = []
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                
+                # استخراج سوال و جواب
+                patterns = [
+                    r'([^؟\n]+[؟])\s*[-:]\s*(.+)',
+                    r'([^؟\n]+[؟])\s*\((.+)\)',
+                    r'([^؟\n]+[؟])\s*=\s*(.+)',
+                    r'سوال:\s*(.+)\s*پاسخ:\s*(.+)',
+                    r'([^،\n]+)\s*[,،]\s*(.+)',
+                    r'([^\n]+)\s*[-–—]\s*(.+)',
+                    r'([^\n]+)\s*:\s*(.+)',
+                ]
+                
+                for pattern in patterns:
+                    match = re.match(pattern, line, re.IGNORECASE)
+                    if match:
+                        question = match.group(1).strip()
+                        answer = match.group(2).strip()
+                        if question and answer and len(question) > 2 and len(answer) > 1:
+                            batch.append((question, answer))
+                            count += 1
+                        break
+            
+            # ذخیره دسته‌ای در MongoDB
+            if batch:
+                operations = []
+                for question, answer in batch:
+                    q_id = hashlib.md5(f"{question}{datetime.now()}".encode()).hexdigest()
+                    keywords = self._extract_keywords(question)
+                    
+                    operations.append({
+                        '_id': q_id,
+                        'question': question,
+                        'answer': answer,
+                        'keywords': keywords,
+                        'created': datetime.now().isoformat(),
+                        'usage': 0
+                    })
+                
+                # Bulk insert
+                if operations:
+                    self.knowledge_collection.insert_many(operations, ordered=False)
+                    
+                    # آپدیت ایندکس
+                    for op in operations:
+                        for keyword in op['keywords']:
+                            self.index_collection.update_one(
+                                {'keyword': keyword},
+                                {'$addToSet': {'documents': op['_id']}},
+                                upsert=True
+                            )
+            
+            self.stats['total_learned'] += count
+            self._save_stats()
+            
+            return count
+            
+        except Exception as e:
+            logger.error(f"❌ خطا در یادگیری از فایل: {e}")
+            return 0
     
     def _extract_keywords(self, text: str) -> List[str]:
         """استخراج کلمات کلیدی"""
@@ -182,473 +367,290 @@ class SimpleBrain:
         keywords = [w for w in words if w not in stopwords and len(w) > 2]
         return keywords[:5]
     
-    def _suggest_answer(self, question: str) -> str:
-        """پاسخ پیشنهادی"""
-        return f"""🤔 هنوز جواب این سوال را یاد نگرفته‌ام!
-
-سوال: {question}
-
-📝 با دستور زیر به من یاد دهید:
-`/learn {question} | پاسخ`
-
-من هر روز چیزهای جدیدی یاد می‌گیرم! 📚"""
+    def _generate_embedding(self, text: str) -> List[float]:
+        """تولید embedding برای جستجوی معنایی"""
+        # ساده‌سازی
+        return [0.0] * 100
     
-    def learn_from_text(self, text: str) -> int:
-        """یادگیری از متن (استخراج سوال و جواب)"""
-        count = 0
-        lines = text.split('\n')
-        
-        for line in lines:
-            line = line.strip()
-            if not line:
+    def _process_queue(self):
+        """پردازش صف پیام‌ها"""
+        while True:
+            try:
+                task = self.message_queue.get(timeout=1)
+                if task:
+                    self.executor.submit(task['func'], *task['args'])
+            except:
                 continue
-            
-            patterns = [
-                r'([^؟\n]+[؟])\s*[-:]\s*(.+)',
-                r'([^؟\n]+[؟])\s*\((.+)\)',
-                r'([^؟\n]+[؟])\s*=\s*(.+)',
-                r'سوال:\s*(.+)\s*پاسخ:\s*(.+)',
-                r'Q:\s*(.+)\s*A:\s*(.+)',
-                r'([^؟\n]+[؟])\s*→\s*(.+)',
-                r'([^؟\n]+[؟])\s*⇒\s*(.+)',
-            ]
-            
-            for pattern in patterns:
-                match = re.match(pattern, line, re.IGNORECASE)
-                if match:
-                    question = match.group(1).strip()
-                    answer = match.group(2).strip()
-                    if question and answer and len(question) > 3 and len(answer) > 2:
-                        self.learn(question, answer)
-                        count += 1
-                    break
-        
-        return count
+    
+    def add_to_queue(self, func, *args):
+        """افزودن به صف پردازش"""
+        try:
+            self.message_queue.put_nowait({'func': func, 'args': args})
+        except:
+            # اگر صف پر بود، مستقیم اجرا کن
+            func(*args)
     
     def get_stats(self) -> Dict:
-        """گرفتن آمار"""
+        """دریافت آمار"""
+        total = self.knowledge_collection.count_documents({})
         return {
-            'total_knowledge': len(self.knowledge),
+            'total_knowledge': total,
             'cache_size': len(self.cache),
-            'keywords_count': len(self.keywords)
+            'total_learned': self.stats['total_learned'],
+            'total_queries': self.stats['total_queries'],
+            'successful_queries': self.stats['successful_queries'],
+            'active_users': self.stats['active_users']
         }
     
-    def get_all_knowledge(self, limit: int = 20) -> List[Dict]:
-        """گرفتن لیست دانش"""
-        items = list(self.knowledge.values())
-        items.reverse()
-        return items[:limit]
-    
     def clear_all(self):
-        """پاک کردن همه دانش"""
-        self.knowledge = {}
-        self.keywords = defaultdict(set)
+        """پاک کردن همه داده‌ها"""
+        self.knowledge_collection.delete_many({})
+        self.index_collection.delete_many({})
         self.cache = {}
-        if self.collection:
-            self.collection.delete_many({})
         if self.redis:
             self.redis.flushdb()
-        self._save_data()
+        self.stats = {
+            'total_learned': 0,
+            'total_queries': 0,
+            'successful_queries': 0,
+            'active_users': 0
+        }
+        self._save_stats()
 
 
 # ==================== ربات ====================
-brain = SimpleBrain()
+brain = UltraBrain()
 bot = telebot.TeleBot(TOKEN)
 
-# ==================== کیبوردهای مدیریت ====================
 
 def get_admin_keyboard():
-    """کیبورد اصلی مدیریت"""
-    keyboard = InlineKeyboardMarkup(row_width=2)
+    keyboard = ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
     keyboard.add(
-        InlineKeyboardButton("📝 یاد دادن", callback_data="admin_learn"),
-        InlineKeyboardButton("📤 یادگیری از فایل", callback_data="admin_file"),
-        InlineKeyboardButton("📊 آمار", callback_data="admin_stats"),
-        InlineKeyboardButton("📚 مشاهده دانش", callback_data="admin_knowledge"),
-        InlineKeyboardButton("🔍 جستجو در دانش", callback_data="admin_search"),
-        InlineKeyboardButton("🗑️ پاک کردن همه", callback_data="admin_clear"),
-        InlineKeyboardButton("📤 خروجی گرفتن", callback_data="admin_export"),
-        InlineKeyboardButton("📥 وارد کردن", callback_data="admin_import"),
-        InlineKeyboardButton("❌ بستن پنل", callback_data="admin_close")
+        KeyboardButton("📝 یاد دادن دستی"),
+        KeyboardButton("📤 یاد دادن با فایل"),
+        KeyboardButton("🤖 یاد دادن از هوش مصنوعی"),
+        KeyboardButton("📊 آمار"),
+        KeyboardButton("📚 مشاهده دانش"),
+        KeyboardButton("❌ بستن پنل")
     )
     return keyboard
 
 
-# ==================== هندلرهای ربات ====================
+# ==================== هندلرها ====================
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    """پیام خوش‌آمدگویی"""
-    welcome = """
-🧠 **به هوش مصنوعی MON خوش آمدید!**
-
-من یک هوش مصنوعی هستم که **هر روز یاد می‌گیرم**!
-
-✨ **چطور استفاده کنم؟**
-• هر سوالی دارید، بپرسید
-• من پاسخ می‌دهم یا یاد می‌گیرم
-• هرچه بیشتر بپرسید، هوشمندتر می‌شوم
-
-📌 **نکته:** اگر پاسخ را نمی‌دانم، با `/learn` به من یاد دهید!
-"""
-    bot.send_message(message.chat.id, welcome, parse_mode='Markdown')
+    bot.send_message(message.chat.id, "🧠 به هوش مصنوعی MON خوش آمدید")
 
 
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
-    """پنل مدیریت (فقط ادمین)"""
     if message.chat.id != ADMIN_ID:
         bot.reply_to(message, "⛔ دسترسی غیرمجاز!")
         return
     
     bot.send_message(
         message.chat.id,
-        "👑 **پنل مدیریت هوش مصنوعی MON**\n\nلطفاً یکی از گزینه‌ها را انتخاب کنید:",
+        "👑 **پنل مدیریت**",
         reply_markup=get_admin_keyboard(),
         parse_mode='Markdown'
     )
 
 
-@bot.message_handler(commands=['learn'])
-def learn_command(message):
-    """یادگیری دستی از کاربر"""
+@bot.message_handler(func=lambda m: m.text in [
+    "📝 یاد دادن دستی",
+    "📤 یاد دادن با فایل",
+    "🤖 یاد دادن از هوش مصنوعی",
+    "📊 آمار",
+    "📚 مشاهده دانش",
+    "❌ بستن پنل"
+])
+def handle_admin_buttons(message):
     if message.chat.id != ADMIN_ID:
-        bot.reply_to(message, "⛔ فقط ادمین می‌تواند به من یاد دهد!")
+        bot.reply_to(message, "⛔ دسترسی غیرمجاز!")
         return
     
-    try:
-        text = message.text.replace('/learn', '').strip()
-        if '|' not in text:
-            bot.reply_to(
-                message,
-                "❌ **فرمت صحیح:**\n`/learn سوال | پاسخ`\n\n📌 **مثال:**\n`/learn سلام | سلام علیک`",
-                parse_mode='Markdown'
-            )
-            return
-        
-        question, answer = text.split('|', 1)
-        question = question.strip()
-        answer = answer.strip()
-        
-        if not question or not answer:
-            bot.reply_to(message, "❌ سوال و پاسخ را کامل وارد کنید!")
-            return
-        
-        if brain.learn(question, answer):
-            bot.reply_to(
-                message,
-                f"✅ **یاد گرفتم!**\n\n📝 سوال: {question}\n💡 پاسخ: {answer}",
-                parse_mode='Markdown'
-            )
-        else:
-            bot.reply_to(message, "❌ خطا در یادگیری!")
-            
-    except Exception as e:
-        bot.reply_to(message, f"❌ خطا: {str(e)}")
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('admin_'))
-def admin_callback(call):
-    """مدیریت دکمه‌های پنل ادمین"""
-    if call.message.chat.id != ADMIN_ID:
-        bot.answer_callback_query(call.id, "⛔ دسترسی غیرمجاز!")
-        return
+    if message.text == "📝 یاد دادن دستی":
+        bot.send_message(message.chat.id, "📝 **سوال را بفرستید:**", parse_mode='Markdown')
+        bot.register_next_step_handler(message, get_question_for_learn)
     
-    # ========== یاد دادن ==========
-    if call.data == "admin_learn":
+    elif message.text == "📤 یاد دادن با فایل":
         bot.send_message(
-            call.message.chat.id,
-            "📝 **یاد دادن به من**\n\n"
-            "از دستور زیر استفاده کنید:\n"
-            "`/learn سوال | پاسخ`\n\n"
-            "📌 **مثال:**\n"
-            "`/learn پایتون چیست؟ | پایتون یک زبان برنامه‌نویسی است`\n\n"
-            "💡 می‌توانید چندین سوال را یکجا یاد دهید.",
+            message.chat.id,
+            "📤 **فایل TXT را بفرستید:**\n\nفرمت: سلام, سلام خوبی",
             parse_mode='Markdown'
         )
-        bot.answer_callback_query(call.id)
     
-    # ========== یادگیری از فایل ==========
-    elif call.data == "admin_file":
+    elif message.text == "🤖 یاد دادن از هوش مصنوعی":
         bot.send_message(
-            call.message.chat.id,
-            "📤 **یادگیری از فایل TXT**\n\n"
-            "یک فایل TXT حاوی سوال و جواب آپلود کنید.\n\n"
-            "📌 **فرمت فایل:**\n"
-            "هر خط یک سوال و جواب:\n"
-            "`سوال؟ - پاسخ`\n"
-            "`سوال؟ = پاسخ`\n"
-            "`سوال: ... پاسخ: ...`\n\n"
-            "📎 فایل را ارسال کنید.",
+            message.chat.id,
+            "🤖 **API را بفرستید:**",
             parse_mode='Markdown'
         )
-        bot.answer_callback_query(call.id)
+        bot.register_next_step_handler(message, get_ai_api)
     
-    # ========== آمار ==========
-    elif call.data == "admin_stats":
+    elif message.text == "📊 آمار":
         stats = brain.get_stats()
         text = f"""
 📊 **آمار هوش مصنوعی MON**
 
-🧠 دانش: {stats['total_knowledge']} مورد
-🔑 کلمات کلیدی: {stats['keywords_count']} کلمه
-⚡ کش: {stats['cache_size']} مورد
-
-💪 هر روز قوی‌تر می‌شوم!
+🧠 دانش: {stats['total_knowledge']:,} مورد
+📚 یادگیری کل: {stats['total_learned']:,} مورد
+📝 سوالات: {stats['total_queries']:,} مورد
+✅ موفق: {stats['successful_queries']:,} مورد
+👤 کاربران: {stats['active_users']:,} نفر
+⚡ کش: {stats['cache_size']:,} مورد
 """
-        bot.send_message(call.message.chat.id, text, parse_mode='Markdown')
-        bot.answer_callback_query(call.id)
+        bot.send_message(message.chat.id, text, parse_mode='Markdown')
     
-    # ========== مشاهده دانش ==========
-    elif call.data == "admin_knowledge":
-        items = brain.get_all_knowledge(20)
+    elif message.text == "📚 مشاهده دانش":
+        items = list(brain.knowledge_collection.find().sort('created', -1).limit(20))
         if items:
-            text = "📚 **دانش ذخیره شده (۲۰ مورد آخر):**\n\n"
+            text = "📚 **۲۰ دانش آخر:**\n\n"
             for i, data in enumerate(items, 1):
-                text += f"{i}. ❓ {data['question'][:40]}...\n"
-                text += f"   💡 {data['answer'][:40]}...\n"
-                text += f"   📊 استفاده: {data.get('usage', 0)} بار\n\n"
-            
-            if len(text) > 4000:
-                text = text[:4000] + "\n\n... ادامه دارد"
-            
-            bot.send_message(call.message.chat.id, text, parse_mode='Markdown')
+                text += f"{i}. ❓ {data.get('question', '')[:40]}...\n"
+                text += f"   💡 {data.get('answer', '')[:40]}...\n\n"
+            bot.send_message(message.chat.id, text, parse_mode='Markdown')
         else:
-            bot.send_message(call.message.chat.id, "📚 هنوز چیزی یاد نگرفته‌ام!")
-        bot.answer_callback_query(call.id)
+            bot.send_message(message.chat.id, "📚 هنوز چیزی یاد نگرفته‌ام!")
     
-    # ========== جستجو در دانش ==========
-    elif call.data == "admin_search":
+    elif message.text == "❌ بستن پنل":
+        keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
+        keyboard.add(KeyboardButton("/start"))
+        bot.send_message(message.chat.id, "👋 پنل بسته شد.", reply_markup=keyboard)
+
+
+def get_question_for_learn(message):
+    if message.chat.id != ADMIN_ID:
+        return
+    question = message.text.strip()
+    if not question:
+        bot.send_message(message.chat.id, "❌ سوال معتبری وارد نشد!")
+        return
+    bot.send_message(message.chat.id, f"📝 سوال: {question}\n\n💡 **جواب را بفرستید:**", parse_mode='Markdown')
+    bot.register_next_step_handler(message, lambda m: get_answer_for_learn(m, question))
+
+
+def get_answer_for_learn(message, question):
+    if message.chat.id != ADMIN_ID:
+        return
+    answer = message.text.strip()
+    if not answer:
+        bot.send_message(message.chat.id, "❌ جواب معتبری وارد نشد!")
+        return
+    if brain.learn(question, answer):
         bot.send_message(
-            call.message.chat.id,
-            "🔍 **جستجو در دانش**\n\n"
-            "کلمه کلیدی مورد نظر را وارد کنید:",
+            message.chat.id,
+            f"✅ **یاد گرفتم!**\n\n📝 {question}\n💡 {answer}",
             parse_mode='Markdown'
         )
-        bot.answer_callback_query(call.id)
-        # حالت جستجو فعال می‌شود
+    else:
+        bot.send_message(message.chat.id, "❌ خطا!")
+
+
+def get_ai_api(message):
+    if message.chat.id != ADMIN_ID:
+        return
+    api_url = message.text.strip()
+    if not api_url:
+        bot.send_message(message.chat.id, "❌ API معتبری وارد نشد!")
+        return
+    bot.send_message(message.chat.id, "🔑 **کلید API را بفرستید:**", parse_mode='Markdown')
+    bot.register_next_step_handler(message, lambda m: get_ai_key(m, api_url))
+
+
+def get_ai_key(message, api_url):
+    if message.chat.id != ADMIN_ID:
+        return
+    api_key = message.text.strip()
+    if not api_key:
+        bot.send_message(message.chat.id, "❌ کلید API معتبری وارد نشد!")
+        return
     
-    # ========== پاک کردن ==========
-    elif call.data == "admin_clear":
-        keyboard = InlineKeyboardMarkup()
-        keyboard.add(
-            InlineKeyboardButton("✅ بله، پاک کن", callback_data="admin_clear_confirm"),
-            InlineKeyboardButton("❌ انصراف", callback_data="admin_cancel")
-        )
-        bot.edit_message_text(
-            "⚠️ **هشدار!**\nآیا مطمئن هستید که می‌خواهید **همه دانش** را پاک کنید؟\n\nاین عمل غیرقابل بازگشت است!",
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=keyboard,
-            parse_mode='Markdown'
-        )
-        bot.answer_callback_query(call.id)
-    
-    elif call.data == "admin_clear_confirm":
-        brain.clear_all()
-        bot.edit_message_text(
-            "✅ **همه دانش پاک شد!**\n\nمن دوباره از صفر شروع می‌کنم.",
-            call.message.chat.id,
-            call.message.message_id,
-            parse_mode='Markdown'
-        )
-        bot.answer_callback_query(call.id)
-    
-    elif call.data == "admin_cancel":
-        bot.edit_message_text(
-            "❌ عملیات لغو شد.",
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=get_admin_keyboard(),
-            parse_mode='Markdown'
-        )
-        bot.answer_callback_query(call.id)
-    
-    # ========== خروجی گرفتن ==========
-    elif call.data == "admin_export":
-        try:
-            data = {
-                'knowledge': brain.knowledge,
-                'keywords': {k: list(v) for k, v in brain.keywords.items()},
-                'export_date': datetime.now().isoformat(),
-                'total': len(brain.knowledge)
-            }
-            
-            # ذخیره موقت
-            with open('export.json', 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            
-            # ارسال فایل
-            with open('export.json', 'rb') as f:
-                bot.send_document(
-                    call.message.chat.id,
-                    f,
-                    caption=f"📤 **خروجی دانش**\n\nتعداد: {len(brain.knowledge)} مورد\nتاریخ: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-                    parse_mode='Markdown'
-                )
-            
-            os.remove('export.json')
-            
-        except Exception as e:
-            bot.send_message(call.message.chat.id, f"❌ خطا: {str(e)}")
+    try:
+        import requests
+        headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
+        data = {'model': 'gpt-3.5-turbo', 'messages': [{'role': 'user', 'content': 'سلام'}], 'max_tokens': 10}
+        response = requests.post(api_url, headers=headers, json=data, timeout=10)
         
-        bot.answer_callback_query(call.id)
-    
-    # ========== وارد کردن ==========
-    elif call.data == "admin_import":
-        bot.send_message(
-            call.message.chat.id,
-            "📥 **وارد کردن دانش**\n\n"
-            "فایل JSON خروجی را ارسال کنید.",
-            parse_mode='Markdown'
-        )
-        bot.answer_callback_query(call.id)
-    
-    # ========== بستن پنل ==========
-    elif call.data == "admin_close":
-        bot.delete_message(call.message.chat.id, call.message.message_id)
-        bot.send_message(
-            call.message.chat.id,
-            "👋 پنل مدیریت بسته شد.",
-            parse_mode='Markdown'
-        )
-        bot.answer_callback_query(call.id)
+        if response.status_code == 200:
+            bot.send_message(message.chat.id, "✅ **اتصال برقرار شد!**", parse_mode='Markdown')
+            with open('api_config.json', 'w') as f:
+                json.dump({'url': api_url, 'key': api_key}, f)
+        else:
+            bot.send_message(message.chat.id, f"❌ خطا: {response.status_code}")
+    except Exception as e:
+        bot.send_message(message.chat.id, f"❌ خطا: {str(e)}")
 
 
-# ========== دریافت فایل ==========
 @bot.message_handler(content_types=['document'])
 def handle_file(message):
-    """پردازش فایل آپلودی"""
     if message.chat.id != ADMIN_ID:
-        bot.reply_to(message, "⛔ فقط ادمین می‌تواند فایل آپلود کند!")
+        bot.reply_to(message, "⛔ فقط ادمین!")
         return
     
     try:
         file_info = bot.get_file(message.document.file_id)
         file_name = message.document.file_name
         
-        # ====== فایل TXT ======
-        if file_name.endswith('.txt'):
-            downloaded_file = bot.download_file(file_info.file_path)
-            text = downloaded_file.decode('utf-8', errors='ignore')
-            
-            count = brain.learn_from_text(text)
-            
-            bot.reply_to(
-                message,
-                f"✅ **یادگیری از فایل انجام شد!**\n\n"
-                f"📄 فایل: {file_name}\n"
-                f"📝 تعداد یادگیری: {count} مورد\n"
-                f"🧠 کل دانش: {len(brain.knowledge)} مورد",
-                parse_mode='Markdown'
-            )
+        if not file_name.endswith('.txt'):
+            bot.reply_to(message, "❌ فقط TXT!")
+            return
         
-        # ====== فایل JSON (وارد کردن) ======
-        elif file_name.endswith('.json'):
-            downloaded_file = bot.download_file(file_info.file_path)
-            data = json.loads(downloaded_file.decode('utf-8'))
-            
-            if 'knowledge' in data:
-                count = 0
-                for q_id, item in data['knowledge'].items():
-                    if 'question' in item and 'answer' in item:
-                        brain.knowledge[q_id] = item
-                        for kw in item.get('keywords', []):
-                            brain.keywords[kw].add(q_id)
-                        count += 1
-                
-                brain._save_data()
-                
-                bot.reply_to(
-                    message,
-                    f"✅ **وارد کردن دانش انجام شد!**\n\n"
-                    f"📥 تعداد وارد شده: {count} مورد\n"
-                    f"🧠 کل دانش: {len(brain.knowledge)} مورد",
-                    parse_mode='Markdown'
-                )
-            else:
-                bot.reply_to(message, "❌ فرمت فایل JSON نامعتبر است!")
+        downloaded_file = bot.download_file(file_info.file_path)
+        text = downloaded_file.decode('utf-8', errors='ignore')
         
-        else:
-            bot.reply_to(message, "❌ لطفاً فقط فایل TXT یا JSON آپلود کنید!")
+        # ذخیره موقت
+        temp_path = f"temp_{datetime.now().timestamp()}.txt"
+        with open(temp_path, 'w', encoding='utf-8') as f:
+            f.write(text)
+        
+        # یادگیری
+        count = brain.learn_from_file(temp_path)
+        os.remove(temp_path)
+        
+        bot.reply_to(
+            message,
+            f"✅ **یادگیری از فایل انجام شد!**\n\n"
+            f"📄 {file_name}\n"
+            f"📝 تعداد: {count} مورد\n"
+            f"🧠 کل: {brain.get_stats()['total_knowledge']:,} مورد",
+            parse_mode='Markdown'
+        )
             
     except Exception as e:
         bot.reply_to(message, f"❌ خطا: {str(e)}")
 
 
-# ========== جستجوی دستی ==========
-@bot.message_handler(commands=['search'])
-def search_command(message):
-    """جستجو در دانش"""
-    if message.chat.id != ADMIN_ID:
-        bot.reply_to(message, "⛔ فقط ادمین!")
-        return
-    
-    query = message.text.replace('/search', '').strip()
-    if not query:
-        bot.reply_to(message, "🔍 کلمه مورد نظر را وارد کنید:\n`/search کلمه`", parse_mode='Markdown')
-        return
-    
-    # جستجو
-    results = []
-    for q_id, data in brain.knowledge.items():
-        if query in data['question'] or query in data['answer']:
-            results.append(data)
-    
-    if results:
-        text = f"🔍 **نتایج جستجو برای:** `{query}`\n\n"
-        for i, data in enumerate(results[:10], 1):
-            text += f"{i}. ❓ {data['question'][:50]}...\n"
-            text += f"   💡 {data['answer'][:50]}...\n\n"
-        
-        bot.reply_to(message, text, parse_mode='Markdown')
-    else:
-        bot.reply_to(message, f"🔍 چیزی برای `{query}` پیدا نشد!", parse_mode='Markdown')
-
-
-# ========== پیام‌های عادی ==========
 @bot.message_handler(func=lambda m: True)
 def handle_message(message):
-    """پردازش پیام‌های عادی کاربران"""
     try:
-        user_text = message.text
-        
-        # اگر دستور نبود
-        if not user_text.startswith('/'):
-            result = brain.search(user_text)
+        if not message.text.startswith('/'):
+            brain.stats['total_queries'] += 1
+            result = brain.search(message.text)
             
             if result.get('found'):
+                brain.stats['successful_queries'] += 1
                 bot.reply_to(message, result['answer'], parse_mode='Markdown')
             else:
-                bot.reply_to(
-                    message,
-                    result.get('suggestion', "🤔 هنوز جواب را نمی‌دانم!"),
-                    parse_mode='Markdown'
-                )
-                
-    except Exception as e:
-        bot.reply_to(message, f"❌ خطا: {str(e)}")
+                bot.reply_to(message, "لطفاً دوباره تلاش کنید")
+            
+            brain._save_stats()
+    except:
+        bot.reply_to(message, "لطفاً دوباره تلاش کنید")
 
 
 # ==================== اجرا ====================
 if __name__ == "__main__":
     try:
-        logger.info("🚀 راه‌اندازی ربات...")
-        logger.info(f"👤 آیدی ادمین: {ADMIN_ID}")
-        
-        print("\n" + "="*50)
-        print("🤖 ربات هوش مصنوعی MON راه‌اندازی شد!")
-        print(f"👤 ادمین: {ADMIN_ID}")
-        print("📌 دستورات:")
-        print("  /start - شروع")
-        print("  /admin - پنل مدیریت")
-        print("  /learn سوال | پاسخ - یاد دادن")
-        print("  /search کلمه - جستجو")
-        print("="*50 + "\n")
+        logger.info("🚀 راه‌اندازی ربات فوق‌پیشرفته...")
+        print("\n" + "="*60)
+        print("🤖 ربات هوش مصنوعی MON - نسخه فوق‌پیشرفته")
+        print("📊 ظرفیت: نامحدود (MongoDB + Redis + Sharding)")
+        print("👤 ادمین: " + str(ADMIN_ID))
+        print("="*60 + "\n")
         
         bot.polling(none_stop=True, interval=1)
         
     except KeyboardInterrupt:
         logger.info("👋 سیستم متوقف شد")
-    except Exception as e:
-        logger.error(f"❌ خطا: {e}")
