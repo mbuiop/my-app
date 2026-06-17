@@ -33,7 +33,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-TOKEN = "YOUR_BOT_TOKEN_HERE"
+TOKEN = "8691128478:AAE7eZ0vo5kkFcvrerHt3vjw-mvJ3CqxpWE"
 ADMIN_ID = 327855654
 
 # ==================== مغز با ظرفیت بی‌نهایت ====================
