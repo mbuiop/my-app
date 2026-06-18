@@ -83,7 +83,7 @@ for dir_path in [DB_DIR, FILES_DIR, RUNNING_DIR, LOGS_DIR, RECEIPTS_DIR, PENDING
     os.makedirs(dir_path, exist_ok=True)
 
 # ==================== توکن ربات مادر ====================
-BOT_TOKEN = "8691128478:AAE7eZ0vo5kkFcvrerHt3vjw-mvJ3CqxpWE"
+BOT_TOKEN = "8787172986:AAHtlVXWZTTFUrvWc0OcVI-CehKxkPmF7nA"
 
 # ==================== آیدی ادمین ====================
 ADMIN_IDS = [327855654]
