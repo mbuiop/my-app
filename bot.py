@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-ربات مادر نسخه ۲۱.۰ - فوق پیشرفته با ایزوله‌سازی کامل و فایل‌های آماده
+ربات مادر نسخه ۲۱.۱ - رفع باگ تایید فایل + ساخت اتوماتیک فایل‌های آماده
 """
 
 import telebot
@@ -249,7 +249,9 @@ class DatabaseManager:
                     status TEXT DEFAULT 'pending',
                     submitted_at TIMESTAMP,
                     reviewed_at TIMESTAMP,
-                    is_active INTEGER DEFAULT 1
+                    is_active INTEGER DEFAULT 1,
+                    is_ready INTEGER DEFAULT 0,
+                    ready_file_id INTEGER DEFAULT 0
                 )
             ''')
             conn.execute('''
@@ -445,6 +447,7 @@ class DatabaseManager:
                 conn.execute('CREATE INDEX IF NOT EXISTS idx_servers_status ON servers(status)')
                 conn.execute('CREATE INDEX IF NOT EXISTS idx_build_queue_status ON build_queue(status)')
                 conn.execute('CREATE INDEX IF NOT EXISTS idx_ready_files_is_active ON ready_files(is_active)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_pending_files_is_ready ON pending_files(is_ready)')
                 conn.commit()
         except Exception as e:
             print(f"⚠️ خطا در ایجاد ایندکس‌ها: {e}")
@@ -1006,7 +1009,6 @@ def update_user_balance(user_id, amount, description=None):
 def can_create_bot(user_id):
     try:
         with get_db() as conn:
-            # فقط اشتراک فعال رو چک کن
             return has_active_subscription(user_id)
     except:
         return False
@@ -1018,7 +1020,6 @@ def add_bot(user_id, subscription_id, server_id, bot_id, token, name, username, 
             expires_at = (datetime.now() + timedelta(days=config.subscription_days)).isoformat()
             conn.execute('INSERT INTO bots (id, user_id, subscription_id, server_id, token, name, username, file_path, pid, status, created_at, expires_at, requirements, start_count, last_start, is_deleted, bot_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, "running", ?, ?, ?, 1, ?, 0, ?)', 
                         (bot_id, user_id, subscription_id, server_id, token, name, username, file_path, pid, now, expires_at, requirements, now, bot_type))
-            # فقط تعداد ربات‌ها را افزایش بده، اشتراک را غیرفعال نکن
             conn.execute('UPDATE users SET total_bots = total_bots + 1 WHERE user_id = ?', (user_id,))
             conn.commit()
             return True
@@ -1067,31 +1068,28 @@ def delete_bot_complete(bot_id, user_id):
             if not bot:
                 return False
             
-            # توقف ربات
             stop_bot_on_mother(bot_id)
             
-            # حذف فایل‌های ربات
             bot_dir = os.path.join(RUNNING_DIR, bot_id)
             if os.path.exists(bot_dir):
                 shutil.rmtree(bot_dir, ignore_errors=True)
             
-            # آپدیت دیتابیس
             conn.execute('UPDATE bots SET status = "deleted_by_user", is_deleted = 1 WHERE id = ?', (bot_id,))
             conn.commit()
             return True
     except:
         return False
 
-def save_pending_file(user_id, subscription_id, file_path, file_name, file_hash):
+def save_pending_file(user_id, subscription_id, file_path, file_name, file_hash, is_ready=0, ready_file_id=0):
     try:
         with get_db() as conn:
             now = datetime.now().isoformat()
-            conn.execute('INSERT INTO pending_files (user_id, subscription_id, file_path, file_name, file_hash, submitted_at, is_active) VALUES (?, ?, ?, ?, ?, ?, 1)', 
-                        (user_id, subscription_id, file_path, file_name, file_hash, now))
+            conn.execute('INSERT INTO pending_files (user_id, subscription_id, file_path, file_name, file_hash, submitted_at, is_active, is_ready, ready_file_id) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)', 
+                        (user_id, subscription_id, file_path, file_name, file_hash, now, is_ready, ready_file_id))
             conn.commit()
-            return True
+            return conn.execute('SELECT last_insert_rowid()').fetchone()[0]
     except:
-        return False
+        return None
 
 def get_pending_files():
     try:
@@ -1605,7 +1603,8 @@ def start_user_bot(bot_id, chat_id=None):
     else:
         return False, error
 
-def build_bot_from_pending(file_id, queue_id=None, chat_id=None):
+# ✅ تابع اصلاح شده برای ساخت ربات از فایل در انتظار
+def build_bot_from_pending(file_id, queue_id=None, chat_id=None, auto_build=False):
     result = {'success': False, 'error': None, 'name': None, 'username': None, 'bot_id': None}
     
     pending = get_pending_file_by_id(file_id)
@@ -1614,6 +1613,18 @@ def build_bot_from_pending(file_id, queue_id=None, chat_id=None):
         if queue_id:
             update_build_queue_status(queue_id, 'failed', error_message=result['error'])
         return result
+    
+    # اگر فایل آماده است و اشتراک فعال دارد، خودکار بساز
+    if pending.get('is_ready', 0) == 1 and auto_build:
+        # بررسی اشتراک فعال
+        if not has_active_subscription(pending['user_id']):
+            result['error'] = "اشتراک فعال ندارید!"
+            return result
+        
+        # بررسی اینکه آیا قبلاً ربات ساخته شده
+        if not can_create_bot(pending['user_id']):
+            result['error'] = "قبلاً با این اشتراک ربات ساخته‌اید!"
+            return result
     
     code = None
     if pending['file_name'].endswith('.zip'):
@@ -2209,38 +2220,78 @@ def process_ready_admin(message, ready_file, token):
             return
         subscription_id = sub['id']
     
-    # ذخیره در pending_files با علامت is_ready
-    with get_db() as conn:
-        now = datetime.now().isoformat()
-        conn.execute('INSERT INTO pending_files (user_id, subscription_id, file_path, file_name, file_hash, submitted_at, is_active) VALUES (?, ?, ?, ?, ?, ?, 1)', 
-                    (user_id, subscription_id, file_path, file_name, file_hash, now))
-        conn.commit()
-        file_id = conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+    # ✅ ذخیره در pending_files با علامت is_ready=1
+    file_id = save_pending_file(user_id, subscription_id, file_path, file_name, file_hash, is_ready=1, ready_file_id=ready_file['id'])
+    
+    if not file_id:
+        bot.reply_to(message, "❌ خطا در ذخیره فایل!")
+        return
     
     bot.reply_to(message, 
         f"✅ **فایل آماده با موفقیت ثبت شد!**\n\n"
         f"📦 نام: {ready_file['name']}\n"
         f"🤖 توکن: `{token[:10]}...`\n"
         f"👤 ادمین: {admin_id}\n\n"
-        f"⏳ پس از تایید ادمین، ربات ساخته می‌شود.",
+        f"🔄 **ربات شما به صورت خودکار ساخته می‌شود!**\n"
+        f"⏳ لطفاً چند لحظه صبر کنید...",
         parse_mode="Markdown"
     )
     
-    # اطلاع به ادمین‌ها
-    for admin in ADMIN_IDS:
-        try:
-            bot.send_message(admin,
-                f"📦 **درخواست ساخت ربات آماده**\n\n"
-                f"👤 کاربر: {user_id}\n"
-                f"📦 فایل: {ready_file['name']}\n"
-                f"🤖 توکن: `{token[:10]}...`\n"
-                f"👤 ادمین: {admin_id}\n"
-                f"🆔 آیدی فایل: {file_id}\n\n"
-                f"برای تایید به بخش فایل‌های در انتظار بروید.",
+    # ✅ ساخت خودکار ربات برای فایل آماده
+    threading.Thread(target=auto_build_ready_bot, args=(file_id, user_id, call.message.chat.id)).start()
+
+# ✅ تابع ساخت خودکار ربات برای فایل‌های آماده
+def auto_build_ready_bot(file_id, user_id, chat_id):
+    try:
+        time.sleep(3)  # کمی صبر برای اطمینان از ذخیره در دیتابیس
+        
+        # بررسی مجدد اشتراک
+        if not has_active_subscription(user_id):
+            bot.send_message(chat_id, "❌ اشتراک شما منقضی شده است!")
+            return
+        
+        if not can_create_bot(user_id):
+            bot.send_message(chat_id, "❌ قبلاً با این اشتراک ربات ساخته‌اید!")
+            return
+        
+        bot.send_message(chat_id, "🔄 **در حال ساخت خودکار ربات شما...**\n⏳ لطفاً شکیبا باشید...")
+        
+        result = build_bot_from_pending(file_id, None, chat_id, auto_build=True)
+        
+        if result['success']:
+            bot.send_message(chat_id, 
+                f"✅ **ربات شما با موفقیت ساخته شد!**\n\n"
+                f"🤖 نام: {result['name']}\n"
+                f"🔗 لینک: https://t.me/{result['username']}\n"
+                f"🆔 آیدی: `{result['bot_id']}`\n\n"
+                f"از منوی مدیریت ربات می‌توانید آن را مدیریت کنید.",
                 parse_mode="Markdown"
             )
-        except:
-            pass
+        else:
+            bot.send_message(chat_id, 
+                f"❌ **خطا در ساخت خودکار ربات!**\n\n"
+                f"⚠️ خطا: {result['error'][:200]}\n\n"
+                f"لطفاً با پشتیبانی تماس بگیرید.",
+                parse_mode="Markdown"
+            )
+            
+        # اطلاع به ادمین
+        for admin in ADMIN_IDS:
+            try:
+                bot.send_message(admin,
+                    f"{'✅' if result['success'] else '❌'} **ساخت خودکار ربات آماده**\n\n"
+                    f"👤 کاربر: {user_id}\n"
+                    f"📦 فایل: {get_ready_file_by_id(file_id)['name'] if file_id else 'نامشخص'}\n"
+                    f"🔄 وضعیت: {'موفق' if result['success'] else 'ناموفق'}\n"
+                    f"📝 پیام: {result.get('error', 'ساخته شد')[:100]}",
+                    parse_mode="Markdown"
+                )
+            except:
+                pass
+                
+    except Exception as e:
+        logger.error(f"auto_build_ready_bot error: {e}")
+        bot.send_message(chat_id, f"❌ خطا در ساخت خودکار: {str(e)[:100]}")
 
 @bot.callback_query_handler(func=lambda call: call.data == "back_to_build")
 def back_to_build(call):
@@ -2284,7 +2335,7 @@ def handle_bot_file(message):
                 return
             subscription_id = sub['id']
         
-        save_pending_file(user_id, subscription_id, file_path, file_name, file_hash)
+        save_pending_file(user_id, subscription_id, file_path, file_name, file_hash, is_ready=0)
         bot.reply_to(message, 
             f"✅ فایل {file_name} دریافت شد!\n\n"
             f"⏳ در لیست انتظار بررسی قرار گرفت.\n"
@@ -2314,7 +2365,6 @@ def manage_bot(message):
             callback_data=f"toggle_bot_{b['id']}"
         ))
     
-    # دکمه‌های مدیریت
     markup.row(
         types.InlineKeyboardButton("🗑️ حذف ربات", callback_data="delete_bot_menu")
     )
@@ -3061,7 +3111,10 @@ def admin_files_list(call):
         return
     
     for f in files:
-        text = f"📥 فایل #{f['id']}\n\n"
+        # مشخص کردن نوع فایل
+        file_type = "📦 آماده" if f.get('is_ready', 0) == 1 else "📤 شخصی"
+        
+        text = f"📥 فایل #{f['id']} [{file_type}]\n\n"
         text += f"👤 کاربر: {f['user_id']}\n"
         text += f"📄 نام: {f['file_name']}\n"
         text += f"📅 زمان: {f['submitted_at'][:10]}"
@@ -3081,6 +3134,31 @@ def build_file(call):
         return
     
     file_id = int(call.data.replace('build_file_', ''))
+    pending = get_pending_file_by_id(file_id)
+    
+    if not pending:
+        bot.answer_callback_query(call.id, "❌ فایل پیدا نشد!", show_alert=True)
+        return
+    
+    # اگر فایل آماده است، ساخت خودکار انجام می‌شود
+    if pending.get('is_ready', 0) == 1:
+        bot.answer_callback_query(call.id, "✅ این فایل آماده است و خودکار ساخته می‌شود!")
+        
+        # ساخت خودکار
+        threading.Thread(target=auto_build_ready_bot, args=(file_id, pending['user_id'], call.message.chat.id)).start()
+        
+        bot.edit_message_text(
+            f"🔄 **ساخت خودکار فایل آماده در حال انجام...**\n\n"
+            f"📦 فایل: {pending['file_name']}\n"
+            f"👤 کاربر: {pending['user_id']}\n\n"
+            f"⏳ لطفاً شکیبا باشید...",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="Markdown"
+        )
+        return
+    
+    # فایل شخصی - اضافه به صف
     msg = bot.send_message(call.message.chat.id, 
         "🔄 در حال افزودن به صف ساخت...\n\n"
         "⏳ لطفاً شکیبا باشید...\n"
@@ -3593,7 +3671,7 @@ if __name__ == "__main__":
     check_and_create_pid()
     
     print("=" * 80)
-    print("🚀 ربات مادر نسخه ۲۱.۰ - فوق پیشرفته با ایزوله‌سازی کامل")
+    print("🚀 ربات مادر نسخه ۲۱.۱ - رفع باگ تایید فایل + ساخت خودکار")
     print("=" * 80)
     print(f"✅ ادمین: {ADMIN_IDS}")
     print(f"✅ قیمت اشتراک: {SUBSCRIPTION_PRICE:,} تومان")
@@ -3605,7 +3683,7 @@ if __name__ == "__main__":
     print(f"✅ روش‌های نصب: ۵ روش مختلف")
     print(f"✅ تلاش مجدد: ۵ بار برای هر کتابخانه")
     print(f"✅ ایزوله‌سازی کامل فایل‌ها با UUID")
-    print(f"✅ پشتیبانی از فایل‌های آماده")
+    print(f"✅ پشتیبانی از فایل‌های آماده با ساخت خودکار")
     print(f"✅ حذف کامل ربات با پاک کردن فایل‌ها")
     print("=" * 80)
     print("🟢 در حال بازیابی ربات‌های قبلی...")
@@ -3615,16 +3693,15 @@ if __name__ == "__main__":
     print("✅ ربات‌ها بازیابی شدند!")
     print("🟢 ربات مادر در حال اجراست...")
     print("=" * 80)
-    print("📌 ویژگی‌های نسخه ۲۱.۰:")
+    print("📌 ویژگی‌های نسخه ۲۱.۱:")
+    print("🔹 رفع باگ دکمه تایید فایل")
+    print("🔹 ساخت خودکار فایل‌های آماده بعد از دریافت توکن و ایدی")
     print("🔹 نصب تضمینی کتابخانه‌ها با ۵ روش مختلف")
     print("🔹 ۵ بار تلاش مجدد برای هر کتابخانه")
-    print("🔹 هر کتابخانه‌ای که کاربر وارد کند نصب می‌شود")
-    print("🔹 ایزوله‌سازی کامل فایل‌ها با UUID (بدون تداخل)")
-    print("🔹 پشتیبانی از فایل‌های آماده با جایگزینی توکن و ایدی ادمین")
+    print("🔹 ایزوله‌سازی کامل فایل‌ها با UUID")
     print("🔹 دکمه حذف ربات با پاک کردن کامل فایل‌ها")
     print("🔹 هر اشتراک = ۱ ربات (قابل تمدید با خرید مجدد)")
     print("🔹 قیمت اشتراک: ۳,۰۰۰,۰۰۰ تومان")
-    print("🔹 دکمه ساخت ربات جدید با دو روش (شخصی/آماده)")
     print("=" * 80)
     
     expiry_thread = threading.Thread(target=check_expired, daemon=True)
