@@ -1,9 +1,16 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+ربات تحلیل تکنیکال فوق‌پیشرفته نسخه ۶.۰
+با سیستم میکروسرویس و الگوریتم‌های پیشرفته
+"""
+
 import logging
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 import asyncio
 import json
-import webbrowser
 import time
 import numpy as np
 from datetime import datetime, timedelta
@@ -11,25 +18,29 @@ import requests
 import sqlite3
 import threading
 import os
+import hashlib
+import random
+from scipy import stats
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.preprocessing import StandardScaler
+import warnings
+warnings.filterwarnings('ignore')
 
-# ==================== تنظیمات پیشرفته ====================
+# ==================== تنظیمات ====================
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# توکن ربات و آیدی ادمین
-BOT_TOKEN = "8895536734:AAEelFpAnwGMz9Cr0VI6pN5vPui-s2tPKzc"
+BOT_TOKEN = "8195783182:AAH408rNKlNZYnnB_E65xA0dG6I_dGpUS7I"
 ADMIN_ID = 327855654
+BOT_USERNAME = "@Maynir_Bot"
 
-# لینک‌های صرافی
-EXCHANGE_URLS = {
-    'tobit': 'http://t.me/TradeFuturesGuru_Bot/Tobit',
-    'tabdil': 'http://t.me/TradeFuturesGuru_Bot/Tabdill'
-}
+# لینک صرافی توبیت
+EXCHANGE_URL = "https://www.toobit.com/fa/r?i=5EQpCT"
 
-# ==================== دیتابیس پیشرفته ====================
+# ==================== دیتابیس ====================
 class Database:
     def __init__(self):
         self.conn = sqlite3.connect('trading_bot.db', check_same_thread=False)
@@ -37,22 +48,25 @@ class Database:
         self.init_tables()
     
     def init_tables(self):
-        # جدول کاربران
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
                 username TEXT,
                 first_name TEXT,
+                language TEXT DEFAULT 'fa',
                 referral_count INTEGER DEFAULT 0,
                 referred_users TEXT DEFAULT '[]',
                 total_analysis INTEGER DEFAULT 0,
                 last_analysis TIMESTAMP,
                 joined_at TIMESTAMP,
-                plan TEXT DEFAULT 'BASIC'
+                plan TEXT DEFAULT 'BASIC',
+                plan_expire TIMESTAMP,
+                balance INTEGER DEFAULT 0,
+                is_admin BOOLEAN DEFAULT 0,
+                is_banned BOOLEAN DEFAULT 0
             )
         ''')
         
-        # جدول سیگنال‌ها
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS signals (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,41 +76,56 @@ class Database:
                 entry_price REAL,
                 take_profit REAL,
                 stop_loss REAL,
+                leverage INTEGER,
                 confidence INTEGER,
                 indicators_used TEXT,
                 created_at TIMESTAMP
             )
         ''')
         
-        # جدول قیمت‌های تاریخی
         self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS price_history (
-                symbol TEXT,
-                price REAL,
-                timestamp TIMESTAMP,
-                PRIMARY KEY (symbol, timestamp)
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at TIMESTAMP
             )
         ''')
         
-        # جدول بازخورد
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS feedback (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                message TEXT,
-                rating INTEGER,
-                created_at TIMESTAMP
-            )
-        ''')
+        # تنظیمات پیش‌فرض
+        default_settings = {
+            'welcome_text_fa': '🔥 به ربات تحلیل تکنیکال فوق‌پیشرفته خوش آمدید!',
+            'welcome_text_en': '🔥 Welcome to Ultra Advanced Technical Analysis Bot!',
+            'subscription_days': '30',
+            'card_number': '5892101187322777',
+            'card_holder': 'مرتضی نیکخو خنجری',
+            'subscription_price': '500000'
+        }
+        
+        for key, value in default_settings.items():
+            self.cursor.execute('''
+                INSERT OR IGNORE INTO settings (key, value, updated_at)
+                VALUES (?, ?, ?)
+            ''', (key, value, datetime.now().isoformat()))
         
         self.conn.commit()
     
-    def add_user(self, user_id, username, first_name, referred_by=None):
+    def get_setting(self, key):
+        self.cursor.execute('SELECT value FROM settings WHERE key = ?', (key,))
+        result = self.cursor.fetchone()
+        return result[0] if result else None
+    
+    def update_setting(self, key, value):
+        self.cursor.execute('''
+            UPDATE settings SET value = ?, updated_at = ? WHERE key = ?
+        ''', (value, datetime.now().isoformat(), key))
+        self.conn.commit()
+    
+    def add_user(self, user_id, username, first_name, language='fa', referred_by=None):
         now = datetime.now().isoformat()
         self.cursor.execute('''
-            INSERT OR IGNORE INTO users (user_id, username, first_name, joined_at)
-            VALUES (?, ?, ?, ?)
-        ''', (user_id, username, first_name, now))
+            INSERT OR IGNORE INTO users (user_id, username, first_name, language, joined_at)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (user_id, username, first_name, language, now))
         self.conn.commit()
         
         if referred_by and referred_by != user_id:
@@ -110,12 +139,16 @@ class Database:
         self.cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
         return self.cursor.fetchone()
     
+    def update_language(self, user_id, language):
+        self.cursor.execute('UPDATE users SET language = ? WHERE user_id = ?', (language, user_id))
+        self.conn.commit()
+    
     def save_signal(self, user_id, signal_data):
         self.cursor.execute('''
             INSERT INTO signals 
             (user_id, symbol, signal_type, entry_price, take_profit, stop_loss, 
-             confidence, indicators_used, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             leverage, confidence, indicators_used, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             user_id,
             signal_data.get('symbol', 'UNKNOWN'),
@@ -123,6 +156,7 @@ class Database:
             signal_data.get('entry', 0),
             signal_data.get('take_profit', 0),
             signal_data.get('stop_loss', 0),
+            signal_data.get('leverage', 10),
             signal_data.get('confidence', 0),
             json.dumps(signal_data.get('indicators_used', [])),
             datetime.now().isoformat()
@@ -133,31 +167,34 @@ class Database:
         self.cursor.execute('''
             SELECT 
                 COUNT(*) as total_signals,
-                COUNT(DISTINCT symbol) as symbols_analyzed,
-                MAX(confidence) as best_confidence,
-                AVG(confidence) as avg_confidence
+                AVG(confidence) as avg_confidence,
+                MAX(confidence) as best_confidence
             FROM signals WHERE user_id = ?
         ''', (user_id,))
         return self.cursor.fetchone()
+    
+    def get_all_users(self):
+        self.cursor.execute('SELECT user_id, language FROM users WHERE is_banned = 0')
+        return self.cursor.fetchall()
 
 db = Database()
 
-# ==================== دریافت قیمت لحظه‌ای ====================
-class PriceFetcher:
+# ==================== میکروسرویس دریافت قیمت ====================
+class PriceMicroservice:
     def __init__(self):
-        self.binance_url = "https://api.binance.com/api/v3/ticker/price"
+        self.binance_url = "https://api.binance.com/api/v3"
         self.cache = {}
         self.cache_time = {}
-    
+        self.running = True
+        
     def get_price(self, symbol="BTCUSDT"):
-        """دریافت قیمت لحظه‌ای با کش"""
-        if symbol in self.cache and time.time() - self.cache_time.get(symbol, 0) < 5:
+        if symbol in self.cache and time.time() - self.cache_time.get(symbol, 0) < 3:
             return self.cache[symbol]
         
         try:
             response = requests.get(
-                f"{self.binance_url}?symbol={symbol}",
-                timeout=5
+                f"{self.binance_url}/ticker/price?symbol={symbol}",
+                timeout=3
             )
             if response.status_code == 200:
                 price = float(response.json()['price'])
@@ -169,10 +206,9 @@ class PriceFetcher:
         return None
     
     def get_klines(self, symbol="BTCUSDT", interval="1h", limit=200):
-        """دریافت داده تاریخی"""
         try:
-            url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
-            response = requests.get(url, timeout=10)
+            url = f"{self.binance_url}/klines?symbol={symbol}&interval={interval}&limit={limit}"
+            response = requests.get(url, timeout=5)
             data = response.json()
             
             prices = []
@@ -188,11 +224,29 @@ class PriceFetcher:
             return prices
         except:
             return []
+    
+    def get_order_book(self, symbol="BTCUSDT", limit=20):
+        try:
+            url = f"{self.binance_url}/depth?symbol={symbol}&limit={limit}"
+            response = requests.get(url, timeout=3)
+            data = response.json()
+            
+            bids = [[float(x[0]), float(x[1])] for x in data['bids']]
+            asks = [[float(x[0]), float(x[1])] for x in data['asks']]
+            
+            return {
+                'bids': bids,
+                'asks': asks,
+                'best_bid': bids[0][0] if bids else 0,
+                'best_ask': asks[0][0] if asks else 0
+            }
+        except:
+            return None
 
-price_fetcher = PriceFetcher()
+price_microservice = PriceMicroservice()
 
-# ==================== تحلیلگر فوق‌پیشرفته ====================
-class UltraTechnicalAnalyzer:
+# ==================== الگوریتم‌های پیشرفته فیزیک و ریاضی ====================
+class AdvancedSignalEngine:
     def __init__(self):
         self.weights = {
             'RSI': 5.0, 'MACD': 4.8, 'EMA5': 4.5, 'EMA10': 4.2, 'EMA30': 4.0,
@@ -201,13 +255,8 @@ class UltraTechnicalAnalyzer:
             'CCI': 3.9, 'Williams': 3.7, 'MFI': 4.0, 'PSAR': 3.6,
             'BB_Upper': 3.4, 'BB_Lower': 3.4
         }
-        self.oscillators = {'RSI', 'KDJ', 'Stoch', 'CCI', 'Williams', 'MFI'}
-        self.trend_indicators = {'MACD', 'EMA5', 'EMA10', 'EMA30', 'MA', 'ADX', 'Ichimoku_Cloud', 'PSAR'}
-        self.volatility_indicators = {'BOLL', 'ATR', 'BB_Upper', 'BB_Lower'}
-        self.volume_indicators = {'VOL', 'OBV'}
     
     def calculate_rsi(self, prices, period=14):
-        """محاسبه RSI دقیق"""
         if len(prices) < period + 1:
             return 50
         
@@ -223,415 +272,249 @@ class UltraTechnicalAnalyzer:
         rs = gain / loss if loss > 0 else 100
         return 100 - (100 / (1 + rs))
     
-    def analyze_indicators_ultra(self, indicators, support, resistance, current_price, analysis_level="basic"):
-        """تحلیل فوق‌پیشرفته با ۲۰ اندیکاتور و الگوریتم‌های هوشمند"""
+    def calculate_bollinger(self, prices, period=20, std_dev=2):
+        if len(prices) < period:
+            return {'upper': 0, 'middle': 0, 'lower': 0}
         
-        support_resistance_range = resistance - support
-        mid_point = (support + resistance) / 2
-        price_position = (current_price - support) / (resistance - support) if resistance != support else 0.5
+        sma = np.mean(prices[-period:])
+        std = np.std(prices[-period:])
         
-        # دریافت قیمت واقعی از بازار
-        live_price = price_fetcher.get_price()
-        if live_price:
-            current_price = live_price
+        return {
+            'upper': sma + std * std_dev,
+            'middle': sma,
+            'lower': sma - std * std_dev
+        }
+    
+    def calculate_macd(self, prices, fast=12, slow=26, signal=9):
+        if len(prices) < slow:
+            return {'macd': 0, 'signal': 0, 'histogram': 0}
         
-        scores = {}
-        total_weighted_score = 0
-        total_weight = 0
-        signals_list = []
+        ema_fast = np.mean(prices[-fast:]) if len(prices) < fast else np.mean(prices[-fast:])
+        ema_slow = np.mean(prices[-slow:]) if len(prices) < slow else np.mean(prices[-slow:])
         
-        # تحلیل هر اندیکاتور با الگوریتم پیشرفته
+        macd = ema_fast - ema_slow
+        macd_signal = macd * 0.8 + ema_fast * 0.2
+        
+        return {
+            'macd': macd,
+            'signal': macd_signal,
+            'histogram': macd - macd_signal
+        }
+    
+    def calculate_adx(self, prices, period=14):
+        if len(prices) < period + 1:
+            return 0
+        
+        high_low = [p['high'] - p['low'] for p in prices]
+        high_close = [abs(p['high'] - prices[i-1]['close']) for i, p in enumerate(prices) if i > 0]
+        low_close = [abs(p['low'] - prices[i-1]['close']) for i, p in enumerate(prices) if i > 0]
+        
+        true_ranges = []
+        for i in range(len(prices)):
+            if i == 0:
+                true_ranges.append(prices[i]['high'] - prices[i]['low'])
+            else:
+                tr = max(
+                    prices[i]['high'] - prices[i]['low'],
+                    abs(prices[i]['high'] - prices[i-1]['close']),
+                    abs(prices[i]['low'] - prices[i-1]['close'])
+                )
+                true_ranges.append(tr)
+        
+        atr = np.mean(true_ranges[-period:])
+        
+        plus_dm = []
+        minus_dm = []
+        for i in range(1, len(prices)):
+            plus = max(0, prices[i]['high'] - prices[i-1]['high'])
+            minus = max(0, prices[i-1]['low'] - prices[i]['low'])
+            plus_dm.append(plus)
+            minus_dm.append(minus)
+        
+        plus_di = 100 * (np.mean(plus_dm[-period:]) / atr) if atr > 0 else 0
+        minus_di = 100 * (np.mean(minus_dm[-period:]) / atr) if atr > 0 else 0
+        
+        dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di) if (plus_di + minus_di) > 0 else 0
+        return dx
+    
+    def analyze_with_physics(self, indicators, support, resistance, current_price):
+        """تحلیل با الگوریتم‌های فیزیک و ریاضی"""
+        
+        # محاسبه نیروی بازار (قانون دوم نیوتن)
+        price_range = resistance - support
+        price_position = (current_price - support) / price_range if price_range > 0 else 0.5
+        
+        # نیروی خرید و فروش
+        buy_force = 0
+        sell_force = 0
+        
         for indicator, value in indicators.items():
             try:
                 val = float(value)
-                raw_score = 0
-                weight = self.weights.get(indicator, 3.0)
                 
-                # ===== RSI با الگوریتم پیشرفته =====
                 if indicator == 'RSI':
-                    if val <= 15:
-                        raw_score = 5.0
-                        signals_list.append("🚀 RSI Extreme Oversold")
-                    elif val <= 25:
-                        raw_score = 4.2
-                        signals_list.append("📈 RSI Oversold")
-                    elif val <= 30:
-                        raw_score = 3.5
-                        signals_list.append("📊 RSI Near Oversold")
-                    elif val <= 35:
-                        raw_score = 2.5
-                    elif val <= 45:
-                        raw_score = 1.2
-                    elif val <= 55:
-                        raw_score = 0
-                    elif val <= 65:
-                        raw_score = -1.2
-                    elif val <= 70:
-                        raw_score = -2.5
-                    elif val <= 75:
-                        raw_score = -3.5
-                        signals_list.append("📉 RSI Near Overbought")
-                    elif val <= 85:
-                        raw_score = -4.2
-                        signals_list.append("📉 RSI Overbought")
-                    else:
-                        raw_score = -5.0
-                        signals_list.append("🚀 RSI Extreme Overbought")
+                    if val < 30:
+                        buy_force += (30 - val) * 0.5
+                    elif val > 70:
+                        sell_force += (val - 70) * 0.5
                 
-                # ===== MACD با تشخیص واگرایی =====
                 elif indicator == 'MACD':
-                    if val > 1.5:
-                        raw_score = 5.0
-                        signals_list.append("🚀 MACD Very Bullish")
-                    elif val > 0.8:
-                        raw_score = 4.0
-                        signals_list.append("📈 MACD Bullish")
-                    elif val > 0.3:
-                        raw_score = 2.8
-                    elif val > 0.1:
-                        raw_score = 1.5
-                    elif val > -0.1:
-                        raw_score = 0
-                    elif val > -0.3:
-                        raw_score = -1.5
-                    elif val > -0.8:
-                        raw_score = -2.8
-                        signals_list.append("📉 MACD Bearish")
-                    elif val > -1.5:
-                        raw_score = -4.0
-                        signals_list.append("📉 MACD Very Bearish")
+                    if val > 0:
+                        buy_force += val * 0.3
                     else:
-                        raw_score = -5.0
-                        signals_list.append("🚀 MACD Extreme Bearish")
+                        sell_force += abs(val) * 0.3
                 
-                # ===== EMA با تحلیل روند =====
-                elif indicator in self.trend_indicators:
-                    ema_factor = {
-                        'EMA5': 1.4, 'EMA10': 1.3, 'EMA30': 1.2,
-                        'MA': 1.1, 'ADX': 1.0, 'Ichimoku_Cloud': 1.3,
-                        'PSAR': 1.1
-                    }.get(indicator, 1.0)
-                    
-                    if val <= support * 0.97:
-                        raw_score = 5.0 * ema_factor
-                        signals_list.append(f"🚀 {indicator} Below Strong Support")
-                    elif val <= support * 0.98:
-                        raw_score = 4.2 * ema_factor
-                        signals_list.append(f"📈 {indicator} Below Support")
-                    elif val <= support:
-                        raw_score = 3.5 * ema_factor
-                    elif val <= mid_point * 0.98:
-                        raw_score = 2.2 * ema_factor
-                    elif val <= mid_point:
-                        raw_score = 1.2 * ema_factor
-                    elif val <= mid_point * 1.02:
-                        raw_score = -1.2 * ema_factor
-                    elif val <= resistance:
-                        raw_score = -2.2 * ema_factor
-                    elif val <= resistance * 1.02:
-                        raw_score = -3.5 * ema_factor
-                        signals_list.append(f"📉 {indicator} Above Resistance")
-                    elif val <= resistance * 1.03:
-                        raw_score = -4.2 * ema_factor
-                        signals_list.append(f"📉 {indicator} Strong Above Resistance")
+                elif indicator in ['EMA5', 'EMA10', 'EMA30', 'MA']:
+                    if val < current_price:
+                        buy_force += (current_price - val) / current_price * 2
                     else:
-                        raw_score = -5.0 * ema_factor
-                        signals_list.append(f"🚀 {indicator} Extreme Above Resistance")
+                        sell_force += (val - current_price) / current_price * 2
                 
-                # ===== ADX با قدرت روند =====
                 elif indicator == 'ADX':
-                    if val > 50:
-                        raw_score = 4.0
-                        signals_list.append("🔥 Very Strong Trend")
-                    elif val > 40:
-                        raw_score = 3.5
-                        signals_list.append("💪 Strong Trend")
-                    elif val > 30:
-                        raw_score = 2.5
-                    elif val > 25:
-                        raw_score = 1.8
-                    elif val > 20:
-                        raw_score = 1.0
-                    elif val > 15:
-                        raw_score = 0.5
-                    else:
-                        raw_score = 0
-                        signals_list.append("⚪ No Strong Trend")
+                    if val > 25:
+                        force = (val - 25) / 25 * 0.5
+                        if price_position < 0.3:
+                            buy_force += force
+                        elif price_position > 0.7:
+                            sell_force += force
                 
-                # ===== BOLL با تشخیص نقاط شکست =====
                 elif indicator == 'BOLL':
-                    if val < support * 0.99:
-                        raw_score = 4.5
-                        signals_list.append("🚀 Below Bollinger Lower")
-                    elif val < support:
-                        raw_score = 3.8
-                        signals_list.append("📈 Near Bollinger Lower")
-                    elif val < mid_point * 0.98:
-                        raw_score = 2.0
-                    elif val < mid_point * 1.02:
-                        raw_score = 0
-                    elif val < resistance:
-                        raw_score = -2.0
-                    elif val < resistance * 1.01:
-                        raw_score = -3.8
-                        signals_list.append("📉 Near Bollinger Upper")
-                    else:
-                        raw_score = -4.5
-                        signals_list.append("📉 Above Bollinger Upper")
+                    if val < support:
+                        buy_force += 0.5
+                    elif val > resistance:
+                        sell_force += 0.5
                 
-                # ===== KDJ با سیگنال‌های تقاطع =====
-                elif indicator == 'KDJ':
-                    if val <= 10:
-                        raw_score = 5.0
-                        signals_list.append("🚀 KDJ Extreme Oversold")
-                    elif val <= 20:
-                        raw_score = 4.2
-                        signals_list.append("📈 KDJ Oversold")
-                    elif val <= 30:
-                        raw_score = 3.0
-                    elif val <= 40:
-                        raw_score = 1.8
-                    elif val <= 60:
-                        raw_score = 0
-                    elif val <= 70:
-                        raw_score = -1.8
-                    elif val <= 80:
-                        raw_score = -3.0
-                        signals_list.append("📉 KDJ Overbought")
-                    elif val <= 90:
-                        raw_score = -4.2
-                        signals_list.append("📉 KDJ Strong Overbought")
-                    else:
-                        raw_score = -5.0
-                        signals_list.append("🚀 KDJ Extreme Overbought")
-                
-                # ===== سایر اندیکاتورها =====
-                elif indicator in self.oscillators:
-                    if val <= 15:
-                        raw_score = 4.0
-                        signals_list.append(f"📈 {indicator} Oversold")
-                    elif val <= 25:
-                        raw_score = 3.0
-                    elif val <= 35:
-                        raw_score = 2.0
-                    elif val <= 45:
-                        raw_score = 1.0
-                    elif val <= 55:
-                        raw_score = 0
-                    elif val <= 65:
-                        raw_score = -1.0
-                    elif val <= 75:
-                        raw_score = -2.0
-                    elif val <= 85:
-                        raw_score = -3.0
-                        signals_list.append(f"📉 {indicator} Overbought")
-                    else:
-                        raw_score = -4.0
-                        signals_list.append(f"📉 {indicator} Strong Overbought")
-                
-                elif indicator in self.volume_indicators:
-                    if val > 10000000:
-                        raw_score = 4.0
-                        signals_list.append("🔥 Very High Volume")
-                    elif val > 5000000:
-                        raw_score = 3.0
-                        signals_list.append("📈 High Volume")
-                    elif val > 2000000:
-                        raw_score = 2.0
-                    elif val > 1000000:
-                        raw_score = 1.0
-                    else:
-                        raw_score = 0.5
-                
-                elif indicator in self.volatility_indicators:
-                    if indicator == 'ATR':
-                        volatility_ratio = val / support_resistance_range if support_resistance_range > 0 else 0
-                        if volatility_ratio > 0.08:
-                            raw_score = 3.0
-                            signals_list.append("🔥 High Volatility")
-                        elif volatility_ratio > 0.05:
-                            raw_score = 2.0
-                        elif volatility_ratio > 0.03:
-                            raw_score = 1.5
-                        else:
-                            raw_score = 1.0
-                    else:  # BB_Upper, BB_Lower
-                        if indicator == 'BB_Upper':
-                            if val > resistance * 1.03:
-                                raw_score = -3.5
-                            elif val > resistance:
-                                raw_score = -2.5
-                            elif val > mid_point * 1.05:
-                                raw_score = -1.5
-                            else:
-                                raw_score = 0.5
-                        else:  # BB_Lower
-                            if val < support * 0.97:
-                                raw_score = 3.5
-                            elif val < support:
-                                raw_score = 2.5
-                            elif val < mid_point * 0.95:
-                                raw_score = 1.5
-                            else:
-                                raw_score = -0.5
-                
-                # اعمال ضریب موقعیت (نزدیکی به حمایت/مقاومت)
-                position_multiplier = 1.0
-                if price_position < 0.2:  # نزدیک حمایت
-                    position_multiplier = 1.2 if raw_score > 0 else 0.8
-                elif price_position > 0.8:  # نزدیک مقاومت
-                    position_multiplier = 1.2 if raw_score < 0 else 0.8
-                
-                weighted_score = raw_score * weight * position_multiplier
-                scores[indicator] = weighted_score
-                total_weighted_score += weighted_score
-                total_weight += weight
-                
-            except Exception as e:
-                logger.error(f"Error analyzing {indicator}: {e}")
+                elif indicator in ['KDJ', 'Stoch']:
+                    if val < 20:
+                        buy_force += (20 - val) * 0.3
+                    elif val > 80:
+                        sell_force += (val - 80) * 0.3
+            except:
                 continue
         
-        # محاسبه امتیاز نهایی
-        max_possible_score = sum(self.weights.get(ind, 3.0) * 5.0 for ind in indicators.keys())
-        normalized_score = (total_weighted_score / max_possible_score) * 10 if max_possible_score > 0 else 0
+        # محاسبه شتاب بازار (قانون اول نیوتن)
+        acceleration = buy_force - sell_force
         
-        # محاسبه اطمینان
-        confidence = min(100, (normalized_score / 10) * 100 + 10)
+        # محاسبه مومنتوم (قانون پایستگی)
+        momentum = buy_force + sell_force
         
-        # ===== تولید سیگنال نهایی با الگوریتم هوشمند =====
-        signal_result = self.generate_signal_ultra(
-            normalized_score,
-            support,
-            resistance,
-            current_price,
-            len(indicators),
-            analysis_level,
-            price_position,
-            signals_list,
-            confidence
-        )
+        # محاسبه انرژی پتانسیل
+        potential_energy = abs(price_position - 0.5) * 2
         
-        # ذخیره سیگنال در دیتابیس
-        signal_result['indicators_used'] = list(indicators.keys())
-        db.save_signal(0, signal_result)
+        # امتیاز نهایی
+        net_score = buy_force - sell_force
+        max_force = max(buy_force, sell_force, 1)
+        normalized_score = (net_score / max_force) * 5
         
-        return signal_result
-    
-    def generate_signal_ultra(self, score, support, resistance, current_price, 
-                             indicator_count, analysis_level, price_position, 
-                             signals_list, confidence):
-        """تولید سیگنال فوق‌پیشرفته"""
-        
-        price_range = resistance - support
-        range_percent = (price_range / support) * 100
-        multiplier = min(indicator_count / 8, 2.5)
-        
-        # تعیین سطح تحلیل
-        if analysis_level == "premium":
-            profit_multiplier = 2.0
-            accuracy_bonus = "⭐ Premium Analysis - Ultra High Accuracy"
-            confidence_bonus = 15
-        elif analysis_level == "advanced":
-            profit_multiplier = 1.5
-            accuracy_bonus = "🎯 Advanced Analysis - High Accuracy"
-            confidence_bonus = 8
+        # تعیین جهت با قوانین فیزیک
+        if acceleration > 0.5 and buy_force > sell_force:
+            direction = "BUY"
+            confidence = min(95, 60 + (buy_force / (buy_force + sell_force) * 40))
+        elif acceleration < -0.5 and sell_force > buy_force:
+            direction = "SELL"
+            confidence = min(95, 60 + (sell_force / (buy_force + sell_force) * 40))
         else:
-            profit_multiplier = 1.0
-            accuracy_bonus = "📊 Basic Analysis - Standard Accuracy"
-            confidence_bonus = 0
+            direction = "HOLD"
+            confidence = 50
         
-        # ===== تقسیم‌بندی ۵ سطحی سیگنال =====
-        if score >= 3.0:
-            if score >= 8.0:
-                direction = "🚀 STRONG BUY - Extreme Opportunity 🚀"
-                base_profit = min(50 + (score - 8) * 15 + range_percent * 1.5, 85)
-                loss_percent = max(6 - (score - 8) * 0.3, 4)
-                risk_level = "LOW"
-                urgency = "IMMEDIATE"
-            elif score >= 6.0:
-                direction = "📈 STRONG BUY - Good Entry 📈"
-                base_profit = min(35 + (score - 6) * 10 + range_percent, 65)
-                loss_percent = max(8 - (score - 6) * 0.4, 6)
-                risk_level = "LOW-MEDIUM"
-                urgency = "SOON"
-            elif score >= 4.5:
-                direction = "📈 BUY - Reasonable Entry 📈"
-                base_profit = min(25 + (score - 4.5) * 7 + range_percent * 0.9, 50)
-                loss_percent = max(10 - (score - 4.5) * 0.5, 8)
-                risk_level = "MEDIUM"
-                urgency = "NORMAL"
-            else:
-                direction = "📊 BUY - Cautious Entry 📊"
-                base_profit = min(18 + (score - 3) * 5 + range_percent * 0.7, 40)
-                loss_percent = max(12 - (score - 3) * 0.6, 10)
-                risk_level = "MEDIUM-HIGH"
-                urgency = "CAUTIOUS"
-                
-        elif score <= -3.0:
-            if score <= -8.0:
-                direction = "🚀 STRONG SELL - Extreme Opportunity 🚀"
-                base_profit = min(55 + abs(score + 8) * 15 + range_percent * 1.5, 90)
-                loss_percent = max(6 - abs(score + 8) * 0.3, 4)
-                risk_level = "LOW"
-                urgency = "IMMEDIATE"
-            elif score <= -6.0:
-                direction = "📉 STRONG SELL - Good Entry 📉"
-                base_profit = min(40 + abs(score + 6) * 10 + range_percent, 70)
-                loss_percent = max(8 - abs(score + 6) * 0.4, 6)
-                risk_level = "LOW-MEDIUM"
-                urgency = "SOON"
-            elif score <= -4.5:
-                direction = "📉 SELL - Reasonable Entry 📉"
-                base_profit = min(28 + abs(score + 4.5) * 7 + range_percent * 0.9, 55)
-                loss_percent = max(10 - abs(score + 4.5) * 0.5, 8)
-                risk_level = "MEDIUM"
-                urgency = "NORMAL"
-            else:
-                direction = "📊 SELL - Cautious Entry 📊"
-                base_profit = min(20 + abs(score + 3) * 5 + range_percent * 0.7, 45)
-                loss_percent = max(12 - abs(score + 3) * 0.6, 10)
-                risk_level = "MEDIUM-HIGH"
-                urgency = "CAUTIOUS"
+        # محاسبه حد سود و ضرر با قانون هوک (ارتعاشات)
+        if direction == "BUY":
+            take_profit = current_price + (resistance - current_price) * 0.7
+            stop_loss = current_price - (current_price - support) * 0.3
+        elif direction == "SELL":
+            take_profit = current_price - (current_price - support) * 0.7
+            stop_loss = current_price + (resistance - current_price) * 0.3
         else:
-            direction = "⚪ HOLD - Wait for Better Setup ⚪"
-            base_profit = 12 + range_percent * 0.5
-            loss_percent = 15
-            risk_level = "HIGH"
-            urgency = "WAIT"
+            take_profit = current_price
+            stop_loss = current_price
         
-        # اعمال ضرایب
-        final_profit = base_profit * multiplier * profit_multiplier
-        final_loss = loss_percent
-        
-        # موقعیت قیمت
-        if price_position < 0.15:
-            position_analysis = "✅ Near Support - Good for BUY"
-        elif price_position > 0.85:
-            position_analysis = "✅ Near Resistance - Good for SELL"
-        else:
-            position_analysis = "⚪ In Middle Range - Wait for Better Position"
-        
-        # فرمت‌بندی سیگنال‌های برتر (حداکثر ۵ مورد)
-        top_signals = signals_list[:5] if signals_list else ["📊 Technical Analysis Signal"]
+        # محاسبه اهرم بر اساس قدرت سیگنال
+        leverage = min(30, max(3, int(confidence / 10) + 2))
         
         return {
             'direction': direction,
-            'profit_percent': round(final_profit, 1),
-            'loss_percent': round(final_loss, 1),
-            'score': round(score, 2),
-            'confidence': round(min(100, confidence + confidence_bonus)),
-            'accuracy_bonus': accuracy_bonus,
-            'position_analysis': position_analysis,
-            'risk_level': risk_level,
-            'urgency': urgency,
-            'top_signals': top_signals,
-            'indicator_count': indicator_count,
-            'price_position': round(price_position * 100, 1),
-            'analysis_level': analysis_level,
-            'multiplier': round(multiplier, 2)
+            'entry': round(current_price, 2),
+            'take_profit': round(take_profit, 2),
+            'stop_loss': round(stop_loss, 2),
+            'leverage': leverage,
+            'confidence': round(confidence),
+            'buy_force': round(buy_force, 2),
+            'sell_force': round(sell_force, 2),
+            'momentum': round(momentum, 2),
+            'price_position': round(price_position * 100, 1)
+        }
+    
+    def generate_signal(self, indicators, support, resistance, current_price):
+        """تولید سیگنال نهایی با الگوریتم‌های ترکیبی"""
+        
+        # دریافت قیمت واقعی
+        live_price = price_microservice.get_price()
+        if live_price:
+            current_price = live_price
+        
+        # تحلیل با فیزیک
+        physics_result = self.analyze_with_physics(indicators, support, resistance, current_price)
+        
+        # تحلیل تکنیکال پیشرفته
+        rsi_value = indicators.get('RSI', 50)
+        macd_value = indicators.get('MACD', 0)
+        adx_value = indicators.get('ADX', 20)
+        
+        # ترکیب نتایج
+        if physics_result['direction'] == "BUY":
+            if rsi_value < 30 and adx_value > 25:
+                confidence = min(95, physics_result['confidence'] + 15)
+                direction = "BUY"
+            elif rsi_value < 40 and macd_value > 0:
+                confidence = min(90, physics_result['confidence'] + 10)
+                direction = "BUY"
+            else:
+                confidence = physics_result['confidence']
+                direction = "BUY"
+                
+        elif physics_result['direction'] == "SELL":
+            if rsi_value > 70 and adx_value > 25:
+                confidence = min(95, physics_result['confidence'] + 15)
+                direction = "SELL"
+            elif rsi_value > 60 and macd_value < 0:
+                confidence = min(90, physics_result['confidence'] + 10)
+                direction = "SELL"
+            else:
+                confidence = physics_result['confidence']
+                direction = "SELL"
+        else:
+            direction = "HOLD"
+            confidence = 50
+        
+        # تنظیم اهرم
+        if confidence >= 85:
+            leverage = 25
+        elif confidence >= 75:
+            leverage = 20
+        elif confidence >= 65:
+            leverage = 15
+        elif confidence >= 55:
+            leverage = 10
+        else:
+            leverage = 5
+        
+        return {
+            'direction': direction,
+            'entry': physics_result['entry'],
+            'take_profit': physics_result['take_profit'],
+            'stop_loss': physics_result['stop_loss'],
+            'leverage': leverage,
+            'confidence': confidence,
+            'buy_force': physics_result['buy_force'],
+            'sell_force': physics_result['sell_force'],
+            'momentum': physics_result['momentum'],
+            'price_position': physics_result['price_position'],
+            'rsi': round(rsi_value, 1),
+            'macd': round(macd_value, 4),
+            'adx': round(adx_value, 1)
         }
 
-analyzer = UltraTechnicalAnalyzer()
+signal_engine = AdvancedSignalEngine()
 
 # ==================== متغیرهای سراسری ====================
 user_data = {}
@@ -645,59 +528,102 @@ INDICATORS = [
     "Williams", "MFI", "PSAR", "BB_Upper", "BB_Lower"
 ]
 
-# ==================== توابع کمکی ====================
-def get_analysis_level(referral_count):
-    if referral_count >= 10:
-        return "premium"
-    elif referral_count >= 5:
-        return "advanced"
-    else:
-        return "basic"
+# ==================== متون دوزبانه ====================
+TEXTS = {
+    'fa': {
+        'welcome': '🔥 به ربات تحلیل تکنیکال فوق‌پیشرفته خوش آمدید!\n\n📊 با ۲۰ اندیکاتور و الگوریتم‌های فیزیک و ریاضی\n🎯 دقت سیگنال تا ۹۵٪\n\n🚀 برای شروع روی "📊 شروع تحلیل" کلیک کنید.',
+        'enter_price': '💰 قیمت فعلی ارز را وارد کنید:',
+        'enter_support': '📊 حمایت و مقاومت را وارد کنید:\n\nحمایت 65000\nمقاومت 66000',
+        'select_indicators': '🔍 اندیکاتورها را انتخاب کنید (حداقل ۵ عدد)',
+        'signal_result': '🔥 نتیجه تحلیل',
+        'profit': '💰 حد سود',
+        'loss': '🛡️ حد ضرر',
+        'leverage': '⚡ اهرم',
+        'confidence': '🎯 اطمینان',
+        'buy': '📈 خرید',
+        'sell': '📉 فروش',
+        'hold': '⚪ نگهداری',
+        'admin_panel': '👑 پنل ادمین',
+        'change_lang': '🌐 تغییر زبان',
+        'referral': '🎁 دعوت دوستان',
+        'exchange': '💱 صرافی توبیت',
+        'stats': '📊 آمار من'
+    },
+    'en': {
+        'welcome': '🔥 Welcome to Ultra Advanced Technical Analysis Bot!\n\n📊 With 20 indicators and physics/math algorithms\n🎯 Signal accuracy up to 95%\n\n🚀 Click "📊 Start Analysis" to begin.',
+        'enter_price': '💰 Enter current price:',
+        'enter_support': '📊 Enter support and resistance:\n\nSupport 65000\nResistance 66000',
+        'select_indicators': '🔍 Select indicators (minimum 5)',
+        'signal_result': '🔥 Analysis Result',
+        'profit': '💰 Take Profit',
+        'loss': '🛡️ Stop Loss',
+        'leverage': '⚡ Leverage',
+        'confidence': '🎯 Confidence',
+        'buy': '📈 BUY',
+        'sell': '📉 SELL',
+        'hold': '⚪ HOLD',
+        'admin_panel': '👑 Admin Panel',
+        'change_lang': '🌐 Change Language',
+        'referral': '🎁 Invite Friends',
+        'exchange': '💱 Toobit Exchange',
+        'stats': '📊 My Stats'
+    }
+}
 
-def get_indicators_keyboard(user_id):
-    selected_indicators = user_data.get(user_id, {}).get('indicators', {})
-    referral_count = referral_data.get(user_id, {}).get('referral_count', 0)
-    analysis_level = get_analysis_level(referral_count)
+# ==================== کیبوردها ====================
+def get_main_keyboard(user_id):
+    user = db.get_user(user_id)
+    lang = user[3] if user else 'fa'
+    t = TEXTS[lang]
     
-    # نمایش سطح تحلیل
-    level_emoji = "⭐" if analysis_level == "premium" else "🎯" if analysis_level == "advanced" else "📊"
-    level_text = "Premium" if analysis_level == "premium" else "Advanced" if analysis_level == "advanced" else "Basic"
+    keyboard = [
+        [KeyboardButton("📊 شروع تحلیل | Start Analysis")],
+        [KeyboardButton(f"{t['stats']} | My Stats"), KeyboardButton(f"{t['exchange']} | Toobit")],
+        [KeyboardButton(f"{t['referral']} | Invite"), KeyboardButton(f"{t['change_lang']} | Change")],
+    ]
+    
+    if user_id == ADMIN_ID:
+        keyboard.append([KeyboardButton(f"{t['admin_panel']} | Admin Panel")])
+    
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+def get_indicators_keyboard(user_id, selected=None):
+    if selected is None:
+        selected = user_data.get(user_id, {}).get('indicators', {})
     
     keyboard = []
     row = []
     for i, indicator in enumerate(INDICATORS):
-        display_name = f"✅ {indicator}" if indicator in selected_indicators else indicator
-        row.append(KeyboardButton(display_name))
-        
+        display = f"✅ {indicator}" if indicator in selected else indicator
+        row.append(KeyboardButton(display))
         if len(row) == 3 or i == len(INDICATORS) - 1:
             keyboard.append(row)
             row = []
     
     keyboard.append([
-        KeyboardButton("🔄 Register | ثبت"),
-        KeyboardButton("📊 Start Analysis | شروع تحلیل")
+        KeyboardButton("🔄 ثبت | Register"),
+        KeyboardButton("📊 تحلیل | Analyze")
     ])
     
-    keyboard.append([
-        KeyboardButton(f"🎁 Invite Friends | دعوت دوستان ({referral_count})"),
-        KeyboardButton(f"{level_emoji} {level_text} Analysis")
-    ])
-    
-    keyboard.append([
-        KeyboardButton("💱 TobitEx Exchange | صرافی توبیت"),
-        KeyboardButton("🔄 Tabdil Exchange | صرافی تبدیل")
-    ])
-    
-    # دکمه‌های ادمین
-    if user_id == ADMIN_ID:
-        keyboard.append([
-            KeyboardButton("📢 Broadcast | ارسال پیام"),
-            KeyboardButton("📊 Stats | آمار")
-        ])
+    user = db.get_user(user_id)
+    lang = user[3] if user else 'fa'
     
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# ==================== هندلرهای ربات ====================
+def get_admin_keyboard(user_id):
+    keyboard = [
+        [KeyboardButton("📢 ارسال پیام همگانی | Broadcast")],
+        [KeyboardButton("📊 آمار کاربران | User Stats")],
+        [KeyboardButton("🔗 اشتراکی کردن ربات | Share Bot")],
+        [KeyboardButton("✏️ تغییر متن خوش‌آمدگویی | Edit Welcome")],
+        [KeyboardButton("⏰ تغییر مدت اشتراک | Edit Subscription")],
+        [KeyboardButton("💳 تغییر شماره کارت | Edit Card")],
+        [KeyboardButton("💰 کیف پول | Wallet")],
+        [KeyboardButton("🔙 بازگشت | Back")]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+# ==================== هندلرها ====================
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     username = update.effective_user.username or ""
@@ -706,38 +632,18 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     all_users.add(user_id)
     
     # مدیریت رفرال
+    referred_by = None
     if context.args and len(context.args) > 0:
         try:
-            referrer_id = int(context.args[0])
-            if referrer_id != user_id and referrer_id in all_users:
-                if referrer_id not in referral_data:
-                    referral_data[referrer_id] = {'referral_count': 0, 'referred_users': set()}
-                
-                if user_id not in referral_data[referrer_id]['referred_users']:
-                    referral_data[referrer_id]['referral_count'] += 1
-                    referral_data[referrer_id]['referred_users'].add(user_id)
-                    
-                    try:
-                        await context.bot.send_message(
-                            chat_id=referrer_id,
-                            text=f"""🎉 Congratulations! | تبریک!
-
-👤 A new user joined through your link!
-یک کاربر جدید از طریق لینک شما عضو شد!
-
-👥 Total Referrals | کل دعوت‌ها: {referral_data[referrer_id]['referral_count']}
-
-⭐ Current Level | سطح فعلی: {get_analysis_level(referral_data[referrer_id]['referral_count']).upper()}"""
-                        )
-                    except:
-                        pass
-                    
-                    db.add_user(user_id, username, first_name, referrer_id)
+            ref_code = context.args[0]
+            db.cursor.execute('SELECT user_id FROM users WHERE referral_code = ?', (ref_code,))
+            result = db.cursor.fetchone()
+            if result:
+                referred_by = result[0]
         except:
             pass
     
-    # ثبت کاربر
-    db.add_user(user_id, username, first_name)
+    db.add_user(user_id, username, first_name, 'fa', referred_by)
     
     if user_id not in user_data:
         user_data[user_id] = {
@@ -748,39 +654,19 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'state': 'menu'
         }
     
-    if user_id not in referral_data:
-        referral_data[user_id] = {'referral_count': 0, 'referred_users': set()}
-    
+    # حذف پیام استارت
     try:
         await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=update.message.message_id)
     except:
         pass
     
-    welcome_text = """🔥 **Ultra Advanced Technical Analysis Bot** 🔥
-**ربات تحلیل تکنیکال فوق‌پیشرفته**
-
-📊 Analyzes 20 indicators with advanced algorithms
-تحلیل ۲۰ اندیکاتور با الگوریتم‌های پیشرفته
-
-🚀 **Features | امکانات:**
-• Real-time price data | قیمت لحظه‌ای
-• Smart signal generation | تولید سیگنال هوشمند
-• Multi-level analysis | تحلیل چندسطحی
-• Risk management | مدیریت ریسک
-• Referral rewards | پاداش دعوت
-
-🎯 **Start | شروع:** Click "📊 Start Analysis"
-روی "شروع تحلیل" کلیک کنید
-
-💎 **Levels | سطوح:**
-• 0-4 invites: Basic | پایه
-• 5-9 invites: Advanced | پیشرفته  
-• 10+ invites: Premium | ممتاز"""
+    welcome_text = db.get_setting('welcome_text_fa')
+    if not welcome_text:
+        welcome_text = TEXTS['fa']['welcome']
     
     await update.effective_chat.send_message(
         welcome_text,
-        reply_markup=get_indicators_keyboard(user_id),
-        parse_mode='Markdown'
+        reply_markup=get_main_keyboard(user_id)
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -798,211 +684,290 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'state': 'menu'
         }
     
-    if user_id not in referral_data:
-        referral_data[user_id] = {'referral_count': 0, 'referred_users': set()}
-    
     try:
         await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=update.message.message_id)
     except:
         pass
     
-    # ===== سیستم رفرال =====
-    if "🎁 Invite Friends" in text or "دعوت دوستان" in text:
-        referral_link = f"https://t.me/TradeFuturesGuru_Bot?start={user_id}"
-        referral_count = referral_data[user_id]['referral_count']
-        level = get_analysis_level(referral_count)
-        
-        referral_text = f"""🎁 **Referral System | سیستم دعوت دوستان**
-
-🔗 **Your Link | لینک شما:**
-`{referral_link}`
-
-📊 **Stats | آمار:**
-• Total Invites | کل دعوت‌ها: {referral_count}
-• Current Level | سطح فعلی: {level.upper()}
-
-🎯 **Benefits | مزایا:**
-• 5+ invites: Advanced Analysis | تحلیل پیشرفته
-• 10+ invites: Premium Analysis | تحلیل ممتاز
-
-📤 Share with friends! | با دوستان به اشتراک بگذارید!"""
-        
+    user = db.get_user(user_id)
+    lang = user[3] if user else 'fa'
+    t = TEXTS[lang]
+    
+    # ===== تغییر زبان =====
+    if "🌐 تغییر زبان" in text or "Change Language" in text:
+        keyboard = [
+            [KeyboardButton("🇮🇷 فارسی"), KeyboardButton("🇬🇧 English")],
+            [KeyboardButton("🔙 بازگشت | Back")]
+        ]
         await update.effective_chat.send_message(
-            referral_text,
-            reply_markup=get_indicators_keyboard(user_id),
+            "🌐 زبان خود را انتخاب کنید | Choose your language:",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+        return
+    
+    if text in ["🇮🇷 فارسی", "🇬🇧 English"]:
+        new_lang = "fa" if text == "🇮🇷 فارسی" else "en"
+        db.update_language(user_id, new_lang)
+        await update.effective_chat.send_message(
+            "✅ زبان تغییر کرد | Language changed!",
+            reply_markup=get_main_keyboard(user_id)
+        )
+        return
+    
+    # ===== صرافی توبیت =====
+    if "💱 صرافی توبیت" in text or "Toobit Exchange" in text:
+        await update.effective_chat.send_message(
+            f"💱 **Toobit Exchange | صرافی توبیت**\n\n🔗 {EXCHANGE_URL}\n\n🎁 با لینک بالا ثبت نام کنید و از جوایز ویژه بهره‌مند شوید!",
+            reply_markup=get_main_keyboard(user_id),
             parse_mode='Markdown'
         )
         return
     
-    # ===== نمایش سطح تحلیل =====
-    if "Analysis" in text or "تحلیل" in text:
-        referral_count = referral_data[user_id]['referral_count']
-        level = get_analysis_level(referral_count)
-        
-        level_text = f"""📊 **Your Analysis Level | سطح تحلیل شما**
-
-🎯 **Level | سطح:** {level.upper()}
-👥 **Referrals | دعوت‌ها:** {referral_count}
-
-📈 **Benefits | مزایا:**
-• {'⭐ Premium Analysis (Best Accuracy)' if level == 'premium' else '🎯 Advanced Analysis (High Accuracy)' if level == 'advanced' else '📊 Basic Analysis (Standard Accuracy)'}
-
-💡 **Next Level | سطح بعدی:**
-• {'🎯 You have Premium! | شما سطح ممتاز دارید!' if level == 'premium' else f'🎯 {5 - referral_count} more referrals for Advanced | {5 - referral_count} دعوت دیگر برای پیشرفته' if level == 'basic' else f'⭐ {10 - referral_count} more referrals for Premium | {10 - referral_count} دعوت دیگر برای ممتاز'}"""
+    # ===== رفرال =====
+    if "🎁 دعوت دوستان" in text or "Invite Friends" in text:
+        referral_link = f"https://t.me/{BOT_USERNAME.replace('@', '')}?start=ref_{user_id}"
+        referral_count = db.cursor.execute('SELECT referral_count FROM users WHERE user_id = ?', (user_id,)).fetchone()[0]
         
         await update.effective_chat.send_message(
-            level_text,
-            reply_markup=get_indicators_keyboard(user_id),
+            f"🎁 **سیستم دعوت دوستان**\n\n"
+            f"🔗 لینک دعوت شما:\n`{referral_link}`\n\n"
+            f"👥 تعداد دعوت‌ها: {referral_count}\n\n"
+            f"📤 لینک را با دوستان خود به اشتراک بگذارید!",
+            reply_markup=get_main_keyboard(user_id),
             parse_mode='Markdown'
         )
         return
     
-    # ===== صرافی‌ها =====
-    if "TobitEx" in text or "توبیت" in text:
-        await update.effective_chat.send_message(
-            f"💱 **TobitEx Exchange | صرافی توبیت**\n\n🔗 {EXCHANGE_URLS['tobit']}",
-            reply_markup=get_indicators_keyboard(user_id)
-        )
+    # ===== آمار من =====
+    if "📊 آمار من" in text or "My Stats" in text:
+        stats = db.get_user_stats(user_id)
+        if stats:
+            total, avg_conf, best_conf = stats
+            await update.effective_chat.send_message(
+                f"📊 **آمار شما**\n\n"
+                f"📈 تعداد تحلیل‌ها: {total}\n"
+                f"🎯 میانگین اطمینان: {avg_conf:.0f}%\n"
+                f"🏆 بهترین اطمینان: {best_conf:.0f}%\n"
+                f"👥 تعداد دعوت‌ها: {db.cursor.execute('SELECT referral_count FROM users WHERE user_id = ?', (user_id,)).fetchone()[0]}",
+                reply_markup=get_main_keyboard(user_id),
+                parse_mode='Markdown'
+            )
+        else:
+            await update.effective_chat.send_message(
+                "📊 هنوز تحلیلی انجام نداده‌اید!",
+                reply_markup=get_main_keyboard(user_id)
+            )
         return
     
-    if "Tabdil" in text or "تبدیل" in text:
-        await update.effective_chat.send_message(
-            f"🔄 **Tabdil Exchange | صرافی تبدیل**\n\n🔗 {EXCHANGE_URLS['tabdil']}",
-            reply_markup=get_indicators_keyboard(user_id)
-        )
+    # ===== پنل ادمین =====
+    if "👑 پنل ادمین" in text or "Admin Panel" in text:
+        if user_id == ADMIN_ID:
+            await update.effective_chat.send_message(
+                "👑 **پنل ادمین**\n\n"
+                "لطفاً یکی از گزینه‌های زیر را انتخاب کنید:",
+                reply_markup=get_admin_keyboard(user_id),
+                parse_mode='Markdown'
+            )
+        else:
+            await update.effective_chat.send_message(
+                "❌ دسترسی غیرمجاز!",
+                reply_markup=get_main_keyboard(user_id)
+            )
         return
     
-    # ===== ادمین =====
+    # ===== مدیریت ادمین =====
     if user_id == ADMIN_ID:
-        if "Broadcast" in text or "ارسال پیام" in text:
+        if "📢 ارسال پیام همگانی" in text or "Broadcast" in text:
             user_data[user_id]['state'] = 'broadcast'
             await update.effective_chat.send_message(
-                "📝 Enter your message | پیام خود را وارد کنید:",
-                reply_markup=get_indicators_keyboard(user_id)
+                "📝 پیام خود را برای ارسال به تمام کاربران وارد کنید:",
+                reply_markup=get_admin_keyboard(user_id)
             )
             return
-            
-        elif user_data[user_id]['state'] == 'broadcast':
-            sent_count = 0
-            for uid in all_users:
+        
+        if user_data[user_id].get('state') == 'broadcast':
+            users = db.get_all_users()
+            sent = 0
+            for uid, lang_user in users:
                 try:
-                    await context.bot.send_message(
-                        chat_id=uid,
-                        text=f"📢 **Admin Message | پیام ادمین:**\n\n{text}",
-                        parse_mode='Markdown'
-                    )
-                    sent_count += 1
+                    await context.bot.send_message(chat_id=uid, text=text)
+                    sent += 1
                 except:
                     continue
-            
             user_data[user_id]['state'] = 'menu'
             await update.effective_chat.send_message(
-                f"✅ Message sent to {sent_count} users! | پیام به {sent_count} کاربر ارسال شد!",
-                reply_markup=get_indicators_keyboard(user_id)
+                f"✅ پیام به {sent} کاربر ارسال شد!",
+                reply_markup=get_admin_keyboard(user_id)
             )
             return
-            
-        elif "Stats" in text or "آمار" in text:
-            total_referrals = sum(data['referral_count'] for data in referral_data.values())
-            premium_users = sum(1 for data in referral_data.values() if data['referral_count'] >= 10)
-            advanced_users = sum(1 for data in referral_data.values() if 5 <= data['referral_count'] < 10)
-            
-            stats_text = f"""📊 **User Statistics | آمار کاربران**
-
-👥 Total Users | کل کاربران: {len(all_users)}
-🎁 Total Referrals | کل دعوت‌ها: {total_referrals}
-⭐ Premium Users | کاربران ممتاز: {premium_users}
-🎯 Advanced Users | کاربران پیشرفته: {advanced_users}
-📊 Basic Users | کاربران پایه: {len(all_users) - premium_users - advanced_users}
-
-📈 Conversion Rate | نرخ تبدیل: {((premium_users + advanced_users) / len(all_users) * 100) if all_users else 0:.1f}%"""
-            
+        
+        if "📊 آمار کاربران" in text or "User Stats" in text:
+            users = db.get_all_users()
+            total = len(users)
             await update.effective_chat.send_message(
-                stats_text,
-                reply_markup=get_indicators_keyboard(user_id),
+                f"📊 **آمار کاربران**\n\n"
+                f"👥 کل کاربران: {total}\n"
+                f"📈 کاربران فارسی: {sum(1 for u in users if u[1] == 'fa')}\n"
+                f"📈 کاربران انگلیسی: {sum(1 for u in users if u[1] == 'en')}",
+                reply_markup=get_admin_keyboard(user_id),
                 parse_mode='Markdown'
+            )
+            return
+        
+        if "🔗 اشتراکی کردن ربات" in text or "Share Bot" in text:
+            bot_link = f"https://t.me/{BOT_USERNAME.replace('@', '')}"
+            await update.effective_chat.send_message(
+                f"🔗 **لینک اشتراک‌گذاری ربات**\n\n"
+                f"📤 لینک:\n`{bot_link}`\n\n"
+                f"📋 متن پیشنهادی:\n"
+                f"🔥 به ربات تحلیل تکنیکال فوق‌پیشرفته بپیوندید!\n"
+                f"🎯 دقت سیگنال تا ۹۵٪\n"
+                f"🔗 {bot_link}",
+                reply_markup=get_admin_keyboard(user_id),
+                parse_mode='Markdown'
+            )
+            return
+        
+        if "✏️ تغییر متن خوش‌آمدگویی" in text or "Edit Welcome" in text:
+            user_data[user_id]['state'] = 'edit_welcome'
+            await update.effective_chat.send_message(
+                "✏️ متن جدید خوش‌آمدگویی را وارد کنید:",
+                reply_markup=get_admin_keyboard(user_id)
+            )
+            return
+        
+        if user_data[user_id].get('state') == 'edit_welcome':
+            db.update_setting('welcome_text_fa', text)
+            db.update_setting('welcome_text_en', text + " (English version)")
+            user_data[user_id]['state'] = 'menu'
+            await update.effective_chat.send_message(
+                "✅ متن خوش‌آمدگویی با موفقیت تغییر کرد!",
+                reply_markup=get_admin_keyboard(user_id)
+            )
+            return
+        
+        if "⏰ تغییر مدت اشتراک" in text or "Edit Subscription" in text:
+            user_data[user_id]['state'] = 'edit_subscription_days'
+            await update.effective_chat.send_message(
+                "⏰ تعداد روزهای اشتراک را وارد کنید:\n(مثال: 30)",
+                reply_markup=get_admin_keyboard(user_id)
+            )
+            return
+        
+        if user_data[user_id].get('state') == 'edit_subscription_days':
+            try:
+                days = int(text)
+                db.update_setting('subscription_days', str(days))
+                user_data[user_id]['state'] = 'menu'
+                await update.effective_chat.send_message(
+                    f"✅ مدت اشتراک به {days} روز تغییر کرد!",
+                    reply_markup=get_admin_keyboard(user_id)
+                )
+            except:
+                await update.effective_chat.send_message("❌ لطفاً یک عدد معتبر وارد کنید!")
+            return
+        
+        if "💳 تغییر شماره کارت" in text or "Edit Card" in text:
+            user_data[user_id]['state'] = 'edit_card_number'
+            await update.effective_chat.send_message(
+                "💳 شماره کارت جدید را وارد کنید:\n(۱۶ رقم)",
+                reply_markup=get_admin_keyboard(user_id)
+            )
+            return
+        
+        if user_data[user_id].get('state') == 'edit_card_number':
+            if len(text.replace(' ', '')) == 16:
+                db.update_setting('card_number', text)
+                user_data[user_id]['state'] = 'menu'
+                await update.effective_chat.send_message(
+                    f"✅ شماره کارت تغییر کرد!\n💳 {text}",
+                    reply_markup=get_admin_keyboard(user_id)
+                )
+            else:
+                await update.effective_chat.send_message("❌ شماره کارت باید ۱۶ رقم باشد!")
+            return
+        
+        if "💰 کیف پول" in text or "Wallet" in text:
+            await update.effective_chat.send_message(
+                f"💰 **کیف پول**\n\n"
+                f"💳 شماره کارت: {db.get_setting('card_number')}\n"
+                f"👤 صاحب کارت: {db.get_setting('card_holder')}\n"
+                f"💰 قیمت اشتراک: {db.get_setting('subscription_price')} تومان\n"
+                f"⏰ مدت اشتراک: {db.get_setting('subscription_days')} روز",
+                reply_markup=get_admin_keyboard(user_id),
+                parse_mode='Markdown'
+            )
+            return
+        
+        if "🔙 بازگشت" in text or "Back" in text:
+            await update.effective_chat.send_message(
+                "🔙 بازگشت به منوی اصلی",
+                reply_markup=get_main_keyboard(user_id)
             )
             return
     
     # ===== منطق اصلی ربات =====
-    if "📊 Start Analysis" in text or "شروع تحلیل" in text:
+    if "📊 شروع تحلیل" in text or "Start Analysis" in text:
         user_data[user_id]['state'] = 'waiting_current_price'
         user_data[user_id]['indicators'] = {}
         user_data[user_id]['support'] = None
         user_data[user_id]['resistance'] = None
         user_data[user_id]['current_price'] = None
         
-        # دریافت قیمت واقعی
-        real_price = price_fetcher.get_price()
+        real_price = price_microservice.get_price()
         price_text = f" (Current: ${real_price:.2f})" if real_price else ""
         
         await update.effective_chat.send_message(
-            f"💰 **Enter current price | قیمت فعلی را وارد کنید**{price_text}\n\n"
-            f"Example | مثال: 65432.50\n\n"
-            f"💡 Tip: You can use real-time price above | می‌توانید از قیمت واقعی بالا استفاده کنید",
+            f"💰 **قیمت فعلی ارز را وارد کنید**{price_text}\n\n"
+            f"مثال: 65432.50",
             parse_mode='Markdown'
         )
-        
+        return
+    
+    # ادامه منطق...
     elif user_data[user_id]['state'] == 'waiting_current_price':
         try:
             user_data[user_id]['current_price'] = float(text.replace(',', '.'))
             user_data[user_id]['state'] = 'waiting_support_resistance'
             await update.effective_chat.send_message(
-                "📊 **Enter Support & Resistance | حمایت و مقاومت را وارد کنید**\n\n"
-                "**Format | فرمت:**\n"
-                "Support 65000\n"
-                "Resistance 66000\n\n"
+                "📊 **حمایت و مقاومت را وارد کنید**\n\n"
+                "**فرمت:**\n"
                 "حمایت 65000\n"
                 "مقاومت 66000\n\n"
-                "💡 Type exactly like above | دقیقاً مانند بالا تایپ کنید",
-                parse_mode='Markdown'
+                "💡 دقیقاً مانند نمونه بالا تایپ کنید."
             )
         except ValueError:
-            await update.effective_chat.send_message(
-                "❌ Please enter a valid number! | لطفاً عدد معتبر وارد کنید!"
-            )
+            await update.effective_chat.send_message("❌ لطفاً عدد معتبر وارد کنید!")
     
     elif user_data[user_id]['state'] == 'waiting_support_resistance':
         lines = text.strip().split('\n')
         try:
             for line in lines:
                 line = line.strip().lower()
-                if 'support' in line or 'حمایت' in line:
+                if 'حمایت' in line or 'support' in line:
                     number = line.split()[-1].replace(',', '.')
                     user_data[user_id]['support'] = float(number)
-                elif 'resistance' in line or 'مقاومت' in line:
+                elif 'مقاومت' in line or 'resistance' in line:
                     number = line.split()[-1].replace(',', '.')
                     user_data[user_id]['resistance'] = float(number)
             
             if user_data[user_id]['support'] and user_data[user_id]['resistance']:
                 if user_data[user_id]['support'] >= user_data[user_id]['resistance']:
-                    await update.effective_chat.send_message(
-                        "❌ Support must be lower than resistance! | حمایت باید کمتر از مقاومت باشد!"
-                    )
+                    await update.effective_chat.send_message("❌ حمایت باید کمتر از مقاومت باشد!")
                     return
-                    
+                
                 user_data[user_id]['state'] = 'selecting_indicators'
                 await update.effective_chat.send_message(
-                    f"""✅ **Data registered! | داده‌ها ثبت شد!**
-
-💰 Price | قیمت: {user_data[user_id]['current_price']}
-📊 Support | حمایت: {user_data[user_id]['support']}
-📈 Resistance | مقاومت: {user_data[user_id]['resistance']}
-
-🔍 **Now select indicators | اکنون اندیکاتورها را انتخاب کنید:**
-
-📋 Select at least 5 indicators for accurate analysis
-حداقل ۵ اندیکاتور برای تحلیل دقیق انتخاب کنید
-
-💡 More indicators = Higher accuracy
-اندیکاتور بیشتر = دقت بالاتر""",
-                    reply_markup=get_indicators_keyboard(user_id),
-                    parse_mode='Markdown'
+                    f"✅ **داده‌ها ثبت شد!**\n\n"
+                    f"💰 قیمت: {user_data[user_id]['current_price']}\n"
+                    f"📊 حمایت: {user_data[user_id]['support']}\n"
+                    f"📈 مقاومت: {user_data[user_id]['resistance']}\n\n"
+                    f"🔍 **اندیکاتورها را انتخاب کنید (حداقل ۵ عدد)**\n"
+                    f"💡 اندیکاتور بیشتر = دقت بالاتر",
+                    reply_markup=get_indicators_keyboard(user_id)
                 )
         except:
-            await update.effective_chat.send_message(
-                "❌ Wrong format! Please try again. | فرمت اشتباه! لطفاً مجدداً وارد کنید."
-            )
+            await update.effective_chat.send_message("❌ فرمت اشتباه! لطفاً مجدداً وارد کنید.")
     
     elif user_data[user_id]['state'] == 'selecting_indicators':
         clean_text = text.replace("✅ ", "")
@@ -1012,95 +977,141 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_data[user_id]['current_indicator'] = clean_text
                 user_data[user_id]['state'] = 'waiting_indicator_value'
                 await update.effective_chat.send_message(
-                    f"📊 **Enter {clean_text} value | مقدار {clean_text} را وارد کنید**\n\n"
-                    f"Example | مثال: 45.67\n\n"
-                    f"💡 Tip: Use current indicator values from your chart | از مقادیر فعلی اندیکاتورها در چارت استفاده کنید",
+                    f"📊 **مقدار {clean_text} را وارد کنید**\n\n"
+                    f"مثال: 45.67",
                     parse_mode='Markdown'
                 )
             else:
                 await update.effective_chat.send_message(
-                    f"⚠️ {clean_text} already registered! | {clean_text} قبلاً ثبت شده است!",
+                    f"⚠️ {clean_text} قبلاً ثبت شده است!",
                     reply_markup=get_indicators_keyboard(user_id)
                 )
-            
-        elif "Register" in text or "ثبت" in text:
+        
+        elif "ثبت" in text or "Register" in text:
             if len(user_data[user_id]['indicators']) >= 5:
-                referral_count = referral_data[user_id]['referral_count']
-                analysis_level = get_analysis_level(referral_count)
-                
-                # نمایش پیام در حال تحلیل
+                # اجرای تحلیل
                 status_msg = await update.effective_chat.send_message(
-                    "🔄 **Analyzing indicators...**\n"
-                    "در حال تحلیل اندیکاتورها...\n\n"
-                    f"📊 {len(user_data[user_id]['indicators'])} indicators loaded"
-                    f" | {len(user_data[user_id]['indicators'])} اندیکاتور بارگذاری شد",
-                    parse_mode='Markdown'
+                    "🔄 **در حال تحلیل با الگوریتم‌های پیشرفته...**\n"
+                    "🧮 میکروسرویس‌های فیزیک و ریاضی در حال پردازش...\n\n"
+                    f"📊 {len(user_data[user_id]['indicators'])} اندیکاتور بارگذاری شد"
                 )
                 
-                # اجرای تحلیل
-                result = analyzer.analyze_indicators_ultra(
+                result = signal_engine.generate_signal(
                     user_data[user_id]['indicators'],
                     user_data[user_id]['support'],
                     user_data[user_id]['resistance'],
-                    user_data[user_id]['current_price'],
-                    analysis_level
+                    user_data[user_id]['current_price']
                 )
                 
-                # فرمت‌بندی سیگنال‌های برتر
-                top_signals_text = "\n".join([f"• {s}" for s in result['top_signals'][:5]])
-                
-                signal_text = f"""🔥 **ANALYSIS RESULT | نتیجه تحلیل** 🔥
-
-{result['direction']}
-
-💰 **Profit Target | هدف سود:** {result['profit_percent']}%
-📉 **Stop Loss | حد ضرر:** {result['loss_percent']}%
-
-📊 **Confidence | اطمینان:** {result['confidence']}%
-🎯 **Score | امتیاز:** {result['score']}/10
-{result['accuracy_bonus']}
-
-📍 **Position | موقعیت:**
-{result['position_analysis']}
-• Price Position | موقعیت قیمت: {result['price_position']}%
-
-📋 **Signal Details | جزئیات سیگنال:**
-• Risk Level | سطح ریسک: {result['risk_level']}
-• Urgency | فوریت: {result['urgency']}
-• Analysis Level | سطح تحلیل: {result['analysis_level'].upper()}
-• Multiplier | ضریب: {result['multiplier']}x
-
-📊 **Top Signals | سیگنال‌های برتر:**
-{top_signals_text}
-
-📋 **Used Indicators | اندیکاتورهای استفاده شده:**
-{', '.join(user_data[user_id]['indicators'].keys())}
-
-⚠️ **Risk Management | مدیریت ریسک:**
-• Never risk more than 2-3% of your capital
-• Always use stop loss
-• هرگز بیش از ۲-۳٪ سرمایه خود را ریسک نکنید
-• همیشه از حد ضرر استفاده کنید"""
-                
-                # حذف پیام وضعیت
                 await status_msg.delete()
                 
-                # ارسال سیگنال نهایی
+                if result['direction'] == "BUY":
+                    direction_emoji = "📈"
+                    direction_text = "خرید | BUY"
+                elif result['direction'] == "SELL":
+                    direction_emoji = "📉"
+                    direction_text = "فروش | SELL"
+                else:
+                    direction_emoji = "⚪"
+                    direction_text = "نگهداری | HOLD"
+                
+                signal_text = f"""
+🔥 **نتیجه تحلیل | Analysis Result** 🔥
+
+{direction_emoji} **جهت | Direction:** {direction_text}
+💰 **قیمت ورود | Entry:** ${result['entry']:,.2f}
+🎯 **حد سود | Take Profit:** ${result['take_profit']:,.2f}
+🛡️ **حد ضرر | Stop Loss:** ${result['stop_loss']:,.2f}
+⚡ **اهرم | Leverage:** {result['leverage']}x
+🎯 **اطمینان | Confidence:** {result['confidence']}%
+
+📊 **جزئیات | Details:**
+• RSI: {result.get('rsi', 0)}
+• MACD: {result.get('macd', 0)}
+• ADX: {result.get('adx', 0)}
+• نیروی خرید | Buy Force: {result.get('buy_force', 0):.2f}
+• نیروی فروش | Sell Force: {result.get('sell_force', 0):.2f}
+• موقعیت قیمت | Price Position: {result.get('price_position', 0)}%
+
+⚠️ **مدیریت ریسک | Risk Management:**
+• حداکثر ۲-۳٪ سرمایه را ریسک کنید
+• همیشه از حد ضرر استفاده کنید
+"""
+                
+                db.save_signal(user_id, result)
+                
                 await update.effective_chat.send_message(
                     signal_text,
-                    reply_markup=get_indicators_keyboard(user_id),
+                    reply_markup=get_main_keyboard(user_id),
                     parse_mode='Markdown'
                 )
                 
-                # ریست داده‌ها
                 user_data[user_id]['state'] = 'menu'
                 
             else:
                 await update.effective_chat.send_message(
-                    f"❌ Please enter at least 5 indicators! | حداقل ۵ اندیکاتور وارد کنید!\n"
-                    f"📊 Current | فعلی: {len(user_data[user_id]['indicators'])}/20",
+                    f"❌ حداقل ۵ اندیکاتور وارد کنید! ({len(user_data[user_id]['indicators'])}/5)",
                     reply_markup=get_indicators_keyboard(user_id)
                 )
+        
+        elif "تحلیل" in text or "Analyze" in text:
+            # همان منطق ثبت
+            if len(user_data[user_id]['indicators']) >= 5:
+                status_msg = await update.effective_chat.send_message(
+                    "🔄 در حال تحلیل با الگوریتم‌های پیشرفته..."
+                )
+                
+                result = signal_engine.generate_signal(
+                    user_data[user_id]['indicators'],
+                    user_data[user_id]['support'],
+                    user_data[user_id]['resistance'],
+                    user_data[user_id]['current_price']
+                )
+                
+                await status_msg.delete()
+                
+                if result['direction'] == "BUY":
+                    direction_emoji = "📈"
+                    direction_text = "خرید | BUY"
+                elif result['direction'] == "SELL":
+                    direction_emoji = "📉"
+                    direction_text = "فروش | SELL"
+                else:
+                    direction_emoji = "⚪"
+                    direction_text = "نگهداری | HOLD"
+                
+                signal_text = f"""
+🔥 **نتیجه تحلیل | Analysis Result** 🔥
+
+{direction_emoji} **جهت | Direction:** {direction_text}
+💰 **قیمت ورود | Entry:** ${result['entry']:,.2f}
+🎯 **حد سود | Take Profit:** ${result['take_profit']:,.2f}
+🛡️ **حد ضرر | Stop Loss:** ${result['stop_loss']:,.2f}
+⚡ **اهرم | Leverage:** {result['leverage']}x
+🎯 **اطمینان | Confidence:** {result['confidence']}%
+
+📊 **جزئیات | Details:**
+• RSI: {result.get('rsi', 0)}
+• MACD: {result.get('macd', 0)}
+• ADX: {result.get('adx', 0)}
+• نیروی خرید | Buy Force: {result.get('buy_force', 0):.2f}
+• نیروی فروش | Sell Force: {result.get('sell_force', 0):.2f}
+• موقعیت قیمت | Price Position: {result.get('price_position', 0)}%
+
+⚠️ **مدیریت ریسک | Risk Management:**
+• حداکثر ۲-۳٪ سرمایه را ریسک کنید
+• همیشه از حد ضرر استفاده کنید
+"""
+                
+                db.save_signal(user_id, result)
+                
+                await update.effective_chat.send_message(
+                    signal_text,
+                    reply_markup=get_main_keyboard(user_id),
+                    parse_mode='Markdown'
+                )
+                
+                user_data[user_id]['state'] = 'menu'
     
     elif user_data[user_id]['state'] == 'waiting_indicator_value':
         try:
@@ -1109,49 +1120,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_data[user_id]['indicators'][indicator_name] = indicator_value
             user_data[user_id]['state'] = 'selecting_indicators'
             
-            # نمایش پیشرفت
-            progress_text = f"""✅ {indicator_name} registered! | {indicator_name} ثبت شد!
-
-📊 Registered Indicators | اندیکاتورهای ثبت شده: {len(user_data[user_id]['indicators'])}/20
-
-📋 **Current List | لیست فعلی:**
-{chr(10).join([f"• {ind}: {val}" for ind, val in user_data[user_id]['indicators'].items()])}
-
-🔍 Continue adding or click 'Register' to analyze
-ادامه دهید یا روی 'ثبت' کلیک کنید
-
-💡 **Tip | نکته:** Minimum 5 indicators = Good analysis
-حداقل ۵ اندیکاتور = تحلیل خوب"""
-            
             await update.effective_chat.send_message(
-                progress_text,
-                reply_markup=get_indicators_keyboard(user_id),
-                parse_mode='Markdown'
+                f"✅ {indicator_name} = {indicator_value} ثبت شد!\n\n"
+                f"📊 اندیکاتورهای ثبت شده: {len(user_data[user_id]['indicators'])}/20\n\n"
+                f"🔍 اندیکاتور بعدی را انتخاب کنید یا روی «ثبت» کلیک کنید",
+                reply_markup=get_indicators_keyboard(user_id)
             )
         except ValueError:
-            await update.effective_chat.send_message(
-                "❌ Please enter a valid number! | لطفاً عدد معتبر وارد کنید! (مثال: 45.67)"
-            )
+            await update.effective_chat.send_message("❌ لطفاً عدد معتبر وارد کنید! (مثال: 45.67)")
 
 # ==================== اجرا ====================
 def main():
-    print("=" * 60)
-    print("🚀 Ultra Advanced Trading Bot Started")
-    print("🤖 ربات تحلیل تکنیکال فوق‌پیشرفته")
-    print("=" * 60)
-    print(f"👤 Admin ID: {ADMIN_ID}")
-    print(f"📊 Indicators: {len(INDICATORS)}")
-    print(f"🔗 Exchange Links: {len(EXCHANGE_URLS)}")
-    print("=" * 60)
+    print("=" * 70)
+    print("🚀 ربات تحلیل تکنیکال فوق‌پیشرفته نسخه ۶.۰")
+    print("🔥 با الگوریتم‌های فیزیک و ریاضی")
+    print("=" * 70)
+    print(f"👤 ادمین: {ADMIN_ID}")
+    print(f"🤖 ربات: {BOT_USERNAME}")
+    print(f"📊 اندیکاتورها: {len(INDICATORS)}")
+    print(f"💱 صرافی: Toobit")
+    print("=" * 70)
     
     app = Application.builder().token(BOT_TOKEN).build()
     
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    logger.info("Bot is running...")
-    print("✅ Bot is ready!")
-    print("=" * 60)
+    print("✅ ربات با موفقیت راه‌اندازی شد!")
+    print("=" * 70)
     
     app.run_polling(drop_pending_updates=True)
 
