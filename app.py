@@ -20,7 +20,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # توکن ربات و آیدی ادمین
-BOT_TOKEN = "8195783182:8696270360:AAFUmZBWN-Ib7XSD1Za03Pk1LCX6us-eEIs"
+BOT_TOKEN = "8895536734:AAEelFpAnwGMz9Cr0VI6pN5vPui-s2tPKzc"
 ADMIN_ID = 327855654
 
 # لینک‌های صرافی
