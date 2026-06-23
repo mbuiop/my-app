@@ -35,7 +35,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = "8195783182:AAH408rNKlNZYnnB_E65xA0dG6I_dGpUS7I"
+BOT_TOKEN = "8895536734:AAEelFpAnwGMz9Cr0VI6pN5vPui-s2tPKzc"
 ADMIN_ID = 327855654
 BOT_USERNAME = "@Maynir_Bot"
 
