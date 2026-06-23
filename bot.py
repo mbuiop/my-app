@@ -54,8 +54,8 @@ import jwt
 from passlib.context import CryptContext
 
 # ===================== تنظیمات =====================
-TOKEN = "توکن_ربات_خود_را_اینجا_قرار_دهید"
-ADMIN_ID = 123456789  # از @userinfobot بگیرید
+TOKEN = "8895536734:AAEelFpAnwGMz9Cr0VI6pN5vPui-s2tPKzc"
+ADMIN_ID = 327855654  # از @userinfobot بگیرید
 
 DATABASE_URL = "postgresql+asyncpg://user:password@localhost:5432/jobbot"
 REDIS_URL = "redis://localhost:6379/0"
