@@ -2,2220 +2,3723 @@
 # -*- coding: utf-8 -*-
 
 """
-ربات سیگنال‌دهی فوق‌پیشرفته نسخه ۵.۰
-با پنل مدیریت کامل - کاربر فرار نمی‌کند!
+ربات مادر نسخه ۲۱.۳ - رفع کامل خطای Markdown + بهینه‌سازی
 """
 
 import telebot
 from telebot import types
-import requests
-import pandas as pd
-import numpy as np
-import time
-import json
 import sqlite3
-import threading
-from datetime import datetime, timedelta
-import hashlib
 import os
+import subprocess
+import sys
+import time
+import hashlib
+import threading
+import shutil
+import re
+import requests
+import signal
 import logging
+import json
+import zipfile
+from datetime import datetime, timedelta
 from logging.handlers import RotatingFileHandler
-import websocket
+from contextlib import contextmanager
+import paramiko
+from queue import Queue
 import random
-from collections import deque
-import pickle
-import schedule
+import string
+import gc
+import psutil
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 
-# ==================== تنظیمات ====================
-BOT_TOKEN = "8696270360:AAFUmZBWN-Ib7XSD1Za03Pk1LCX6us-eEIs"
+# ==================== تنظیمات بهینه‌سازی ====================
+MAX_THREADS = 50
+CACHE_SIZE = 1000
+RESPONSE_TIMEOUT = 30
+POLLING_TIMEOUT = 60
+MAX_MESSAGE_LENGTH = 4096
+DB_POOL_SIZE = 20
+DB_TIMEOUT = 30
+
+# ==================== فایل PID ====================
+PID_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot.pid")
+
+def check_and_create_pid():
+    if os.path.exists(PID_FILE):
+        try:
+            with open(PID_FILE, 'r') as f:
+                old_pid = int(f.read().strip())
+            try:
+                os.kill(old_pid, 0)
+                print(f"❌ نمونه دیگری از ربات با PID {old_pid} در حال اجراست!")
+                sys.exit(1)
+            except:
+                os.remove(PID_FILE)
+        except:
+            os.remove(PID_FILE)
+    with open(PID_FILE, 'w') as f:
+        f.write(str(os.getpid()))
+    print(f"✅ PID {os.getpid()} ذخیره شد")
+
+# ==================== تنظیمات پایه ====================
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_DIR = os.path.join(BASE_DIR, "database")
+FILES_DIR = os.path.join(BASE_DIR, "user_files")
+RUNNING_DIR = os.path.join(BASE_DIR, "running_bots")
+LOGS_DIR = os.path.join(BASE_DIR, "logs")
+RECEIPTS_DIR = os.path.join(BASE_DIR, "receipts")
+PENDING_FILES_DIR = os.path.join(BASE_DIR, "pending_files")
+SERVERS_DIR = os.path.join(BASE_DIR, "servers")
+BACKUP_DIR = os.path.join(BASE_DIR, "backups")
+REQUIREMENTS_DIR = os.path.join(BASE_DIR, "requirements")
+CACHE_DIR = os.path.join(BASE_DIR, "cache")
+TEMP_DIR = os.path.join(BASE_DIR, "temp")
+READY_FILES_DIR = os.path.join(BASE_DIR, "ready_files")
+
+for dir_path in [DB_DIR, FILES_DIR, RUNNING_DIR, LOGS_DIR, RECEIPTS_DIR, PENDING_FILES_DIR, SERVERS_DIR, BACKUP_DIR, REQUIREMENTS_DIR, CACHE_DIR, TEMP_DIR, READY_FILES_DIR]:
+    os.makedirs(dir_path, exist_ok=True)
+
+# ==================== توکن ربات مادر ====================
+BOT_TOKEN = "8787172986:AAHtlVXWZTTFUrvWc0OcVI-CehKxkPmF7nA"
+
+# ==================== آیدی ادمین ====================
 ADMIN_IDS = [327855654]
 
-# ==================== دیتابیس فوق‌پیشرفته ====================
-class SuperDatabase:
-    def __init__(self):
-        self.conn = sqlite3.connect('trading_bot.db', check_same_thread=False)
-        self.cursor = self.conn.cursor()
-        self.init_tables()
-        self.cache = {}
-        self.cache_time = {}
-        
-    def init_tables(self):
-        # ===== جدول کاربران =====
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                username TEXT,
-                first_name TEXT,
-                plan TEXT DEFAULT 'FREE',
-                plan_expire TIMESTAMP,
-                balance INTEGER DEFAULT 0,
-                total_trades INTEGER DEFAULT 0,
-                winning_trades INTEGER DEFAULT 0,
-                points INTEGER DEFAULT 0,
-                joined_at TIMESTAMP,
-                last_active TIMESTAMP,
-                referral_code TEXT,
-                referred_by INTEGER,
-                daily_signals INTEGER DEFAULT 0,
-                last_signal_time TIMESTAMP,
-                is_banned BOOLEAN DEFAULT 0,
-                telegram_id INTEGER
-            )
-        ''')
-        
-        # ===== جدول سیگنال‌ها =====
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS signals (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                symbol TEXT,
-                signal_type TEXT,
-                entry_price REAL,
-                stop_loss REAL,
-                take_profit_1 REAL,
-                take_profit_2 REAL,
-                confidence INTEGER,
-                created_at TIMESTAMP,
-                status TEXT DEFAULT 'active',
-                result TEXT,
-                algorithm_version TEXT,
-                signal_strength INTEGER,
-                indicators_used TEXT,
-                timeframe TEXT
-            )
-        ''')
-        
-        # ===== جدول معاملات =====
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS user_trades (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                signal_id INTEGER,
-                entry_price REAL,
-                exit_price REAL,
-                profit_loss REAL,
-                status TEXT DEFAULT 'open',
-                opened_at TIMESTAMP,
-                closed_at TIMESTAMP,
-                quantity REAL,
-                take_profit_hit BOOLEAN DEFAULT 0,
-                stop_loss_hit BOOLEAN DEFAULT 0
-            )
-        ''')
-        
-        # ===== جدول الگوریتم‌ها =====
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS algorithms (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE,
-                config TEXT,
-                is_active BOOLEAN DEFAULT 1,
-                created_at TIMESTAMP,
-                updated_at TIMESTAMP,
-                version TEXT,
-                performance_score REAL DEFAULT 0,
-                total_signals INTEGER DEFAULT 0,
-                win_rate REAL DEFAULT 0
-            )
-        ''')
-        
-        # ===== جدول هشدارها =====
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS alerts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                symbol TEXT,
-                target_price REAL,
-                condition TEXT,
-                created_at TIMESTAMP,
-                triggered BOOLEAN DEFAULT 0,
-                alert_type TEXT DEFAULT 'price'
-            )
-        ''')
-        
-        # ===== جدول تنظیمات =====
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT,
-                updated_at TIMESTAMP
-            )
-        ''')
-        
-        # ===== جدول بازخورد =====
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS feedback (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                message TEXT,
-                rating INTEGER,
-                created_at TIMESTAMP
-            )
-        ''')
-        
-        # ===== جدول لاگ‌ها =====
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                level TEXT,
-                message TEXT,
-                created_at TIMESTAMP,
-                source TEXT
-            )
-        ''')
-        
-        # ===== جدول قیمت‌های لحظه‌ای =====
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS prices (
-                symbol TEXT,
-                price REAL,
-                volume REAL,
-                bid REAL,
-                ask REAL,
-                timestamp TIMESTAMP,
-                PRIMARY KEY (symbol, timestamp)
-            )
-        ''')
-        
-        self.conn.commit()
-        
-        # اضافه کردن الگوریتم‌های پیش‌فرض
-        self.init_default_algorithms()
-    
-    def init_default_algorithms(self):
-        """اضافه کردن الگوریتم‌های پیش‌فرض"""
-        algorithms = [
-            {
-                'name': 'CLASSIC_RSI_MACD',
-                'config': json.dumps({
-                    'rsi_period': 14,
-                    'rsi_oversold': 30,
-                    'rsi_overbought': 70,
-                    'macd_fast': 12,
-                    'macd_slow': 26,
-                    'macd_signal': 9,
-                    'weight_rsi': 0.4,
-                    'weight_macd': 0.6
-                }),
-                'version': '1.0',
-                'performance_score': 65.5
-            },
-            {
-                'name': 'ADVANCED_BOLLINGER_STOCH',
-                'config': json.dumps({
-                    'bb_period': 20,
-                    'bb_std': 2,
-                    'stoch_k': 14,
-                    'stoch_d': 3,
-                    'stoch_smooth': 3,
-                    'weight_bb': 0.3,
-                    'weight_stoch': 0.3,
-                    'weight_rsi': 0.4
-                }),
-                'version': '1.0',
-                'performance_score': 72.3
-            },
-            {
-                'name': 'ICHIMOKU_ADX',
-                'config': json.dumps({
-                    'tenkan': 9,
-                    'kijun': 26,
-                    'senkou': 52,
-                    'adx_period': 14,
-                    'weight_ichimoku': 0.5,
-                    'weight_adx': 0.5
-                }),
-                'version': '1.0',
-                'performance_score': 68.7
-            },
-            {
-                'name': 'ULTIMATE_MIXED',
-                'config': json.dumps({
-                    'rsi_period': 14,
-                    'macd_fast': 12,
-                    'macd_slow': 26,
-                    'bb_period': 20,
-                    'stoch_k': 14,
-                    'adx_period': 14,
-                    'use_ichimoku': True,
-                    'use_volume': True,
-                    'weight_rsi': 0.2,
-                    'weight_macd': 0.2,
-                    'weight_bb': 0.15,
-                    'weight_stoch': 0.15,
-                    'weight_adx': 0.15,
-                    'weight_ichimoku': 0.15,
-                    'min_confidence': 70,
-                    'min_volume_ratio': 1.5,
-                    'min_rr_ratio': 2.0
-                }),
-                'version': '1.0',
-                'performance_score': 78.9
-            }
-        ]
-        
-        for algo in algorithms:
-            self.cursor.execute('''
-                INSERT OR IGNORE INTO algorithms 
-                (name, config, is_active, created_at, updated_at, version, performance_score)
-                VALUES (?, ?, 1, ?, ?, ?, ?)
-            ''', (
-                algo['name'],
-                algo['config'],
-                datetime.now().isoformat(),
-                datetime.now().isoformat(),
-                algo['version'],
-                algo['performance_score']
-            ))
-        
-        self.conn.commit()
-    
-    def get_active_algorithm(self):
-        """دریافت الگوریتم فعال"""
-        self.cursor.execute('''
-            SELECT * FROM algorithms WHERE is_active = 1 ORDER BY performance_score DESC LIMIT 1
-        ''')
-        return self.cursor.fetchone()
-    
-    def update_algorithm_performance(self, algo_name, win_rate):
-        """به‌روزرسانی عملکرد الگوریتم"""
-        self.cursor.execute('''
-            UPDATE algorithms 
-            SET performance_score = (performance_score * 0.7 + ? * 0.3),
-                total_signals = total_signals + 1,
-                win_rate = ?
-            WHERE name = ?
-        ''', (win_rate, win_rate, algo_name))
-        self.conn.commit()
-    
-    def set_active_algorithm(self, algo_name):
-        """تنظیم الگوریتم فعال"""
-        self.cursor.execute('UPDATE algorithms SET is_active = 0')
-        self.cursor.execute('UPDATE algorithms SET is_active = 1 WHERE name = ?', (algo_name,))
-        self.conn.commit()
-    
-    def get_user(self, user_id):
-        cache_key = f"user_{user_id}"
-        if cache_key in self.cache and time.time() - self.cache_time.get(cache_key, 0) < 60:
-            return self.cache[cache_key]
-        
-        self.cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
-        result = self.cursor.fetchone()
-        
-        if result:
-            self.cache[cache_key] = result
-            self.cache_time[cache_key] = time.time()
-        
-        return result
-    
-    def update_user_activity(self, user_id):
-        self.cursor.execute('''
-            UPDATE users SET last_active = ? WHERE user_id = ?
-        ''', (datetime.now().isoformat(), user_id))
-        self.conn.commit()
-    
-    def add_trade(self, user_id, signal_id, entry_price, quantity=0.01):
-        self.cursor.execute('''
-            INSERT INTO user_trades 
-            (user_id, signal_id, entry_price, quantity, opened_at, status)
-            VALUES (?, ?, ?, ?, ?, 'open')
-        ''', (user_id, signal_id, entry_price, quantity, datetime.now().isoformat()))
-        self.conn.commit()
-        return self.cursor.lastrowid
-    
-    def close_trade(self, trade_id, exit_price):
-        self.cursor.execute('''
-            SELECT * FROM user_trades WHERE id = ?
-        ''', (trade_id,))
-        trade = self.cursor.fetchone()
-        
-        if trade:
-            profit_loss = ((exit_price - trade[3]) / trade[3]) * 100
-            if trade[1] % 2 == 1:  # SELL
-                profit_loss = -profit_loss
-            
-            self.cursor.execute('''
-                UPDATE user_trades 
-                SET exit_price = ?, profit_loss = ?, status = 'closed', closed_at = ?
-                WHERE id = ?
-            ''', (exit_price, profit_loss, datetime.now().isoformat(), trade_id))
-            self.conn.commit()
-            
-            # به‌روزرسانی آمار کاربر
-            self.cursor.execute('''
-                UPDATE users 
-                SET total_trades = total_trades + 1,
-                    winning_trades = winning_trades + CASE WHEN ? > 0 THEN 1 ELSE 0 END
-                WHERE user_id = ?
-            ''', (profit_loss, trade[2]))
-            self.conn.commit()
-            
-            return profit_loss
-        return None
-    
-    def add_feedback(self, user_id, message, rating=5):
-        self.cursor.execute('''
-            INSERT INTO feedback (user_id, message, rating, created_at)
-            VALUES (?, ?, ?, ?)
-        ''', (user_id, message, rating, datetime.now().isoformat()))
-        self.conn.commit()
-    
-    def get_referral_count(self, user_id):
-        self.cursor.execute('SELECT COUNT(*) FROM users WHERE referred_by = ?', (user_id,))
-        return self.cursor.fetchone()[0]
-    
-    def log(self, level, message, source='SYSTEM'):
-        self.cursor.execute('''
-            INSERT INTO logs (level, message, created_at, source)
-            VALUES (?, ?, ?, ?)
-        ''', (level, message, datetime.now().isoformat(), source))
-        self.conn.commit()
+# ==================== قیمت اشتراک ====================
+SUBSCRIPTION_PRICE = 3000000
 
-db = SuperDatabase()
+# ==================== صف ساخت ====================
+build_queue = Queue()
+queue_thread_running = True
+active_builds = {}
+server_connections = {}
+executor = ThreadPoolExecutor(max_workers=MAX_THREADS)
 
-# ==================== موتور سیگنال‌دهی فوق‌پیشرفته ====================
-class UltraSignalEngine:
-    def __init__(self):
-        self.symbols = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT', 'ADAUSDT']
-        self.timeframes = ['1h', '4h', '1d']
-        self.cache = {}
-        self.websocket = None
-        self.price_cache = {}
-        self.running = False
-        
-    def get_price(self, symbol):
-        """دریافت قیمت لحظه‌ای با WebSocket"""
-        if symbol in self.price_cache:
-            return self.price_cache[symbol]
-        
+# ==================== تابع ایمن‌سازی Markdown ====================
+def safe_markdown(text):
+    """ایمن‌سازی متن برای Markdown تلگرام"""
+    if not text:
+        return text
+    chars = ['_', '*', '[', ']', '(', ')', '~', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+    for ch in chars:
+        text = text.replace(ch, f'\\{ch}')
+    return text
+
+def send_safe(chat_id, text, reply_markup=None, disable_web_page_preview=None):
+    """ارسال ایمن پیام بدون Markdown"""
+    try:
+        if len(text) > MAX_MESSAGE_LENGTH:
+            text = text[:MAX_MESSAGE_LENGTH - 100] + "\n\n... (ادامه)"
+        return bot.send_message(chat_id, text, parse_mode=None, reply_markup=reply_markup, disable_web_page_preview=disable_web_page_preview)
+    except Exception as e:
+        logger.error(f"send_safe error: {e}")
         try:
-            url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
-            response = requests.get(url, timeout=5)
-            price = float(response.json()['price'])
-            self.price_cache[symbol] = price
-            return price
+            return bot.send_message(chat_id, "⚠️ خطا در ارسال پیام", parse_mode=None)
         except:
             return None
-    
-    def get_klines(self, symbol, interval='4h', limit=200):
-        """دریافت داده با مدیریت خطا"""
-        try:
-            url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
-            response = requests.get(url, timeout=10)
-            data = response.json()
-            
-            df = pd.DataFrame(data, columns=[
-                'timestamp', 'open', 'high', 'low', 'close', 'volume',
-                'close_time', 'quote_asset_volume', 'number_of_trades',
-                'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
-            ])
-            
-            df['close'] = df['close'].astype(float)
-            df['high'] = df['high'].astype(float)
-            df['low'] = df['low'].astype(float)
-            df['open'] = df['open'].astype(float)
-            df['volume'] = df['volume'].astype(float)
-            
-            return df
-        except Exception as e:
-            db.log('ERROR', f"خطا در دریافت داده {symbol}: {e}")
-            return None
-    
-    def calculate_indicators(self, df):
-        """محاسبه تمام اندیکاتورها با دقت بالا"""
-        if df is None or len(df) < 50:
-            return None
-        
-        df = df.copy()
-        
-        # ===== 1. RSI با ۳ بازه زمانی =====
-        for period in [7, 14, 21]:
-            delta = df['close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-            rs = gain / loss
-            df[f'rsi_{period}'] = 100 - (100 / (1 + rs))
-        
-        # ===== 2. MACD =====
-        exp1 = df['close'].ewm(span=12, adjust=False).mean()
-        exp2 = df['close'].ewm(span=26, adjust=False).mean()
-        df['macd'] = exp1 - exp2
-        df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
-        df['macd_diff'] = df['macd'] - df['macd_signal']
-        df['macd_histogram'] = df['macd_diff'] * 2
-        
-        # ===== 3. میانگین متحرک =====
-        for period in [10, 20, 50, 100, 200]:
-            df[f'sma_{period}'] = df['close'].rolling(window=period).mean()
-            df[f'ema_{period}'] = df['close'].ewm(span=period, adjust=False).mean()
-        
-        # ===== 4. باند بولینگر =====
-        for period in [20]:
-            sma = df['close'].rolling(window=period).mean()
-            std = df['close'].rolling(window=period).std()
-            df['bb_mid'] = sma
-            df['bb_upper'] = sma + (std * 2)
-            df['bb_lower'] = sma - (std * 2)
-            df['bb_width'] = (df['bb_upper'] - df['bb_lower']) / df['bb_mid'] * 100
-            df['bb_percent'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower']) * 100
-        
-        # ===== 5. ATR =====
-        high_low = df['high'] - df['low']
-        high_close = np.abs(df['high'] - df['close'].shift())
-        low_close = np.abs(df['low'] - df['close'].shift())
-        ranges = pd.concat([high_low, high_close, low_close], axis=1)
-        true_range = np.max(ranges, axis=1)
-        df['atr_14'] = true_range.rolling(14).mean()
-        
-        # ===== 6. استوکاستیک =====
-        low_14 = df['low'].rolling(14).min()
-        high_14 = df['high'].rolling(14).max()
-        df['stoch_k'] = 100 * ((df['close'] - low_14) / (high_14 - low_14))
-        df['stoch_d'] = df['stoch_k'].rolling(3).mean()
-        df['stoch_slow'] = df['stoch_d'].rolling(3).mean()
-        
-        # ===== 7. ADX =====
-        plus_dm = df['high'].diff()
-        minus_dm = df['low'].diff()
-        plus_dm[plus_dm < 0] = 0
-        minus_dm[minus_dm > 0] = 0
-        
-        atr = df['atr_14']
-        df['plus_di'] = 100 * (plus_dm.rolling(14).mean() / atr)
-        df['minus_di'] = 100 * (abs(minus_dm).rolling(14).mean() / atr)
-        dx = (abs(df['plus_di'] - df['minus_di']) / (df['plus_di'] + df['minus_di'])) * 100
-        df['adx'] = dx.rolling(14).mean()
-        
-        # ===== 8. ایچیموکو =====
-        high_9 = df['high'].rolling(9).max()
-        low_9 = df['low'].rolling(9).min()
-        df['tenkan'] = (high_9 + low_9) / 2
-        
-        high_26 = df['high'].rolling(26).max()
-        low_26 = df['low'].rolling(26).min()
-        df['kijun'] = (high_26 + low_26) / 2
-        
-        df['senkou_a'] = ((df['tenkan'] + df['kijun']) / 2).shift(26)
-        df['senkou_b'] = ((df['high'].rolling(52).max() + df['low'].rolling(52).min()) / 2).shift(26)
-        df['chikou'] = df['close'].shift(-26)
-        
-        # ===== 9. حجم =====
-        df['volume_sma_20'] = df['volume'].rolling(20).mean()
-        df['volume_ratio'] = df['volume'] / df['volume_sma_20']
-        df['volume_trend'] = df['volume'].rolling(5).mean() / df['volume'].rolling(20).mean()
-        
-        # ===== 10. حمایت و مقاومت =====
-        df['resistance_20'] = df['high'].rolling(20).max()
-        df['support_20'] = df['low'].rolling(20).min()
-        df['resistance_50'] = df['high'].rolling(50).max()
-        df['support_50'] = df['low'].rolling(50).min()
-        df['pivot'] = (df['high'] + df['low'] + df['close']) / 3
-        
-        # ===== 11. شاخص‌های ترکیبی =====
-        df['trend_strength'] = abs(df['sma_20'] - df['sma_50']) / df['sma_50'] * 100
-        df['momentum'] = df['close'].pct_change(periods=10) * 100
-        df['volatility'] = df['close'].pct_change().rolling(20).std() * 100
-        
-        # ===== 12. سطوح فیبوناچی =====
-        high_52 = df['high'].rolling(52).max()
-        low_52 = df['low'].rolling(52).min()
-        diff = high_52 - low_52
-        df['fib_0'] = low_52
-        df['fib_236'] = low_52 + diff * 0.236
-        df['fib_382'] = low_52 + diff * 0.382
-        df['fib_50'] = low_52 + diff * 0.5
-        df['fib_618'] = low_52 + diff * 0.618
-        df['fib_786'] = low_52 + diff * 0.786
-        df['fib_100'] = high_52
-        
-        return df
-    
-    def get_signal_indicators(self, df, row):
-        """دریافت تمام اندیکاتورها برای تحلیل"""
-        return {
-            'rsi_7': row['rsi_7'],
-            'rsi_14': row['rsi_14'],
-            'rsi_21': row['rsi_21'],
-            'macd': row['macd'],
-            'macd_signal': row['macd_signal'],
-            'macd_diff': row['macd_diff'],
-            'macd_histogram': row['macd_histogram'],
-            'sma_20': row['sma_20'],
-            'sma_50': row['sma_50'],
-            'ema_12': row['ema_12'],
-            'ema_26': row['ema_26'],
-            'bb_upper': row['bb_upper'],
-            'bb_lower': row['bb_lower'],
-            'bb_mid': row['bb_mid'],
-            'bb_percent': row['bb_percent'],
-            'bb_width': row['bb_width'],
-            'atr': row['atr_14'],
-            'stoch_k': row['stoch_k'],
-            'stoch_d': row['stoch_d'],
-            'stoch_slow': row['stoch_slow'],
-            'adx': row['adx'],
-            'plus_di': row['plus_di'],
-            'minus_di': row['minus_di'],
-            'tenkan': row['tenkan'],
-            'kijun': row['kijun'],
-            'senkou_a': row['senkou_a'],
-            'senkou_b': row['senkou_b'],
-            'volume_ratio': row['volume_ratio'],
-            'volume_trend': row['volume_trend'],
-            'resistance_20': row['resistance_20'],
-            'support_20': row['support_20'],
-            'resistance_50': row['resistance_50'],
-            'support_50': row['support_50'],
-            'pivot': row['pivot'],
-            'trend_strength': row['trend_strength'],
-            'momentum': row['momentum'],
-            'volatility': row['volatility']
-        }
-    
-    def generate_signal_with_algorithm(self, symbol, algorithm_config, timeframe='4h'):
-        """تولید سیگنال با الگوریتم خاص"""
-        try:
-            # دریافت داده
-            df = self.get_klines(symbol, timeframe, 200)
-            if df is None:
-                return None
-            
-            # محاسبه اندیکاتورها
-            df = self.calculate_indicators(df)
-            if df is None or len(df) < 2:
-                return None
-            
-            # آخرین داده
-            last_row = df.iloc[-1]
-            prev_row = df.iloc[-2] if len(df) > 1 else last_row
-            
-            # دریافت اندیکاتورها
-            ind = self.get_signal_indicators(df, last_row)
-            
-            # ===== تحلیل بر اساس الگوریتم =====
-            algo_name = algorithm_config['name']
-            config = json.loads(algorithm_config['config'])
-            
-            signals = {'BUY': 0, 'SELL': 0}
-            signal_details = []
-            total_weight = 0
-            
-            # 1. RSI
-            if 'rsi_period' in config:
-                weight = config.get('weight_rsi', 0.25)
-                rsi_period = config.get('rsi_period', 14)
-                rsi_key = f'rsi_{rsi_period}' if rsi_period in [7, 14, 21] else 'rsi_14'
-                rsi_val = ind.get(rsi_key, 50)
-                
-                if rsi_val < config.get('rsi_oversold', 30):
-                    signals['BUY'] += weight
-                    signal_details.append(f"RSI Oversold ({rsi_val:.1f})")
-                elif rsi_val > config.get('rsi_overbought', 70):
-                    signals['SELL'] += weight
-                    signal_details.append(f"RSI Overbought ({rsi_val:.1f})")
-                total_weight += weight
-            
-            # 2. MACD
-            if 'macd_fast' in config:
-                weight = config.get('weight_macd', 0.25)
-                if ind['macd'] > ind['macd_signal']:
-                    signals['BUY'] += weight
-                    signal_details.append("MACD Cross Up")
-                elif ind['macd'] < ind['macd_signal']:
-                    signals['SELL'] += weight
-                    signal_details.append("MACD Cross Down")
-                total_weight += weight
-            
-            # 3. باند بولینگر
-            if 'bb_period' in config:
-                weight = config.get('weight_bb', 0.2)
-                if ind['bb_percent'] < 20:
-                    signals['BUY'] += weight
-                    signal_details.append("BB Oversold")
-                elif ind['bb_percent'] > 80:
-                    signals['SELL'] += weight
-                    signal_details.append("BB Overbought")
-                total_weight += weight
-            
-            # 4. استوکاستیک
-            if 'stoch_k' in config:
-                weight = config.get('weight_stoch', 0.2)
-                if ind['stoch_k'] < 20 and ind['stoch_d'] < 20:
-                    signals['BUY'] += weight
-                    signal_details.append("Stoch Oversold")
-                elif ind['stoch_k'] > 80 and ind['stoch_d'] > 80:
-                    signals['SELL'] += weight
-                    signal_details.append("Stoch Overbought")
-                total_weight += weight
-            
-            # 5. ADX
-            if 'adx_period' in config:
-                weight = config.get('weight_adx', 0.2)
-                if ind['adx'] > 25:
-                    if ind['plus_di'] > ind['minus_di']:
-                        signals['BUY'] += weight
-                        signal_details.append(f"ADX Strong Uptrend ({ind['adx']:.1f})")
-                    else:
-                        signals['SELL'] += weight
-                        signal_details.append(f"ADX Strong Downtrend ({ind['adx']:.1f})")
-                total_weight += weight
-            
-            # 6. ایچیموکو
-            if config.get('use_ichimoku', False):
-                weight = config.get('weight_ichimoku', 0.15)
-                if last_row['close'] > ind['senkou_a'] and last_row['close'] > ind['senkou_b']:
-                    signals['BUY'] += weight
-                    signal_details.append("Above Ichimoku Cloud")
-                elif last_row['close'] < ind['senkou_a'] and last_row['close'] < ind['senkou_b']:
-                    signals['SELL'] += weight
-                    signal_details.append("Below Ichimoku Cloud")
-                total_weight += weight
-            
-            # 7. حجم
-            if config.get('use_volume', False):
-                if ind['volume_ratio'] > config.get('min_volume_ratio', 1.5):
-                    if last_row['close'] > ind['sma_20']:
-                        signals['BUY'] += 0.1
-                        signal_details.append("Volume Confirmation")
-                    else:
-                        signals['SELL'] += 0.1
-                        signal_details.append("Volume Confirmation")
-            
-            # ===== محاسبه نهایی =====
-            buy_score = signals['BUY'] / total_weight if total_weight > 0 else 0
-            sell_score = signals['SELL'] / total_weight if total_weight > 0 else 0
-            
-            confidence = max(buy_score, sell_score) * 100
-            min_conf = config.get('min_confidence', 60)
-            
-            if confidence < min_conf:
-                return None
-            
-            # تعیین سیگنال
-            signal_type = "BUY" if buy_score > sell_score else "SELL" if sell_score > buy_score else "HOLD"
-            
-            if signal_type == "HOLD":
-                return None
-            
-            # ===== محاسبه قیمت‌ها =====
-            price = last_row['close']
-            atr = ind['atr'] if not pd.isna(ind['atr']) else price * 0.02
-            
-            # حد ضرر و سود بر اساس ATR
-            if signal_type == "BUY":
-                stop_loss = price - (atr * 1.5)
-                take_profit_1 = price + (atr * 2.0)
-                take_profit_2 = price + (atr * 4.0)
-            else:
-                stop_loss = price + (atr * 1.5)
-                take_profit_1 = price - (atr * 2.0)
-                take_profit_2 = price - (atr * 4.0)
-            
-            # ===== فیلتر نهایی =====
-            # نسبت ریسک به سود
-            risk = abs(price - stop_loss)
-            reward_1 = abs(take_profit_1 - price)
-            rr_1 = reward_1 / risk if risk > 0 else 0
-            
-            min_rr = config.get('min_rr_ratio', 1.5)
-            if rr_1 < min_rr:
-                return None
-            
-            # ===== ساخت سیگنال =====
-            signal = {
-                'symbol': symbol,
-                'signal': signal_type,
-                'entry': round(price, 2),
-                'stop_loss': round(stop_loss, 2),
-                'take_profit_1': round(take_profit_1, 2),
-                'take_profit_2': round(take_profit_2, 2),
-                'confidence': round(confidence),
-                'reasons': signal_details[:5],
-                'timestamp': datetime.now().isoformat(),
-                'algorithm': algo_name,
-                'timeframe': timeframe,
-                'rr_ratio': round(rr_1, 2),
-                'atr': round(atr, 2),
-                'volume_ratio': round(ind['volume_ratio'], 2),
-                'trend_strength': round(ind['trend_strength'], 2)
-            }
-            
-            return signal
-            
-        except Exception as e:
-            db.log('ERROR', f"خطا در تولید سیگنال {symbol}: {e}")
-            return None
-    
-    def get_best_signal(self, symbol):
-        """دریافت بهترین سیگنال با تست الگوریتم‌های مختلف"""
-        # دریافت الگوریتم فعال
-        algo = db.get_active_algorithm()
-        if not algo:
-            return None
-        
-        # تولید سیگنال با الگوریتم فعال
-        algo_config = {
-            'name': algo[1],
-            'config': algo[2]
-        }
-        
-        # تست در تایم‌فریم‌های مختلف
-        best_signal = None
-        best_confidence = 0
-        
-        for tf in self.timeframes:
-            signal = self.generate_signal_with_algorithm(symbol, algo_config, tf)
-            if signal and signal['confidence'] > best_confidence:
-                best_signal = signal
-                best_confidence = signal['confidence']
-        
-        return best_signal
-    
-    def run_analysis(self):
-        """اجرای تحلیل کامل روی تمام نمادها"""
-        signals = []
-        for symbol in self.symbols:
-            signal = self.get_best_signal(symbol)
-            if signal:
-                signals.append(signal)
-                # ذخیره در دیتابیس
-                db.cursor.execute('''
-                    INSERT INTO signals 
-                    (symbol, signal_type, entry_price, stop_loss, take_profit_1, take_profit_2, 
-                     confidence, created_at, algorithm_version, signal_strength, timeframe)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    signal['symbol'],
-                    signal['signal'],
-                    signal['entry'],
-                    signal['stop_loss'],
-                    signal['take_profit_1'],
-                    signal['take_profit_2'],
-                    signal['confidence'],
-                    signal['timestamp'],
-                    signal.get('algorithm', 'UNKNOWN'),
-                    signal['confidence'],
-                    signal.get('timeframe', '4h')
-                ))
-                db.conn.commit()
-        
-        return signals
 
-# ==================== ربات تلگرام فوق‌پیشرفته ====================
-class SuperTradingBot:
-    def __init__(self):
-        self.bot = telebot.TeleBot(BOT_TOKEN, num_threads=200)
-        self.engine = UltraSignalEngine()
-        self.setup_handlers()
-        self.setup_admin_panel()
-        
-    def setup_handlers(self):
-        @self.bot.message_handler(commands=['start'])
-        def start(message):
-            self.handle_start(message)
-        
-        @self.bot.message_handler(commands=['signal'])
-        def signal(message):
-            self.handle_signal(message)
-        
-        @self.bot.message_handler(commands=['stats'])
-        def stats(message):
-            self.handle_stats(message)
-        
-        @self.bot.message_handler(commands=['balance'])
-        def balance(message):
-            self.handle_balance(message)
-        
-        @self.bot.message_handler(commands=['plan'])
-        def plan(message):
-            self.handle_plan(message)
-        
-        @self.bot.message_handler(commands=['history'])
-        def history(message):
-            self.handle_history(message)
-        
-        @self.bot.message_handler(commands=['alert'])
-        def alert(message):
-            self.handle_alert(message)
-        
-        @self.bot.message_handler(commands=['help'])
-        def help(message):
-            self.handle_help(message)
-        
-        @self.bot.message_handler(commands=['feedback'])
-        def feedback(message):
-            self.handle_feedback(message)
-        
-        @self.bot.message_handler(commands=['referral'])
-        def referral(message):
-            self.handle_referral(message)
-        
-        @self.bot.message_handler(commands=['leaderboard'])
-        def leaderboard(message):
-            self.handle_leaderboard(message)
-        
-        @self.bot.message_handler(commands=['market'])
-        def market(message):
-            self.handle_market(message)
-        
-        @self.bot.message_handler(commands=['admin'])
-        def admin(message):
-            self.handle_admin(message)
-        
-        @self.bot.message_handler(func=lambda m: True)
-        def handle_all(message):
-            self.handle_text(message)
-    
-    # ================ هندلرهای اصلی ================
-    
-    def handle_start(self, message):
-        user_id = message.from_user.id
-        username = message.from_user.username or ""
-        first_name = message.from_user.first_name or ""
-        
-        # بررسی رفرال
-        referred_by = None
-        args = message.text.split()
-        if len(args) > 1:
-            ref_code = args[1]
-            db.cursor.execute('SELECT user_id FROM users WHERE referral_code = ?', (ref_code,))
-            result = db.cursor.fetchone()
-            if result:
-                referred_by = result[0]
-        
-        db.add_user(user_id, username, first_name, referred_by)
-        db.update_user_activity(user_id)
-        
-        # منو
-        markup = self.get_main_menu()
-        
-        user = db.get_user(user_id)
-        plan = user[2] if user else 'FREE'
-        plan_emoji = "🆓" if plan == "FREE" else "💎" if plan == "PRO" else "👑"
-        
-        welcome = f"""
-🚀 **ربات سیگنال‌دهی فوق‌پیشرفته**
-
-👤 {first_name} عزیز خوش آمدید!
-{plan_emoji} پلن شما: **{plan}**
-
-⚡ **امکانات فوق‌پیشرفته:**
-• 🧠 **۱۰+ الگوریتم هوشمند**
-• 📊 **۲۰+ اندیکاتور تکنیکال**
-• 🎯 **۹۰٪ دقت سیگنال**
-• 📈 **تحلیل ۳ تایم‌فریم همزمان**
-• 🔔 **هشدارهای قیمتی هوشمند**
-• 🏆 **سیستم امتیاز و رقابت**
-• 📚 **آموزش‌های پیشرفته**
-
-💎 **پلن‌های ویژه:**
-🆓 رایگان: ۳ سیگنال/روز
-💰 پایه: ۵۰۰K - ۱۰ سیگنال/روز
-💎 حرفه‌ای: ۲M - نامحدود + VIP
-👑 VIP: ۵M - همه چیز + مشاوره
-
-🎁 لینک رفرال شما:
-`https://t.me/{self.bot.get_me().username}?start={user[7] if user else ''}`
-
-📊 **آمار امروز:**
-• سیگنال‌های ارسال‌شده: {db.cursor.execute('SELECT COUNT(*) FROM signals WHERE DATE(created_at) = DATE("now")').fetchone()[0]}
-• کاربران فعال: {db.cursor.execute('SELECT COUNT(*) FROM users WHERE DATE(last_active) = DATE("now")').fetchone()[0]}
-        """
-        
-        self.bot.send_message(user_id, welcome, parse_mode='Markdown', reply_markup=markup)
-    
-    def get_main_menu(self):
-        """منوی اصلی با دکمه‌های جذاب"""
-        markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-        markup.add(
-            types.KeyboardButton("📊 سیگنال جدید"),
-            types.KeyboardButton("📈 آمار من"),
-            types.KeyboardButton("💰 کیف پول"),
-            types.KeyboardButton("📚 راهنما"),
-            types.KeyboardButton("🎯 خرید اشتراک"),
-            types.KeyboardButton("📋 تاریخچه"),
-            types.KeyboardButton("🔔 تنظیم هشدار"),
-            types.KeyboardButton("🏆 امتیازات"),
-            types.KeyboardButton("🎁 رفرال"),
-            types.KeyboardButton("📞 پشتیبانی"),
-            types.KeyboardButton("📊 بازار لحظه‌ای"),
-            types.KeyboardButton("👑 پنل ادمین")
-        )
-        return markup
-    
-    def handle_signal(self, message):
-        user_id = message.from_user.id
-        user = db.get_user(user_id)
-        
-        if not user or user[11]:  # is_banned
-            self.bot.send_message(user_id, "❌ دسترسی شما مسدود شده است!")
-            return
-        
-        # بررسی محدودیت روزانه
-        today = datetime.now().date()
-        last_signal = user[8]  # last_signal_time
-        daily_count = user[7]  # daily_signals
-        
-        if last_signal:
-            last_date = datetime.fromisoformat(last_signal).date()
-            if last_date != today:
-                daily_count = 0
-        
-        # محدودیت بر اساس پلن
-        plan = user[2]
-        limits = {'FREE': 3, 'BASIC': 10, 'PRO': 999, 'VIP': 999}
-        limit = limits.get(plan, 3)
-        
-        if daily_count >= limit:
-            self.bot.send_message(
-                user_id,
-                f"❌ **محدودیت روزانه استفاده شد!**\n\n"
-                f"📊 پلن شما: {plan}\n"
-                f"📈 تعداد سیگنال امروز: {daily_count}/{limit}\n\n"
-                f"💎 برای دریافت سیگنال بیشتر، اشتراک خود را ارتقا دهید.",
-                parse_mode='Markdown'
-            )
-            return
-        
-        # دریافت سیگنال
-        status_msg = self.bot.send_message(user_id, "🔍 **در حال تحلیل بازار...**\n⏳ لطفاً ۳۰ ثانیه صبر کنید...", parse_mode='Markdown')
-        
-        try:
-            signals = self.engine.run_analysis()
-            
-            if not signals:
-                self.bot.edit_message_text(
-                    "❌ **سیگنالی پیدا نشد!**\n\n"
-                    "🔄 شرایط بازار برای سیگنال مناسب نیست.\n"
-                    "⏳ لطفاً ۱ ساعت دیگر امتحان کنید.",
-                    user_id, status_msg.message_id,
-                    parse_mode='Markdown'
-                )
-                return
-            
-            # ارسال سیگنال‌ها
-            count = 0
-            for signal in signals[:2]:  # حداکثر ۲ سیگنال همزمان
-                self.send_signal(user_id, signal)
-                count += 1
-                time.sleep(1)
-            
-            # به‌روزرسانی آمار
-            db.cursor.execute('''
-                UPDATE users 
-                SET daily_signals = daily_signals + ?, 
-                    last_signal_time = ?
-                WHERE user_id = ?
-            ''', (count, datetime.now().isoformat(), user_id))
-            db.conn.commit()
-            
-            self.bot.delete_message(user_id, status_msg.message_id)
-            
-        except Exception as e:
-            self.bot.edit_message_text(
-                f"❌ **خطا در دریافت سیگنال!**\n\n"
-                f"⚠️ {str(e)[:100]}\n\n"
-                f"🔄 لطفاً دوباره امتحان کنید.",
-                user_id, status_msg.message_id,
-                parse_mode='Markdown'
-            )
-    
-    def send_signal(self, user_id, signal):
-        """ارسال سیگنال با طراحی جذاب"""
-        emoji = "🟢" if signal['signal'] == 'BUY' else "🔴"
-        action = "خرید" if signal['signal'] == 'BUY' else "فروش"
-        
-        # محاسبه نسبت ریسک به سود
-        risk = abs(signal['entry'] - signal['stop_loss'])
-        reward_1 = abs(signal['take_profit_1'] - signal['entry'])
-        rr_1 = reward_1 / risk if risk > 0 else 0
-        
-        # تعیین کیفیت سیگنال
-        quality = "💎 عالی" if signal['confidence'] > 80 else "⭐ خوب" if signal['confidence'] > 65 else "🟡 متوسط"
-        
-        text = f"""
-{emoji} **سیگنال {signal['signal']} | {signal['symbol']}**
-━━━━━━━━━━━━━━━━━━━━━━━━━
-
-🎯 **اقدام:** {action} ({signal['signal']})
-📊 **قیمت ورود:** ${signal['entry']:,.2f}
-🎲 **اطمینان:** {signal['confidence']}% {quality}
-📈 **الگوریتم:** {signal.get('algorithm', 'ULTIMATE')}
-⏰ **تایم‌فریم:** {signal.get('timeframe', '4h')}
-
-🛑 **حد ضرر:** ${signal['stop_loss']:,.2f}
-🎯 **حد سود ۱:** ${signal['take_profit_1']:,.2f} (RR: {rr_1:.1f})
-🎯 **حد سود ۲:** ${signal['take_profit_2']:,.2f} (RR: {rr_1*2:.1f})
-
-📝 **دلایل سیگنال:**
-{chr(10).join(['• ' + r for r in signal.get('reasons', ['تحلیل تکنیکال'])[:5]])}
-
-📊 **آمار تکمیلی:**
-• ATR: ${signal.get('atr', 0):.2f}
-• حجم: {signal.get('volume_ratio', 1):.1f}x میانگین
-• قدرت روند: {signal.get('trend_strength', 0):.1f}%
-
-⚠️ **مدیریت ریسک:**
-• حداکثر ۲٪ سرمایه را ریسک کنید
-• حد ضرر را حتماً رعایت کنید
-• بعد از رسیدن به سود ۱، حد ضرر را به نقطه ورود ببرید
-
-📅 **زمان:** {signal['timestamp'][:16]}
-        """
-        
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("✅ ثبت معامله", callback_data=f"trade_{signal['symbol']}_{signal['entry']}"),
-            types.InlineKeyboardButton("📊 تحلیل عمیق", callback_data=f"deep_{signal['symbol']}")
-        )
-        markup.add(
-            types.InlineKeyboardButton("📈 اعتبارسنجی", callback_data=f"verify_{signal['symbol']}"),
-            types.InlineKeyboardButton("🔔 هشدار قیمت", callback_data=f"alert_{signal['symbol']}_{signal['entry']}")
-        )
-        
-        self.bot.send_message(user_id, text, parse_mode='Markdown', reply_markup=markup)
-    
-    def handle_stats(self, message):
-        user_id = message.from_user.id
-        stats = db.get_user_stats(user_id)
-        
-        if not stats:
-            self.bot.send_message(user_id, "📊 **هنوز معامله‌ای ثبت نشده است.**\n\n💡 اولین معامله را ثبت کنید!", parse_mode='Markdown')
-            return
-        
-        total, wins, losses, profit = stats
-        win_rate = (wins / total * 100) if total > 0 else 0
-        
-        # محاسبه وضعیت
-        if win_rate > 70:
-            status = "🔥 عالی! شما یک تریدر حرفه‌ای هستید!"
-            emoji = "🏆"
-        elif win_rate > 55:
-            status = "📈 خوب! با کمی تمرین بهتر می‌شوید!"
-            emoji = "⭐"
-        elif win_rate > 40:
-            status = "🔄 متوسط! نیاز به مدیریت ریسک بهتر دارد!"
-            emoji = "🔄"
+def edit_safe(chat_id, message_id, text, reply_markup=None):
+    """ویرایش ایمن پیام بدون Markdown"""
+    try:
+        if len(text) > MAX_MESSAGE_LENGTH:
+            text = text[:MAX_MESSAGE_LENGTH - 100] + "\n\n... (ادامه)"
+        return bot.edit_message_text(text, chat_id, message_id, parse_mode=None, reply_markup=reply_markup)
+    except telebot.apihelper.ApiTelegramException as e:
+        if "message is not modified" in str(e):
+            return True
+        elif "message to edit not found" in str(e):
+            return False
         else:
-            status = "📚 نیاز به تمرین بیشتر! از بخش آموزش استفاده کنید!"
-            emoji = "📚"
-        
-        # دریافت رتبه کاربر
-        db.cursor.execute('''
-            SELECT COUNT(*) + 1 FROM users 
-            WHERE (CAST(winning_trades AS FLOAT) / NULLIF(total_trades, 0) * 100) > ?
-            AND total_trades > 0
-        ''', (win_rate,))
-        rank = db.cursor.fetchone()[0] if db.cursor.fetchone() else 'نامشخص'
-        
-        text = f"""
-📊 **آمار معاملات شما** {emoji}
+            logger.warning(f"edit_safe error: {e}")
+            return False
+    except Exception as e:
+        logger.warning(f"edit_safe error: {e}")
+        return False
 
-📈 تعداد کل: {total}
-✅ معاملات برنده: {wins} ({win_rate:.1f}%)
-❌ معاملات بازنده: {losses} ({100-win_rate:.1f}%)
-💰 سود کل: {profit:+,.2f}%
+def send_markdown(chat_id, text, reply_markup=None, disable_web_page_preview=None):
+    """ارسال پیام با Markdown (با ایمن‌سازی)"""
+    try:
+        if len(text) > MAX_MESSAGE_LENGTH:
+            text = text[:MAX_MESSAGE_LENGTH - 100] + "\n\n... (ادامه)"
+        safe_text = safe_markdown(text)
+        return bot.send_message(chat_id, safe_text, parse_mode="Markdown", reply_markup=reply_markup, disable_web_page_preview=disable_web_page_preview)
+    except Exception as e:
+        # اگر خطا بود، بدون Markdown ارسال کن
+        logger.warning(f"send_markdown error, falling back to plain text: {e}")
+        return send_safe(chat_id, text, reply_markup, disable_web_page_preview)
 
-📊 **وضعیت:** {status}
-🏆 **رتبه شما:** #{rank}
+def edit_markdown(chat_id, message_id, text, reply_markup=None):
+    """ویرایش پیام با Markdown (با ایمن‌سازی)"""
+    try:
+        if len(text) > MAX_MESSAGE_LENGTH:
+            text = text[:MAX_MESSAGE_LENGTH - 100] + "\n\n... (ادامه)"
+        safe_text = safe_markdown(text)
+        return bot.edit_message_text(safe_text, chat_id, message_id, parse_mode="Markdown", reply_markup=reply_markup)
+    except telebot.apihelper.ApiTelegramException as e:
+        if "message is not modified" in str(e):
+            return True
+        elif "can't parse entities" in str(e):
+            try:
+                return bot.edit_message_text(text, chat_id, message_id, parse_mode=None, reply_markup=reply_markup)
+            except:
+                return False
+        elif "message to edit not found" in str(e):
+            return False
+        else:
+            logger.warning(f"edit_markdown error: {e}")
+            return False
+    except Exception as e:
+        logger.warning(f"edit_markdown error: {e}")
+        return False
 
-💡 **پیشنهادات:**
-{self.get_tips(win_rate, total, profit)}
-        """
-        
-        self.bot.send_message(user_id, text, parse_mode='Markdown')
+# ==================== دیتابیس با کش پیشرفته ====================
+class DatabaseManager:
+    def __init__(self):
+        self.db_path = os.path.join(DB_DIR, 'mother_bot.db')
+        self.cache = {}
+        self.cache_ttl = {}
+        self.cache_lock = threading.RLock()
+        self.write_lock = threading.RLock()
+        self.connection_pool = []
+        self.pool_size = DB_POOL_SIZE
+        self.max_connections = 50
+        self._init_pool()
+        self._init_tables()
+        self._init_indexes()
+        self._init_triggers()
+        self._cleanup_thread = threading.Thread(target=self._cleanup_worker, daemon=True)
+        self._cleanup_thread.start()
     
-    def get_tips(self, win_rate, total, profit):
-        """دریافت پیشنهادات بر اساس آمار"""
-        tips = []
-        if win_rate < 50:
-            tips.append("• روی مدیریت ریسک بیشتر کار کنید")
-            tips.append("• از حد ضرر استفاده کنید")
-        if total < 10:
-            tips.append("• با تعداد معاملات بیشتر، آمار دقیق‌تر می‌شود")
-        if profit < 0:
-            tips.append("• استراتژی خود را بازبینی کنید")
-            tips.append("• از سیگنال‌های با اطمینان بالاتر استفاده کنید")
-        if win_rate > 70 and total > 10:
-            tips.append("• عالی! استراتژی خود را ادامه دهید")
-            tips.append("• می‌توانید حجم معاملات را افزایش دهید")
-        if not tips:
-            tips.append("• ادامه دهید! در مسیر درستی هستید")
-        return "\n".join(tips)
+    def _init_pool(self):
+        for _ in range(self.pool_size):
+            conn = self._create_connection()
+            self.connection_pool.append(conn)
     
-    def handle_balance(self, message):
-        user_id = message.from_user.id
-        user = db.get_user(user_id)
-        
-        if not user:
-            return
-        
-        plan = user[2]
-        expire = user[3] if user[3] else "نامحدود"
-        balance = user[4] or 0
-        points = user[7] or 0
-        referral_count = db.get_referral_count(user_id)
-        
-        text = f"""
-💰 **کیف پول شما**
-
-💎 پلن: {plan}
-📅 اعتبار تا: {expire}
-💰 موجودی: {balance:,} تومان
-⭐ امتیاز: {points}
-🎁 تعداد رفرال: {referral_count}
-
-🎯 **ارتقا پلن:**
-• 🆓 رایگان → ۳ سیگنال/روز
-• 💰 پایه (۵۰۰K) → ۱۰ سیگنال/روز
-• 💎 حرفه‌ای (۲M) → نامحدود + VIP
-• 👑 VIP (۵M) → همه چیز + مشاوره
-
-💡 **امتیاز خود را افزایش دهید:**
-• هر معامله موفق: +۵۰ امتیاز
-• هر رفرال جدید: +۱۰۰ امتیاز
-• بازخورد: +۳۰ امتیاز
-• فعالیت روزانه: +۱۰ امتیاز
-        """
-        
-        markup = types.InlineKeyboardMarkup()
-        markup.add(
-            types.InlineKeyboardButton("🛒 خرید اشتراک", callback_data="buy_plan"),
-            types.InlineKeyboardButton("🎁 دریافت امتیاز", callback_data="earn_points")
-        )
-        
-        self.bot.send_message(user_id, text, parse_mode='Markdown', reply_markup=markup)
+    def _create_connection(self):
+        conn = sqlite3.connect(self.db_path, timeout=DB_TIMEOUT, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA wal_autocheckpoint=1000")
+        conn.execute("PRAGMA cache_size=-1048576")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA temp_store=MEMORY")
+        conn.execute("PRAGMA mmap_size=268435456")
+        conn.execute("PRAGMA page_size=4096")
+        return conn
     
-    def handle_plan(self, message):
-        user_id = message.from_user.id
-        
-        text = """
-💎 **خرید اشتراک**
-
-پلن مناسب خود را انتخاب کنید:
-
-1️⃣ **🆓 رایگان** - ۰ تومان
-• ۳ سیگنال در روز
-• دسترسی به آموزش‌های پایه
-• ۱ هشدار فعال
-
-2️⃣ **💰 پایه** - ۵۰۰,۰۰۰ تومان
-• ۱۰ سیگنال در روز
-• سیگنال‌های با دقت بالا
-• ۵ هشدار فعال
-• تحلیل عمیق‌تر
-
-3️⃣ **💎 حرفه‌ای** - ۲,۰۰۰,۰۰۰ تومان
-• سیگنال نامحدود
-• سیگنال‌های VIP
-• ۲۰ هشدار فعال
-• تحلیل چندزمانه
-• دسترسی به کانال خصوصی
-
-4️⃣ **👑 VIP** - ۵,۰۰۰,۰۰۰ تومان
-• همه امکانات
-• مشاوره اختصاصی
-• دسترسی به کانال VIP
-• پشتیبانی ۲۴/۷
-• تحلیل‌های پیشرفته‌تر
-
-🎁 **تخفیف ویژه:** با کد `TRADER20` ۲۰٪ تخفیف بگیرید!
-        """
-        
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("💰 پایه", callback_data="buy_BASIC"),
-            types.InlineKeyboardButton("💎 حرفه‌ای", callback_data="buy_PRO"),
-            types.InlineKeyboardButton("👑 VIP", callback_data="buy_VIP")
-        )
-        
-        self.bot.send_message(user_id, text, parse_mode='Markdown', reply_markup=markup)
-    
-    def handle_history(self, message):
-        user_id = message.from_user.id
-        
-        db.cursor.execute('''
-            SELECT symbol, signal_type, entry_price, exit_price, profit_loss, status, opened_at
-            FROM user_trades
-            JOIN signals ON user_trades.signal_id = signals.id
-            WHERE user_trades.user_id = ?
-            ORDER BY opened_at DESC LIMIT 15
-        ''', (user_id,))
-        
-        trades = db.cursor.fetchall()
-        
-        if not trades:
-            self.bot.send_message(user_id, "📋 **هنوز معامله‌ای ثبت نشده است.**", parse_mode='Markdown')
-            return
-        
-        text = "📋 **تاریخچه ۱۵ معامله اخیر**\n\n"
-        
-        for trade in trades:
-            symbol, signal_type, entry, exit_price, profit, status, opened_at = trades[0]
-            emoji = "🟢" if signal_type == "BUY" else "🔴"
-            status_emoji = "✅" if status == "closed" else "⏳"
-            
-            if exit_price and profit is not None:
-                profit_text = f"{profit:+,.2f}%"
-                profit_emoji = "📈" if profit > 0 else "📉"
-            else:
-                profit_text = "در حال انجام"
-                profit_emoji = "🔄"
-            
-            date = opened_at[:10] if opened_at else "نامشخص"
-            
-            text += f"{status_emoji} {profit_emoji} {emoji} {symbol} | ورود: ${entry:.2f} | سود: {profit_text} | {date}\n"
-        
-        self.bot.send_message(user_id, text, parse_mode='Markdown')
-    
-    def handle_alert(self, message):
-        user_id = message.from_user.id
-        user = db.get_user(user_id)
-        
-        if not user:
-            return
-        
-        text = """
-🔔 **تنظیم هشدار قیمتی هوشمند**
-
-📌 **روش استفاده:**
-`symboL_price`
-
-📝 **مثال‌ها:**
-• `BTCUSDT_70000` → وقتی بیت‌کوین به ۷۰,۰۰۰ دلار رسید
-• `ETHUSDT_3500_above` → وقتی اتریوم بالای ۳,۵۰۰ دلار رفت
-• `SOLUSDT_100_below` → وقتی سولانا زیر ۱۰۰ دلار رفت
-
-📊 **پلن‌های هشدار:**
-• رایگان: ۱ هشدار
-• پایه: ۵ هشدار
-• حرفه‌ای: ۲۰ هشدار
-• VIP: نامحدود
-
-💡 **پیشنهاد:** برای بهترین نتایج، هشدارها را روی سطوح کلیدی تنظیم کنید.
-        """
-        
-        self.bot.send_message(user_id, text, parse_mode='Markdown')
-    
-    def handle_help(self, message):
-        user_id = message.from_user.id
-        
-        text = """
-📚 **راهنمای کامل ربات فوق‌پیشرفته**
-
-📊 **سیگنال‌ها:**
-• /signal دریافت سیگنال جدید
-• سیگنال‌ها با ۲۰+ اندیکاتور تحلیل می‌شوند
-• دقت ۹۰٪ در شرایط عادی بازار
-
-📈 **آمار:**
-• /stats مشاهده آمار معاملات
-• /history تاریخچه معاملات
-• /leaderboard لیست برترین‌ها
-
-💰 **کیف پول:**
-• /balance مشاهده موجودی
-• /plan خرید اشتراک
-
-🔔 **هشدارها:**
-• /alert تنظیم هشدار قیمتی
-• هشدارهای هوشمند با تحلیل تکنیکال
-
-🎁 **رفرال:**
-• /referral لینک رفرال
-• با معرفی دوستان امتیاز بگیرید
-
-🏆 **امتیازات:**
-• معاملات موفق: +۵۰ امتیاز
-• رفرال: +۱۰۰ امتیاز
-• بازخورد: +۳۰ امتیاز
-
-📞 **پشتیبانی:**
-• @SupportBot
-• پاسخگویی ۲۴/۷
-        """
-        
-        self.bot.send_message(user_id, text, parse_mode='Markdown')
-    
-    def handle_feedback(self, message):
-        user_id = message.from_user.id
-        
-        text = """
-📝 **بازخورد شما بسیار ارزشمند است!**
-
-لطفاً نظر خود را در مورد ربات بنویسید:
-
-📌 **فرمت ارسال:**
-`امتیاز_نظر`
-
-📝 **مثال‌ها:**
-• `5_ربات عالی است!`
-• `4_سیگنال‌ها دقیق هستند`
-• `3_نیاز به بهبود دارد`
-
-🎁 **پاداش بازخورد:**
-• امتیاز ۵: +۵۰ امتیاز
-• امتیاز ۴: +۳۰ امتیاز
-• امتیاز ۳: +۲۰ امتیاز
-        """
-        
-        self.bot.send_message(user_id, text, parse_mode='Markdown')
-    
-    def handle_referral(self, message):
-        user_id = message.from_user.id
-        user = db.get_user(user_id)
-        
-        if not user:
-            return
-        
-        ref_code = user[7]
-        username = self.bot.get_me().username
-        referral_count = db.get_referral_count(user_id)
-        
-        # امتیاز رفرال
-        db.cursor.execute('SELECT SUM(points) FROM users WHERE referred_by = ?', (user_id,))
-        referral_points = db.cursor.fetchone()[0] or 0
-        
-        text = f"""
-🎁 **سیستم رفرال پیشرفته**
-
-🔗 لینک رفرال شما:
-`https://t.me/{username}?start={ref_code}`
-
-📊 **آمار رفرال:**
-• تعداد معرفی: {referral_count} نفر
-• امتیاز کسب‌شده: {referral_points} امتیاز
-
-💎 **پاداش‌های رفرال:**
-• هر کاربر جدید: +۱۰۰ امتیاز
-• هر کاربر اشتراک‌دار: +۵۰۰ امتیاز
-• هر ۱۰ کاربر: ۱ ماه اشتراک رایگان
-• هر ۵۰ کاربر: ۱ ماه اشتراک VIP رایگان
-
-🎯 **مراحل بعدی:**
-1. لینک را کپی کنید
-2. برای دوستان خود بفرستید
-3. امتیاز و پاداش دریافت کنید
-        """
-        
-        markup = types.InlineKeyboardMarkup()
-        markup.add(
-            types.InlineKeyboardButton("📤 اشتراک‌گذاری لینک", url=f"https://t.me/share/url?url=https://t.me/{username}?start={ref_code}&text=به ربات سیگنال‌دهی فوق‌پیشرفته بپیوندید! 🚀")
-        )
-        
-        self.bot.send_message(user_id, text, parse_mode='Markdown', reply_markup=markup)
-    
-    def handle_leaderboard(self, message):
-        user_id = message.from_user.id
-        
-        db.cursor.execute('''
-            SELECT user_id, points, username, first_name,
-                   total_trades, winning_trades,
-                   CAST(winning_trades AS FLOAT) / NULLIF(total_trades, 0) * 100 as win_rate
-            FROM users
-            WHERE total_trades > 0 AND is_banned = 0
-            ORDER BY points DESC, win_rate DESC
-            LIMIT 15
-        ''')
-        
-        leaders = db.cursor.fetchall()
-        
-        if not leaders:
-            self.bot.send_message(user_id, "🏆 **هنوز کسی در لیست برترین‌ها نیست!**\n\n💡 اولین نفر باشید!", parse_mode='Markdown')
-            return
-        
-        text = "🏆 **لیست برترین‌های ماه**\n\n"
-        
-        medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
-        
-        for i, leader in enumerate(leaders):
-            if i >= 10:
-                break
-            
-            medal = medals[i] if i < len(medals) else f"{i+1}."
-            name = leader[3] or leader[2] or f"کاربر {leader[0]}"
-            win_rate = leader[5] or 0
-            
-            text += f"{medal} {name} - ⭐{leader[1]} | {win_rate:.1f}% موفقیت | {leader[4]} معامله\n"
-        
-        text += "\n💡 **نکته:** امتیاز خود را با معاملات موفق و رفرال افزایش دهید!"
-        
-        self.bot.send_message(user_id, text, parse_mode='Markdown')
-    
-    def handle_market(self, message):
-        user_id = message.from_user.id
-        
-        text = "📊 **وضعیت لحظه‌ای بازار**\n━━━━━━━━━━━━━━━━━━━━━━\n"
-        
-        for symbol in self.engine.symbols[:6]:
-            price = self.engine.get_price(symbol)
-            if price:
-                # دریافت تغییرات ۲۴ ساعته
+    def get_connection(self):
+        with self.cache_lock:
+            if self.connection_pool:
+                conn = self.connection_pool.pop()
                 try:
-                    url = f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}"
-                    response = requests.get(url, timeout=5)
-                    data = response.json()
-                    change = float(data['priceChangePercent'])
-                    volume = float(data['volume'])
-                    
-                    change_emoji = "📈" if change > 0 else "📉" if change < 0 else "➖"
-                    text += f"{symbol}: ${price:,.2f} {change_emoji} {change:+.2f}% | حجم: {volume:,.0f}\n"
+                    conn.execute("SELECT 1").fetchone()
+                    return conn
                 except:
-                    text += f"{symbol}: ${price:,.2f}\n"
+                    conn.close()
+                    return self._create_connection()
+            return self._create_connection()
+    
+    def return_connection(self, conn):
+        with self.cache_lock:
+            if len(self.connection_pool) < self.pool_size:
+                try:
+                    self.connection_pool.append(conn)
+                except:
+                    conn.close()
             else:
-                text += f"{symbol}: ❌ خطا\n"
-        
-        # اضافه کردن Fear & Greed Index
+                conn.close()
+    
+    @contextmanager
+    def get_db(self):
+        conn = self.get_connection()
         try:
-            response = requests.get("https://api.alternative.me/fng/", timeout=5)
-            data = response.json()
-            fng_value = data['data'][0]['value']
-            fng_classification = data['data'][0]['value_classification']
-            
-            text += f"\n📊 **شاخص ترس و طمع:** {fng_value} - {fng_classification}"
+            yield conn
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            self.return_connection(conn)
+    
+    def _init_tables(self):
+        with self.get_db() as conn:
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id INTEGER PRIMARY KEY,
+                    username TEXT,
+                    first_name TEXT,
+                    last_name TEXT,
+                    referral_code TEXT UNIQUE,
+                    referred_by INTEGER,
+                    balance INTEGER DEFAULT 0,
+                    total_earned INTEGER DEFAULT 0,
+                    active_subscription INTEGER DEFAULT 0,
+                    subscription_expire TIMESTAMP,
+                    subscription_id INTEGER,
+                    total_bots INTEGER DEFAULT 0,
+                    created_at TIMESTAMP,
+                    last_seen TIMESTAMP,
+                    is_locked INTEGER DEFAULT 0,
+                    lock_reason TEXT
+                )
+            ''')
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS subscriptions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    subscription_code TEXT UNIQUE,
+                    status TEXT DEFAULT 'pending',
+                    amount INTEGER,
+                    payment_method TEXT DEFAULT 'card',
+                    payment_url TEXT,
+                    authority TEXT,
+                    created_at TIMESTAMP,
+                    paid_at TIMESTAMP,
+                    expires_at TIMESTAMP,
+                    auto_renew INTEGER DEFAULT 0,
+                    is_verified INTEGER DEFAULT 0
+                )
+            ''')
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS pending_files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    subscription_id INTEGER,
+                    file_path TEXT,
+                    file_name TEXT,
+                    file_hash TEXT,
+                    status TEXT DEFAULT 'pending',
+                    submitted_at TIMESTAMP,
+                    reviewed_at TIMESTAMP,
+                    is_active INTEGER DEFAULT 1,
+                    is_ready INTEGER DEFAULT 0,
+                    ready_file_id INTEGER DEFAULT 0
+                )
+            ''')
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS servers (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT,
+                    ip TEXT UNIQUE,
+                    port INTEGER,
+                    username TEXT,
+                    password TEXT,
+                    status TEXT DEFAULT 'active',
+                    current_load INTEGER DEFAULT 0,
+                    max_load INTEGER DEFAULT 50,
+                    created_at TIMESTAMP,
+                    last_heartbeat TIMESTAMP,
+                    installed_libs TEXT,
+                    is_active INTEGER DEFAULT 1,
+                    cpu_usage INTEGER DEFAULT 0,
+                    memory_usage INTEGER DEFAULT 0
+                )
+            ''')
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS bots (
+                    id TEXT PRIMARY KEY,
+                    user_id INTEGER,
+                    subscription_id INTEGER,
+                    server_id INTEGER,
+                    token TEXT,
+                    name TEXT,
+                    username TEXT,
+                    file_path TEXT,
+                    pid INTEGER,
+                    status TEXT DEFAULT 'stopped',
+                    created_at TIMESTAMP,
+                    expires_at TIMESTAMP,
+                    requirements TEXT,
+                    start_count INTEGER DEFAULT 0,
+                    last_start TIMESTAMP,
+                    is_deleted INTEGER DEFAULT 0,
+                    bot_type TEXT DEFAULT 'custom'
+                )
+            ''')
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS ready_files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT,
+                    file_name TEXT,
+                    file_path TEXT,
+                    description TEXT,
+                    price INTEGER DEFAULT 3000000,
+                    created_at TIMESTAMP,
+                    is_active INTEGER DEFAULT 1
+                )
+            ''')
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS receipts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    subscription_id INTEGER,
+                    amount INTEGER,
+                    receipt_path TEXT,
+                    status TEXT DEFAULT 'pending',
+                    payment_code TEXT UNIQUE,
+                    created_at TIMESTAMP,
+                    is_verified INTEGER DEFAULT 0
+                )
+            ''')
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS withdraw_requests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    amount INTEGER,
+                    card_number TEXT,
+                    status TEXT DEFAULT 'pending',
+                    created_at TIMESTAMP,
+                    processed_at TIMESTAMP,
+                    is_verified INTEGER DEFAULT 0
+                )
+            ''')
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS broadcast_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    admin_id INTEGER,
+                    message_text TEXT,
+                    sent_count INTEGER DEFAULT 0,
+                    created_at TIMESTAMP,
+                    is_active INTEGER DEFAULT 1
+                )
+            ''')
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS build_queue (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id INTEGER,
+                    user_id INTEGER,
+                    status TEXT DEFAULT 'pending',
+                    created_at TIMESTAMP,
+                    completed_at TIMESTAMP,
+                    error_message TEXT,
+                    bot_name TEXT,
+                    bot_username TEXT,
+                    is_active INTEGER DEFAULT 1
+                )
+            ''')
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS installed_libraries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    library_name TEXT UNIQUE,
+                    installed_at TIMESTAMP,
+                    server_id INTEGER,
+                    status TEXT DEFAULT 'installed',
+                    version TEXT
+                )
+            ''')
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS texts (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )
+            ''')
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS config (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )
+            ''')
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS referral_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    referrer_id INTEGER,
+                    referred_id INTEGER,
+                    status TEXT DEFAULT 'registered',
+                    created_at TIMESTAMP,
+                    subscription_bought_at TIMESTAMP,
+                    is_active INTEGER DEFAULT 1,
+                    bonus_amount INTEGER DEFAULT 0,
+                    is_paid INTEGER DEFAULT 0
+                )
+            ''')
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS transactions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    amount INTEGER,
+                    type TEXT,
+                    description TEXT,
+                    created_at TIMESTAMP,
+                    is_verified INTEGER DEFAULT 1,
+                    reference_id TEXT
+                )
+            ''')
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS backups (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_path TEXT,
+                    created_at TIMESTAMP,
+                    size INTEGER,
+                    is_active INTEGER DEFAULT 1
+                )
+            ''')
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS system_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    level TEXT,
+                    message TEXT,
+                    created_at TIMESTAMP,
+                    source TEXT
+                )
+            ''')
+            conn.commit()
+    
+    def _init_indexes(self):
+        try:
+            with self.get_db() as conn:
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_users_referral_code ON users(referral_code)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_users_referred_by ON users(referred_by)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_users_active_sub ON users(active_subscription)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_users_balance ON users(balance)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_bots_user_id ON bots(user_id)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_bots_status ON bots(status)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_bots_server_id ON bots(server_id)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_bots_created_at ON bots(created_at)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_subscriptions_user_id ON subscriptions(user_id)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_subscriptions_status ON subscriptions(status)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_pending_files_user_id ON pending_files(user_id)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_pending_files_status ON pending_files(status)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_withdraw_requests_user_id ON withdraw_requests(user_id)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_withdraw_requests_status ON withdraw_requests(status)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_referral_logs_referrer ON referral_logs(referrer_id)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_referral_logs_referred ON referral_logs(referred_id)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_transactions_created_at ON transactions(created_at)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_servers_status ON servers(status)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_build_queue_status ON build_queue(status)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_ready_files_is_active ON ready_files(is_active)')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_pending_files_is_ready ON pending_files(is_ready)')
+                conn.commit()
+        except Exception as e:
+            print(f"⚠️ خطا در ایجاد ایندکس‌ها: {e}")
+    
+    def _init_triggers(self):
+        try:
+            with self.get_db() as conn:
+                conn.execute('''
+                    CREATE TRIGGER IF NOT EXISTS update_user_last_seen
+                    AFTER UPDATE ON users
+                    WHEN NEW.last_seen IS NULL
+                    BEGIN
+                        UPDATE users SET last_seen = CURRENT_TIMESTAMP WHERE user_id = NEW.user_id;
+                    END
+                ''')
+                conn.commit()
+        except Exception as e:
+            print(f"⚠️ خطا در ایجاد تریگرها: {e}")
+    
+    def _cleanup_worker(self):
+        while True:
+            try:
+                time.sleep(3600)
+                with self.get_db() as conn:
+                    conn.execute("VACUUM")
+                    conn.execute("DELETE FROM build_queue WHERE is_active = 0 AND created_at < datetime('now', '-7 days')")
+                    conn.execute("DELETE FROM pending_files WHERE is_active = 0 AND submitted_at < datetime('now', '-30 days')")
+                    conn.execute("DELETE FROM system_logs WHERE created_at < datetime('now', '-90 days')")
+                    conn.commit()
+                with self.cache_lock:
+                    now = time.time()
+                    for key in list(self.cache_ttl.keys()):
+                        if self.cache_ttl[key] < now:
+                            del self.cache[key]
+                            del self.cache_ttl[key]
+                gc.collect()
+                logger.info("🧹 پاکسازی و بهینه‌سازی دیتابیس انجام شد")
+            except Exception as e:
+                logger.error(f"Cleanup error: {e}")
+    
+    def get_cached(self, key, max_age=60):
+        with self.cache_lock:
+            if key in self.cache and self.cache_ttl.get(key, 0) > time.time():
+                return self.cache[key]
+            return None
+    
+    def set_cached(self, key, value, ttl=60):
+        with self.cache_lock:
+            if len(self.cache) > CACHE_SIZE:
+                oldest = min(self.cache_ttl, key=self.cache_ttl.get)
+                del self.cache[oldest]
+                del self.cache_ttl[oldest]
+            self.cache[key] = value
+            self.cache_ttl[key] = time.time() + ttl
+
+db_manager = DatabaseManager()
+
+@contextmanager
+def get_db():
+    with db_manager.get_db() as conn:
+        yield conn
+
+# ==================== لیست کتابخانه‌های پرکاربرد ====================
+POPULAR_LIBRARIES = [
+    "pyTelegramBotAPI", "python-telegram-bot", "telethon", "aiogram", "pyrogram",
+    "requests", "aiohttp", "httpx", "urllib3", "websocket-client", "websockets",
+    "numpy", "pandas", "scipy", "scikit-learn", "statsmodels", "sympy", "networkx", "polars", "dask",
+    "nltk", "spacy", "transformers", "torch", "tensorflow", "keras",
+    "matplotlib", "seaborn", "plotly", "Pillow", "opencv-python", "imageio", "scikit-image", "bokeh", "dash", "altair",
+    "beautifulsoup4", "lxml", "selenium", "scrapy", "requests-html", "mechanize",
+    "sqlalchemy", "pymongo", "redis", "psycopg2-binary", "asyncpg", "aiosqlite", "peewee", "mysql-connector-python", "pymysql",
+    "celery", "pika", "rq", "dramatiq",
+    "cryptography", "PyJWT", "python-jose", "passlib", "bcrypt", "oauthlib", "authlib", "pycryptodome",
+    "python-dotenv", "pyyaml", "loguru", "rich", "tqdm", "click", "colorama", "cachetools", "lru-dict", "faker",
+    "python-dateutil", "pytz", "arrow", "pendulum", "humanize", "emoji",
+    "jdatetime", "persiantools", "hazm", "persian-validator",
+    "youtube-dl", "yt-dlp", "pytube", "spotipy", "moviepy", "pydub", "SpeechRecognition", "pyttsx3", "ffmpeg-python", "librosa", "pyaudio",
+    "openpyxl", "xlrd", "xlwt", "xlsxwriter", "reportlab", "pdfkit", "weasyprint", "tabulate",
+    "qrcode", "pyqrcode", "python-barcode",
+    "flask", "django", "fastapi", "uvicorn", "tornado", "quart", "sanic",
+    "paramiko", "scp", "fabric", "netmiko",
+    "jinja2", "markdown", "playwright", "pyautogui", "pyperclip", "python-magic", "chardet", "ftfy", "unidecode"
+]
+
+STD_LIBRARIES = {
+    'os', 'sys', 'time', 'datetime', 'json', 're', 'math', 'random',
+    'string', 'collections', 'itertools', 'functools', 'typing',
+    'argparse', 'logging', 'socket', 'ssl', 'hashlib', 'base64',
+    'urllib', 'http', 'xml', 'html', 'csv', 'sqlite3', 'pickle',
+    'copy', 'glob', 'gzip', 'zipfile', 'tarfile', 'shutil', 'tempfile',
+    'threading', 'multiprocessing', 'subprocess', 'signal', 'getpass',
+    'platform', 'inspect', 'traceback', 'warnings', 'contextlib',
+    'abc', 'enum', 'struct', 'array', 'queue', 'heapq', 'bisect',
+    'calendar', 'uuid', 'secrets', 'statistics', 'dataclasses',
+    'asyncio', 'concurrent', 'unittest', 'doctest', 'pdb',
+    'ctypes', 'gc', 'sysconfig', 'builtins', '__future__', '__main__',
+    'pathlib', 'io', 'codecs', 'tokenize', 'keyword', 'ast', 'symtable',
+    'pprint', 'reprlib', 'weakref', 'copyreg', 'shelve',
+    'dbm', 'cProfile', 'profile', 'pstats', 'filecmp', 'linecache',
+    'textwrap', 'stringprep', 'readline', 'rlcompleter', 'telnetlib',
+    'curses', 'pty', 'tty', 'fcntl', 'pipes', 'posix', 'grp', 'pwd',
+    'spwd', 'resource', 'nis', 'termios', 'tty', 'syslog'
+}
+
+# ==================== مپینگ کتابخانه‌ها ====================
+LIBRARY_MAPPING = {
+    "telebot": "pyTelegramBotAPI",
+    "pyTelegramBotAPI": "pyTelegramBotAPI",
+    "telethon": "telethon",
+    "aiogram": "aiogram",
+    "pyrogram": "pyrogram",
+    "python-telegram-bot": "python-telegram-bot",
+    "telegram": "python-telegram-bot",
+    "telegram.ext": "python-telegram-bot",
+    "telegram.bot": "python-telegram-bot",
+    "requests": "requests",
+    "aiohttp": "aiohttp",
+    "httpx": "httpx",
+    "urllib3": "urllib3",
+    "websocket": "websocket-client",
+    "websockets": "websockets",
+    "numpy": "numpy",
+    "pandas": "pandas",
+    "scipy": "scipy",
+    "scikit-learn": "scikit-learn",
+    "sklearn": "scikit-learn",
+    "statsmodels": "statsmodels",
+    "sympy": "sympy",
+    "networkx": "networkx",
+    "nltk": "nltk",
+    "spacy": "spacy",
+    "transformers": "transformers",
+    "torch": "torch",
+    "tensorflow": "tensorflow",
+    "keras": "keras",
+    "polars": "polars",
+    "dask": "dask",
+    "matplotlib": "matplotlib",
+    "seaborn": "seaborn",
+    "plotly": "plotly",
+    "PIL": "Pillow",
+    "Pillow": "Pillow",
+    "opencv-python": "opencv-python",
+    "cv2": "opencv-python",
+    "imageio": "imageio",
+    "scikit-image": "scikit-image",
+    "bokeh": "bokeh",
+    "dash": "dash",
+    "altair": "altair",
+    "beautifulsoup4": "beautifulsoup4",
+    "bs4": "beautifulsoup4",
+    "lxml": "lxml",
+    "selenium": "selenium",
+    "scrapy": "scrapy",
+    "requests-html": "requests-html",
+    "mechanize": "mechanize",
+    "sqlalchemy": "sqlalchemy",
+    "pymongo": "pymongo",
+    "redis": "redis",
+    "psycopg2": "psycopg2-binary",
+    "psycopg2-binary": "psycopg2-binary",
+    "asyncpg": "asyncpg",
+    "aiosqlite": "aiosqlite",
+    "peewee": "peewee",
+    "mysql-connector-python": "mysql-connector-python",
+    "pymysql": "pymysql",
+    "celery": "celery",
+    "pika": "pika",
+    "rq": "rq",
+    "dramatiq": "dramatiq",
+    "cryptography": "cryptography",
+    "PyJWT": "PyJWT",
+    "jwt": "PyJWT",
+    "passlib": "passlib",
+    "bcrypt": "bcrypt",
+    "python-jose": "python-jose",
+    "oauthlib": "oauthlib",
+    "authlib": "authlib",
+    "pycryptodome": "pycryptodome",
+    "python-dotenv": "python-dotenv",
+    "pyyaml": "pyyaml",
+    "loguru": "loguru",
+    "rich": "rich",
+    "tqdm": "tqdm",
+    "click": "click",
+    "colorama": "colorama",
+    "cachetools": "cachetools",
+    "lru-dict": "lru-dict",
+    "faker": "faker",
+    "python-dateutil": "python-dateutil",
+    "pytz": "pytz",
+    "arrow": "arrow",
+    "pendulum": "pendulum",
+    "humanize": "humanize",
+    "emoji": "emoji",
+    "jdatetime": "jdatetime",
+    "persiantools": "persiantools",
+    "hazm": "hazm",
+    "persian-validator": "persian-validator",
+    "youtube-dl": "youtube-dl",
+    "yt-dlp": "yt-dlp",
+    "pytube": "pytube",
+    "spotipy": "spotipy",
+    "moviepy": "moviepy",
+    "pydub": "pydub",
+    "SpeechRecognition": "SpeechRecognition",
+    "pyttsx3": "pyttsx3",
+    "ffmpeg-python": "ffmpeg-python",
+    "librosa": "librosa",
+    "pyaudio": "pyaudio",
+    "openpyxl": "openpyxl",
+    "xlrd": "xlrd",
+    "xlwt": "xlwt",
+    "xlsxwriter": "xlsxwriter",
+    "reportlab": "reportlab",
+    "pdfkit": "pdfkit",
+    "weasyprint": "weasyprint",
+    "tabulate": "tabulate",
+    "qrcode": "qrcode",
+    "pyqrcode": "pyqrcode",
+    "python-barcode": "python-barcode",
+    "flask": "flask",
+    "django": "django",
+    "fastapi": "fastapi",
+    "uvicorn": "uvicorn",
+    "tornado": "tornado",
+    "quart": "quart",
+    "sanic": "sanic",
+    "paramiko": "paramiko",
+    "scp": "scp",
+    "fabric": "fabric",
+    "netmiko": "netmiko",
+    "jinja2": "jinja2",
+    "markdown": "markdown",
+    "playwright": "playwright",
+    "pyautogui": "pyautogui",
+    "pyperclip": "pyperclip",
+    "python-magic": "python-magic",
+    "chardet": "chardet",
+    "ftfy": "ftfy",
+    "unidecode": "unidecode",
+}
+
+# ==================== تنظیمات متون ====================
+class Texts:
+    def __init__(self):
+        self.welcome_text = """🚀 به ربات سازنده ربات حرفه‌ای خوش آمدید!
+
+👤 کاربر عزیز، شما می‌توانید با خرید اشتراک، ربات تلگرامی خود را بسازید.
+
+📌 نحوه کار:
+1️⃣ خرید اشتراک (۳,۰۰۰,۰۰۰ تومان)
+2️⃣ انتخاب نوع ساخت (فایل شخصی یا فایل آماده)
+3️⃣ پس از تایید، ربات ساخته می‌شود
+
+💰 هر اشتراک = ۱ ربات (به مدت ۳۰ روز)
+🎁 سیستم رفرال: ۱۰٪ از درآمد دوستانتان به شما تعلق می‌گیرد
+
+@{} - پشتیبانی"""
+        
+        self.subscription_text = """💰 **خرید اشتراک**
+
+💳 شماره کارت: {}
+👤 به نام: {}
+
+📌 مراحل:
+1️⃣ مبلغ ۳,۰۰۰,۰۰۰ تومان را به کارت بالا واریز کنید
+2️⃣ کد زیر را در رسید یادداشت کنید
+3️⃣ تصویر فیش را ارسال کنید
+
+🆔 کد پیگیری: `{}`
+💰 مبلغ: {} تومان
+⏰ مدت اشتراک: {} روز
+
+🎁 پاداش رفرال: ۱۰%"""
+        
+        self.guide_text = """📚 **راهنمای کامل**
+
+1️⃣ **خرید اشتراک:**
+   • روی دکمه خرید اشتراک کلیک کنید
+   • مبلغ ۳,۰۰۰,۰۰۰ تومان را واریز کنید
+   • فیش را ارسال کنید
+
+2️⃣ **سیستم رفرال:**
+   • لینک اختصاصی خود را به دوستان بدهید
+   • از هر خرید دوستان، ۱۰٪ به حساب شما واریز می‌شود
+   • پس از رسیدن موجودی به ۲,۰۰۰,۰۰۰ تومان می‌توانید برداشت کنید
+
+3️⃣ **ساخت ربات:**
+   • گزینه «ساخت ربات جدید» را انتخاب کنید
+   • می‌توانید فایل شخصی ارسال کنید یا از فایل‌های آماده استفاده کنید
+
+4️⃣ **مدیریت ربات:**
+   • ربات شما به مدت ۳۰ روز فعال است
+   • می‌توانید ربات را فعال/غیرفعال یا حذف کنید
+
+@{} - پشتیبانی"""
+    
+    def load_from_db(self):
+        try:
+            with get_db() as conn:
+                data = conn.execute("SELECT key, value FROM texts").fetchall()
+                for row in data:
+                    if row['key'] == 'welcome_text':
+                        self.welcome_text = row['value']
+                    elif row['key'] == 'subscription_text':
+                        self.subscription_text = row['value']
+                    elif row['key'] == 'guide_text':
+                        self.guide_text = row['value']
         except:
             pass
-        
-        self.bot.send_message(user_id, text, parse_mode='Markdown')
     
-    def handle_text(self, message):
-        """مدیریت پیام‌های متنی"""
-        user_id = message.from_user.id
-        text = message.text
-        
-        # منوی اصلی
-        if text == "📊 سیگنال جدید":
-            self.handle_signal(message)
-        elif text == "📈 آمار من":
-            self.handle_stats(message)
-        elif text == "💰 کیف پول":
-            self.handle_balance(message)
-        elif text == "📚 راهنما":
-            self.handle_help(message)
-        elif text == "🎯 خرید اشتراک":
-            self.handle_plan(message)
-        elif text == "📋 تاریخچه":
-            self.handle_history(message)
-        elif text == "🔔 تنظیم هشدار":
-            self.handle_alert(message)
-        elif text == "🏆 امتیازات":
-            self.handle_leaderboard(message)
-        elif text == "🎁 رفرال":
-            self.handle_referral(message)
-        elif text == "📞 پشتیبانی":
-            self.bot.send_message(
-                user_id,
-                "📞 **پشتیبانی ۲۴/۷**\n\n"
-                "• @SupportBot\n"
-                "• پاسخگویی کمتر از ۱ ساعت\n"
-                "• پشتیبانی تلگرامی و ایمیل\n\n"
-                "💡 **سوالات متداول:**\n"
-                "1. چگونه سیگنال بگیرم؟ → /signal\n"
-                "2. چگونه اشتراک بخرم؟ → /plan\n"
-                "3. خطا در سیگنال؟ → /feedback",
-                parse_mode='Markdown'
-            )
-        elif text == "📊 بازار لحظه‌ای":
-            self.handle_market(message)
-        elif text == "👑 پنل ادمین":
-            self.handle_admin(message)
-        
-        # تشخیص هشدار قیمتی
-        elif '_' in text and any(sym in text for sym in self.engine.symbols):
-            self.process_alert(message)
-        
-        # تشخیص بازخورد
-        elif text.startswith(('1_', '2_', '3_', '4_', '5_')):
-            self.process_feedback(message)
+    def save_to_db(self):
+        with get_db() as conn:
+            conn.execute("INSERT OR REPLACE INTO texts (key, value) VALUES (?, ?)", ('welcome_text', self.welcome_text))
+            conn.execute("INSERT OR REPLACE INTO texts (key, value) VALUES (?, ?)", ('subscription_text', self.subscription_text))
+            conn.execute("INSERT OR REPLACE INTO texts (key, value) VALUES (?, ?)", ('guide_text', self.guide_text))
+            conn.commit()
+
+texts = Texts()
+
+# ==================== تنظیمات ====================
+class Config:
+    def __init__(self):
+        self.price = 3000000
+        self.card_number = "5892101187322777"
+        self.card_holder = "مرتضی نیکخو خنجری"
+        self.subscription_days = 30
+        self.zarinpal_merchant = ""
+        self.zarinpal_callback = ""
+        self.auto_install_libs = True
+        self.referral_bonus = 10
+        self.min_withdraw = 2000000
+        self.min_deposit = 3000000
     
-    def process_alert(self, message):
-        """پردازش هشدار قیمتی"""
-        user_id = message.from_user.id
-        text = message.text
-        
+    def load_from_db(self):
         try:
-            parts = text.split('_')
-            if len(parts) >= 2:
-                symbol = parts[0].upper()
-                target = float(parts[1])
-                condition = parts[2] if len(parts) > 2 else 'equal'
+            with get_db() as conn:
+                config_data = conn.execute("SELECT key, value FROM config").fetchall()
+                for row in config_data:
+                    if row['key'] == 'price':
+                        self.price = int(row['value'])
+                    elif row['key'] == 'card_number':
+                        self.card_number = row['value']
+                    elif row['key'] == 'card_holder':
+                        self.card_holder = row['value']
+                    elif row['key'] == 'subscription_days':
+                        self.subscription_days = int(row['value'])
+                    elif row['key'] == 'zarinpal_merchant':
+                        self.zarinpal_merchant = row['value']
+                    elif row['key'] == 'zarinpal_callback':
+                        self.zarinpal_callback = row['value']
+                    elif row['key'] == 'auto_install_libs':
+                        self.auto_install_libs = row['value'] == 'True'
+                    elif row['key'] == 'referral_bonus':
+                        self.referral_bonus = int(row['value'])
+                    elif row['key'] == 'min_withdraw':
+                        self.min_withdraw = int(row['value'])
+                    elif row['key'] == 'min_deposit':
+                        self.min_deposit = int(row['value'])
+        except:
+            pass
+    
+    def save_to_db(self):
+        with get_db() as conn:
+            conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", ('price', str(self.price)))
+            conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", ('card_number', self.card_number))
+            conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", ('card_holder', self.card_holder))
+            conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", ('subscription_days', str(self.subscription_days)))
+            conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", ('zarinpal_merchant', self.zarinpal_merchant))
+            conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", ('zarinpal_callback', self.zarinpal_callback))
+            conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", ('auto_install_libs', str(self.auto_install_libs)))
+            conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", ('referral_bonus', str(self.referral_bonus)))
+            conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", ('min_withdraw', str(self.min_withdraw)))
+            conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", ('min_deposit', str(self.min_deposit)))
+            conn.commit()
+
+config = Config()
+
+# ==================== لاگینگ ====================
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        RotatingFileHandler(os.path.join(LOGS_DIR, 'mother_bot.log'), maxBytes=10485760, backupCount=50),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# ==================== توابع دیتابیس ====================
+
+def generate_referral_code(user_id):
+    return hashlib.md5(f"REFERRAL_{user_id}_2024_MASTER".encode()).hexdigest()[:10].upper()
+
+def create_user(user_id, username, first_name, last_name, referred_by=None):
+    try:
+        with get_db() as conn:
+            now = datetime.now().isoformat()
+            referral_code = generate_referral_code(user_id)
+            existing = conn.execute('SELECT user_id FROM users WHERE user_id = ?', (user_id,)).fetchone()
+            if existing:
+                return True
+            if referred_by == user_id:
+                referred_by = None
+            conn.execute('INSERT INTO users (user_id, username, first_name, last_name, referral_code, referred_by, created_at, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', 
+                        (user_id, username, first_name, last_name, referral_code, referred_by, now, now))
+            conn.commit()
+            
+            if referred_by and referred_by != user_id:
+                conn.execute('INSERT INTO referral_logs (referrer_id, referred_id, status, created_at) VALUES (?, ?, ?, ?)', 
+                           (referred_by, user_id, 'registered', now))
+                conn.commit()
                 
-                # ذخیره در دیتابیس
-                db.cursor.execute('''
-                    INSERT INTO alerts (user_id, symbol, target_price, condition, created_at)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (user_id, symbol, target, condition, datetime.now().isoformat()))
-                db.conn.commit()
+                try:
+                    send_safe(referred_by, 
+                        f"🎉 یک کاربر جدید با رفرال شما وارد شد!\n\n"
+                        f"👤 نام: {first_name}\n"
+                        f"🆔 آیدی: {user_id}\n"
+                        f"💰 اگر اشتراک بخرد، {config.referral_bonus}% پاداش دریافت می‌کنید."
+                    )
+                except:
+                    pass
                 
-                self.bot.send_message(
-                    user_id,
-                    f"✅ **هشدار قیمتی ثبت شد!**\n\n"
-                    f"📊 نماد: {symbol}\n"
-                    f"🎯 قیمت هدف: ${target:,.2f}\n"
-                    f"📌 شرط: {condition}\n\n"
-                    f"🔔 وقتی قیمت به محدوده مورد نظر رسید، به شما اطلاع می‌دهم.",
-                    parse_mode='Markdown'
-                )
-            else:
-                self.bot.send_message(
-                    user_id,
-                    "❌ **فرمت اشتباه!**\n\n"
-                    "📌 فرمت صحیح:\n"
-                    "`BTCUSDT_70000`\n"
-                    "`ETHUSDT_3500_above`",
-                    parse_mode='Markdown'
-                )
-        except Exception as e:
-            self.bot.send_message(
-                user_id,
-                f"❌ **خطا در ثبت هشدار!**\n\n"
-                f"⚠️ {str(e)[:100]}\n\n"
-                f"📌 مثال: `BTCUSDT_70000`",
-                parse_mode='Markdown'
-            )
-    
-    def process_feedback(self, message):
-        """پردازش بازخورد"""
-        user_id = message.from_user.id
-        text = message.text
-        
-        try:
-            parts = text.split('_', 1)
-            rating = int(parts[0])
-            feedback_text = parts[1] if len(parts) > 1 else "بدون توضیح"
+                try:
+                    send_safe(user_id,
+                        f"🎉 شما با لینک رفرال وارد شدید!\n\n"
+                        f"اگر اشتراک بخرید، دوست شما {config.referral_bonus}% پاداش می‌گیرد.\n"
+                        f"🎁 لینک رفرال خودتان: {referral_code}"
+                    )
+                except:
+                    pass
             
-            db.add_feedback(user_id, feedback_text, rating)
-            
-            # پاداش امتیاز
-            bonus = {5: 50, 4: 30, 3: 20, 2: 10, 1: 5}.get(rating, 10)
-            db.cursor.execute('UPDATE users SET points = points + ? WHERE user_id = ?', (bonus, user_id))
-            db.conn.commit()
-            
-            self.bot.send_message(
-                user_id,
-                f"✅ **بازخورد شما ثبت شد!**\n\n"
-                f"⭐ امتیاز: {rating}/5\n"
-                f"📝 نظر: {feedback_text}\n"
-                f"🎁 پاداش: +{bonus} امتیاز\n\n"
-                f"🙏 از بازخورد شما سپاسگزاریم!",
-                parse_mode='Markdown'
-            )
-        except Exception as e:
-            self.bot.send_message(
-                user_id,
-                f"❌ **خطا در ثبت بازخورد!**\n\n"
-                f"📌 فرمت صحیح: `5_نظر شما`",
-                parse_mode='Markdown'
-            )
+            return True
+    except Exception as e:
+        logger.error(f"create_user error: {e}")
+        return False
+
+def get_user(user_id):
+    cache_key = f"user_{user_id}"
+    cached = db_manager.get_cached(cache_key)
+    if cached:
+        return cached
     
-    # ================ پنل مدیریت فوق‌پیشرفته ================
+    try:
+        with get_db() as conn:
+            user = conn.execute('SELECT * FROM users WHERE user_id = ?', (user_id,)).fetchone()
+            result = dict(user) if user else None
+            if result:
+                db_manager.set_cached(cache_key, result, 60)
+            return result
+    except:
+        return None
+
+def get_all_users():
+    try:
+        with get_db() as conn:
+            users = conn.execute('SELECT user_id FROM users WHERE is_locked = 0').fetchall()
+            return [u['user_id'] for u in users]
+    except:
+        return []
+
+def has_active_subscription(user_id):
+    cache_key = f"sub_{user_id}"
+    cached = db_manager.get_cached(cache_key)
+    if cached is not None:
+        return cached
     
-    def setup_admin_panel(self):
-        """تنظیم پنل مدیریت"""
+    try:
+        with get_db() as conn:
+            user = conn.execute('SELECT active_subscription, subscription_expire FROM users WHERE user_id = ?', (user_id,)).fetchone()
+            if user and user['active_subscription'] == 1:
+                if user['subscription_expire']:
+                    expire = datetime.fromisoformat(user['subscription_expire'])
+                    if expire > datetime.now():
+                        db_manager.set_cached(cache_key, True, 30)
+                        return True
+                    else:
+                        conn.execute('UPDATE users SET active_subscription = 0 WHERE user_id = ?', (user_id,))
+                        conn.commit()
+                        db_manager.set_cached(cache_key, False, 30)
+                        return False
+                db_manager.set_cached(cache_key, True, 30)
+                return True
+            db_manager.set_cached(cache_key, False, 30)
+            return False
+    except:
+        return False
+
+def get_subscription_days_left(user_id):
+    try:
+        with get_db() as conn:
+            user = conn.execute('SELECT subscription_expire FROM users WHERE user_id = ?', (user_id,)).fetchone()
+            if user and user['subscription_expire']:
+                expire = datetime.fromisoformat(user['subscription_expire'])
+                return max(0, (expire - datetime.now()).days)
+            return 0
+    except:
+        return 0
+
+def create_subscription(user_id, amount, payment_method='card'):
+    try:
+        with get_db() as conn:
+            subscription_code = hashlib.md5(f"{user_id}_{time.time()}_{random.randint(1000,9999)}".encode()).hexdigest()[:16].upper()
+            now = datetime.now().isoformat()
+            expires_at = (datetime.now() + timedelta(days=config.subscription_days)).isoformat()
+            conn.execute('INSERT INTO subscriptions (user_id, subscription_code, amount, payment_method, created_at, expires_at, status, is_verified) VALUES (?, ?, ?, ?, ?, ?, "pending", 0)', 
+                        (user_id, subscription_code, amount, payment_method, now, expires_at))
+            conn.commit()
+            sub_id = conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+            return sub_id, subscription_code
+    except:
+        return None, None
+
+def activate_subscription(subscription_id, user_id, amount):
+    try:
+        with get_db() as conn:
+            expires_at = (datetime.now() + timedelta(days=config.subscription_days)).isoformat()
+            conn.execute('UPDATE users SET active_subscription = 0 WHERE user_id = ?', (user_id,))
+            conn.execute('UPDATE users SET active_subscription = 1, subscription_expire = ?, subscription_id = ? WHERE user_id = ?', 
+                        (expires_at, subscription_id, user_id))
+            conn.execute('UPDATE subscriptions SET status = "active", paid_at = ?, is_verified = 1 WHERE id = ?', 
+                        (datetime.now().isoformat(), subscription_id))
+            
+            user = conn.execute('SELECT referred_by FROM users WHERE user_id = ?', (user_id,)).fetchone()
+            if user and user['referred_by']:
+                bonus = int(amount * (config.referral_bonus / 100))
+                conn.execute('UPDATE users SET balance = balance + ?, total_earned = total_earned + ? WHERE user_id = ?', 
+                           (bonus, bonus, user['referred_by']))
+                conn.execute('UPDATE referral_logs SET status = "subscribed", subscription_bought_at = ?, bonus_amount = ?, is_paid = 1 WHERE referrer_id = ? AND referred_id = ? AND status = "registered"', 
+                           (datetime.now().isoformat(), bonus, user['referred_by'], user_id))
+                
+                try:
+                    send_safe(user['referred_by'],
+                        f"💰 پاداش رفرال!\n\n"
+                        f"👤 کاربری که معرفی کردید اشتراک خرید!\n"
+                        f"💰 مبلغ خرید: {amount:,} تومان\n"
+                        f"🎁 پاداش شما ({config.referral_bonus}%): {bonus:,} تومان\n"
+                        f"📊 موجودی جدید: {get_user_balance(user['referred_by']):,} تومان"
+                    )
+                except:
+                    pass
+                
+                try:
+                    send_safe(user_id,
+                        f"🎉 تبریک!\n\n"
+                        f"شما اشتراک خریدید و دوست شما {bonus:,} تومان پاداش دریافت کرد.\n"
+                        f"🎁 لینک رفرال شما: {generate_referral_code(user_id)}"
+                    )
+                except:
+                    pass
+            
+            conn.commit()
+            db_manager.set_cached(f"sub_{user_id}", True, 30)
+            return True
+    except Exception as e:
+        logger.error(f"activate_subscription error: {e}")
+        return False
+
+def get_user_balance(user_id):
+    try:
+        with get_db() as conn:
+            user = conn.execute('SELECT balance FROM users WHERE user_id = ?', (user_id,)).fetchone()
+            return user['balance'] if user else 0
+    except:
+        return 0
+
+def update_user_balance(user_id, amount, description=None):
+    try:
+        with get_db() as conn:
+            conn.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (amount, user_id))
+            if description:
+                ref_id = hashlib.md5(f"{user_id}_{time.time()}".encode()).hexdigest()[:12]
+                conn.execute('INSERT INTO transactions (user_id, amount, type, description, created_at, reference_id) VALUES (?, ?, ?, ?, ?, ?)',
+                           (user_id, amount, 'balance', description, datetime.now().isoformat(), ref_id))
+            conn.commit()
+            return True
+    except:
+        return False
+
+def can_create_bot(user_id):
+    return has_active_subscription(user_id)
+
+def add_bot(user_id, subscription_id, server_id, bot_id, token, name, username, file_path, pid=None, requirements=None, bot_type='custom'):
+    try:
+        with get_db() as conn:
+            now = datetime.now().isoformat()
+            expires_at = (datetime.now() + timedelta(days=config.subscription_days)).isoformat()
+            conn.execute('INSERT INTO bots (id, user_id, subscription_id, server_id, token, name, username, file_path, pid, status, created_at, expires_at, requirements, start_count, last_start, is_deleted, bot_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, "running", ?, ?, ?, 1, ?, 0, ?)', 
+                        (bot_id, user_id, subscription_id, server_id, token, name, username, file_path, pid, now, expires_at, requirements, now, bot_type))
+            conn.execute('UPDATE users SET total_bots = total_bots + 1 WHERE user_id = ?', (user_id,))
+            conn.commit()
+            return True
+    except:
+        return False
+
+def get_user_bots(user_id):
+    try:
+        with get_db() as conn:
+            bots = conn.execute('SELECT * FROM bots WHERE user_id = ? AND status NOT IN ("deleted", "deleted_by_user") AND is_deleted = 0 ORDER BY created_at DESC', (user_id,)).fetchall()
+            return [dict(bot) for bot in bots]
+    except:
+        return []
+
+def get_bot_by_id(bot_id):
+    try:
+        with get_db() as conn:
+            bot = conn.execute('SELECT * FROM bots WHERE id = ? AND is_deleted = 0', (bot_id,)).fetchone()
+            return dict(bot) if bot else None
+    except:
+        return None
+
+def update_bot_status(bot_id, status):
+    try:
+        with get_db() as conn:
+            conn.execute('UPDATE bots SET status = ? WHERE id = ?', (status, bot_id))
+            conn.commit()
+            return True
+    except:
+        return False
+
+def update_bot_start_count(bot_id):
+    try:
+        with get_db() as conn:
+            conn.execute('UPDATE bots SET start_count = start_count + 1, last_start = ? WHERE id = ?', 
+                        (datetime.now().isoformat(), bot_id))
+            conn.commit()
+            return True
+    except:
+        return False
+
+def delete_bot_complete(bot_id, user_id):
+    try:
+        with get_db() as conn:
+            bot = conn.execute('SELECT * FROM bots WHERE id = ? AND user_id = ? AND is_deleted = 0', (bot_id, user_id)).fetchone()
+            if not bot:
+                return False
+            
+            stop_bot_on_mother(bot_id)
+            
+            bot_dir = os.path.join(RUNNING_DIR, bot_id)
+            if os.path.exists(bot_dir):
+                shutil.rmtree(bot_dir, ignore_errors=True)
+            
+            conn.execute('UPDATE bots SET status = "deleted_by_user", is_deleted = 1 WHERE id = ?', (bot_id,))
+            conn.commit()
+            return True
+    except:
+        return False
+
+def save_pending_file(user_id, subscription_id, file_path, file_name, file_hash, is_ready=0, ready_file_id=0):
+    try:
+        with get_db() as conn:
+            now = datetime.now().isoformat()
+            conn.execute('INSERT INTO pending_files (user_id, subscription_id, file_path, file_name, file_hash, submitted_at, is_active, is_ready, ready_file_id) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)', 
+                        (user_id, subscription_id, file_path, file_name, file_hash, now, is_ready, ready_file_id))
+            conn.commit()
+            return conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+    except:
+        return None
+
+def get_pending_files():
+    try:
+        with get_db() as conn:
+            files = conn.execute('SELECT * FROM pending_files WHERE status = "pending" AND is_active = 1 ORDER BY submitted_at DESC').fetchall()
+            return [dict(f) for f in files]
+    except:
+        return []
+
+def get_pending_file_by_id(file_id):
+    try:
+        with get_db() as conn:
+            file = conn.execute('SELECT * FROM pending_files WHERE id = ? AND is_active = 1', (file_id,)).fetchone()
+            return dict(file) if file else None
+    except:
+        return None
+
+def update_pending_file_status(file_id, status):
+    try:
+        with get_db() as conn:
+            conn.execute('UPDATE pending_files SET status = ?, reviewed_at = ?, is_active = 0 WHERE id = ?', 
+                        (status, datetime.now().isoformat(), file_id))
+            conn.commit()
+            return True
+    except:
+        return False
+
+def add_to_build_queue(file_id, user_id):
+    try:
+        with get_db() as conn:
+            conn.execute('INSERT INTO build_queue (file_id, user_id, created_at, is_active) VALUES (?, ?, ?, 1)', 
+                        (file_id, user_id, datetime.now().isoformat()))
+            conn.commit()
+            queue_id = conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+            build_queue.put(queue_id)
+            return queue_id
+    except:
+        return None
+
+def update_build_queue_status(queue_id, status, error_message=None, bot_name=None, bot_username=None):
+    try:
+        with get_db() as conn:
+            conn.execute('UPDATE build_queue SET status = ?, completed_at = ?, error_message = ?, bot_name = ?, bot_username = ? WHERE id = ?', 
+                        (status, datetime.now().isoformat(), error_message, bot_name, bot_username, queue_id))
+            conn.commit()
+            return True
+    except:
+        return False
+
+def get_build_queue_item(queue_id):
+    try:
+        with get_db() as conn:
+            item = conn.execute('SELECT * FROM build_queue WHERE id = ?', (queue_id,)).fetchone()
+            return dict(item) if item else None
+    except:
+        return None
+
+def mark_library_installed(library_name, server_id=0):
+    try:
+        with get_db() as conn:
+            conn.execute('INSERT OR REPLACE INTO installed_libraries (library_name, installed_at, server_id, status) VALUES (?, ?, ?, "installed")', 
+                        (library_name, datetime.now().isoformat(), server_id))
+            conn.commit()
+            return True
+    except:
+        return False
+
+def get_referral_stats(user_id):
+    try:
+        with get_db() as conn:
+            referral_count = conn.execute('SELECT COUNT(*) FROM referral_logs WHERE referrer_id = ? AND status = "registered" AND is_active = 1', (user_id,)).fetchone()[0]
+            subscribed_count = conn.execute('SELECT COUNT(*) FROM referral_logs WHERE referrer_id = ? AND status = "subscribed" AND is_active = 1', (user_id,)).fetchone()[0]
+            total_bonus = conn.execute('SELECT COALESCE(SUM(bonus_amount), 0) FROM referral_logs WHERE referrer_id = ? AND is_paid = 1', (user_id,)).fetchone()[0]
+            return referral_count, subscribed_count, total_bonus
+    except:
+        return 0, 0, 0
+
+# ==================== توابع فایل‌های آماده ====================
+
+def add_ready_file(name, file_name, file_path, description=""):
+    try:
+        with get_db() as conn:
+            now = datetime.now().isoformat()
+            conn.execute('INSERT INTO ready_files (name, file_name, file_path, description, price, created_at, is_active) VALUES (?, ?, ?, ?, ?, ?, 1)', 
+                        (name, file_name, file_path, description, SUBSCRIPTION_PRICE, now))
+            conn.commit()
+            return True
+    except:
+        return False
+
+def get_ready_files():
+    try:
+        with get_db() as conn:
+            files = conn.execute('SELECT * FROM ready_files WHERE is_active = 1 ORDER BY created_at DESC').fetchall()
+            return [dict(f) for f in files]
+    except:
+        return []
+
+def get_ready_file_by_id(file_id):
+    try:
+        with get_db() as conn:
+            file = conn.execute('SELECT * FROM ready_files WHERE id = ? AND is_active = 1', (file_id,)).fetchone()
+            return dict(file) if file else None
+    except:
+        return None
+
+def delete_ready_file(file_id):
+    try:
+        with get_db() as conn:
+            file = conn.execute('SELECT * FROM ready_files WHERE id = ? AND is_active = 1', (file_id,)).fetchone()
+            if file:
+                if os.path.exists(file['file_path']):
+                    os.remove(file['file_path'])
+                conn.execute('UPDATE ready_files SET is_active = 0 WHERE id = ?', (file_id,))
+                conn.commit()
+                return True
+        return False
+    except:
+        return False
+
+# ==================== سیستم نصب کتابخانه‌ها ====================
+
+def get_pip_command():
+    try:
+        result = subprocess.run(['pip3', '--version'], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            return 'pip3'
+    except:
+        pass
+    try:
+        result = subprocess.run(['pip', '--version'], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            return 'pip'
+    except:
+        pass
+    return f'{sys.executable} -m pip'
+
+def get_correct_library_name(lib_name):
+    lib_lower = lib_name.lower().strip()
+    
+    if lib_lower in LIBRARY_MAPPING:
+        return LIBRARY_MAPPING[lib_lower]
+    
+    for key, value in LIBRARY_MAPPING.items():
+        if key.lower().replace('_', '').replace('-', '').replace('.', '') == lib_lower.replace('_', '').replace('-', '').replace('.', ''):
+            return value
+    
+    return lib_name
+
+def check_library_installed(library_name):
+    try:
+        pip_cmd = get_pip_command()
+        result = subprocess.run(
+            f'{pip_cmd} show {library_name} 2>/dev/null | grep -E "^(Name|Version)"',
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return True
+    except:
         pass
     
-    def handle_admin(self, message):
-        """پنل مدیریت"""
-        user_id = message.from_user.id
-        
-        if user_id not in ADMIN_IDS:
-            self.bot.send_message(user_id, "❌ **دسترسی غیرمجاز!**\n\nشما به پنل ادمین دسترسی ندارید.", parse_mode='Markdown')
-            return
-        
-        text = """
-👑 **پنل مدیریت فوق‌پیشرفته**
-
-📊 **آمار کلی:**
-• کاربران کل: {total_users}
-• کاربران امروز: {today_users}
-• سیگنال‌های امروز: {today_signals}
-• اشتراک‌های فعال: {active_subs}
-• درآمد امروز: {today_revenue}
-
-🤖 **الگوریتم فعلی:** {active_algo}
-
-🔧 **مدیریت:**
-• 🧠 تغییر الگوریتم
-• 📊 مشاهده لاگ‌ها
-• 👥 مدیریت کاربران
-• 💰 مدیریت درآمد
-• 📢 ارسال پیام همگانی
-• ⚙️ تنظیمات پیشرفته
-        """
-        
-        # دریافت آمار
-        db.cursor.execute('SELECT COUNT(*) FROM users WHERE is_banned = 0')
-        total_users = db.cursor.fetchone()[0]
-        
-        db.cursor.execute('SELECT COUNT(*) FROM users WHERE DATE(joined_at) = DATE("now")')
-        today_users = db.cursor.fetchone()[0]
-        
-        db.cursor.execute('SELECT COUNT(*) FROM signals WHERE DATE(created_at) = DATE("now")')
-        today_signals = db.cursor.fetchone()[0]
-        
-        db.cursor.execute('SELECT COUNT(*) FROM users WHERE plan != "FREE" AND plan_expire > datetime("now")')
-        active_subs = db.cursor.fetchone()[0]
-        
-        db.cursor.execute('SELECT COALESCE(SUM(balance), 0) FROM users')
-        total_balance = db.cursor.fetchone()[0]
-        
-        algo = db.get_active_algorithm()
-        active_algo = algo[1] if algo else "NONE"
-        
-        text = text.format(
-            total_users=total_users,
-            today_users=today_users,
-            today_signals=today_signals,
-            active_subs=active_subs,
-            today_revenue=total_balance,
-            active_algo=active_algo
-        )
-        
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("🧠 مدیریت الگوریتم‌ها", callback_data="admin_algorithms"),
-            types.InlineKeyboardButton("📊 مشاهده لاگ‌ها", callback_data="admin_logs"),
-            types.InlineKeyboardButton("👥 مدیریت کاربران", callback_data="admin_users"),
-            types.InlineKeyboardButton("💰 مدیریت درآمد", callback_data="admin_revenue"),
-            types.InlineKeyboardButton("📢 پیام همگانی", callback_data="admin_broadcast"),
-            types.InlineKeyboardButton("⚙️ تنظیمات", callback_data="admin_settings"),
-            types.InlineKeyboardButton("📈 آمار پیشرفته", callback_data="admin_stats"),
-            types.InlineKeyboardButton("🔄 ریستارت", callback_data="admin_restart")
-        )
-        
-        self.bot.send_message(user_id, text, parse_mode='Markdown', reply_markup=markup)
+    try:
+        import importlib
+        importlib.import_module(library_name.replace('-', '_'))
+        return True
+    except:
+        pass
     
-    # ================ کالبک‌ها ================
+    return False
+
+def install_library_advanced(library_name, max_retries=5):
+    correct_name = get_correct_library_name(library_name)
+    pip_cmd = get_pip_command()
     
-    @self.bot.callback_query_handler(func=lambda call: True)
-    def handle_callback(self, call):
-        user_id = call.from_user.id
+    if check_library_installed(correct_name):
+        logger.info(f"✅ کتابخانه {correct_name} قبلاً نصب شده است")
+        mark_library_installed(correct_name, 0)
+        return True, correct_name
+    
+    for retry in range(max_retries):
+        logger.info(f"📦 در حال نصب {correct_name} (تلاش {retry + 1}/{max_retries})")
         
-        # ===== مدیریت معاملات =====
-        if call.data.startswith('trade_'):
-            _, symbol, price = call.data.split('_')
-            self.bot.answer_callback_query(call.id, "✅ معامله ثبت شد!")
-            
-            # ثبت در دیتابیس
-            db.cursor.execute('SELECT id FROM signals WHERE symbol = ? ORDER BY created_at DESC LIMIT 1', (symbol,))
-            signal = db.cursor.fetchone()
-            if signal:
-                db.add_trade(user_id, signal[0], float(price))
-            
-            self.bot.send_message(
-                user_id,
-                f"✅ **معامله {symbol} ثبت شد!**\n\n"
-                f"📊 قیمت ورود: ${price}\n"
-                f"📅 زمان: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
-                f"💡 برای مشاهده آمار خود از /stats استفاده کنید.",
-                parse_mode='Markdown'
-            )
+        methods = [
+            f'{pip_cmd} install {correct_name} --no-cache-dir --default-timeout=100',
+            f'{pip_cmd} install --upgrade {correct_name} --no-cache-dir',
+            f'{pip_cmd} install {correct_name} --no-deps --no-cache-dir',
+            f'{sys.executable} -m pip install {correct_name} --no-cache-dir --default-timeout=100',
+        ]
         
-        # ===== تحلیل عمیق =====
-        elif call.data.startswith('deep_'):
-            symbol = call.data.split('_')[1]
-            self.bot.answer_callback_query(call.id, "📊 در حال تحلیل عمیق...")
-            
-            # دریافت تحلیل عمیق
-            df = self.engine.get_klines(symbol, '4h', 100)
-            if df is not None:
-                df = self.engine.calculate_indicators(df)
-                if df is not None:
-                    last = df.iloc[-1]
-                    
-                    text = f"""
-📊 **تحلیل عمیق {symbol}**
-
-💰 قیمت فعلی: ${last['close']:,.2f}
-📈 SMA 20: ${last['sma_20']:,.2f}
-📈 SMA 50: ${last['sma_50']:,.2f}
-📊 RSI: {last['rsi_14']:.1f}
-📊 MACD: {last['macd']:.4f}
-📊 ADX: {last['adx']:.1f}
-
-📊 **وضعیت روند:**
-{'✅ روند صعودی' if last['close'] > last['sma_50'] else '❌ روند نزولی'}
-{'✅ قدرت روند بالا' if last['adx'] > 25 else '🔄 قدرت روند متوسط' if last['adx'] > 20 else '❌ بدون روند'}
-
-💡 **سطوح کلیدی:**
-• مقاومت ۱: ${last['resistance_20']:,.2f}
-• مقاومت ۲: ${last['resistance_50']:,.2f}
-• حمایت ۱: ${last['support_20']:,.2f}
-• حمایت ۲: ${last['support_50']:,.2f}
-
-📊 **نسبت ریسک به سود پیشنهادی:**
-• حد ضرر: ${last['close'] - last['atr_14'] * 1.5:,.2f}
-• حد سود ۱: ${last['close'] + last['atr_14'] * 2:,.2f}
-• حد سود ۲: ${last['close'] + last['atr_14'] * 4:,.2f}
-                    """
-                    
-                    self.bot.send_message(user_id, text, parse_mode='Markdown')
-                else:
-                    self.bot.send_message(user_id, "❌ خطا در تحلیل داده‌ها")
-            else:
-                self.bot.send_message(user_id, "❌ خطا در دریافت داده")
+        if sys.platform != 'win32':
+            methods.append(f'sudo {pip_cmd} install {correct_name} --no-cache-dir --default-timeout=100')
         
-        # ===== اعتبارسنجی =====
-        elif call.data.startswith('verify_'):
-            symbol = call.data.split('_')[1]
-            self.bot.answer_callback_query(call.id, "🔄 در حال اعتبارسنجی...")
-            
-            # بررسی سیگنال‌های قبلی
-            db.cursor.execute('''
-                SELECT COUNT(*) as total,
-                       SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) as wins
-                FROM signals
-                WHERE symbol = ? AND status = 'closed'
-            ''', (symbol,))
-            stats = db.cursor.fetchone()
-            
-            if stats and stats[0] > 0:
-                win_rate = (stats[1] / stats[0]) * 100
-                text = f"""
-📊 **اعتبارسنجی سیگنال‌های {symbol}**
-
-📈 تعداد کل: {stats[0]}
-✅ موفق: {stats[1]}
-🎯 نرخ موفقیت: {win_rate:.1f}%
-
-{'💎 عالی!' if win_rate > 70 else '⭐ خوب' if win_rate > 55 else '🔄 نیاز به بهبود'}
-                """
-            else:
-                text = f"📊 **هنوز داده‌ای برای {symbol} وجود ندارد.**\n\nلطفاً چند روز دیگر بررسی کنید."
-            
-            self.bot.send_message(user_id, text, parse_mode='Markdown')
-        
-        # ===== هشدار قیمت =====
-        elif call.data.startswith('alert_'):
-            parts = call.data.split('_')
-            symbol = parts[1]
-            price = float(parts[2])
-            
-            # ذخیره هشدار
-            db.cursor.execute('''
-                INSERT INTO alerts (user_id, symbol, target_price, condition, created_at)
-                VALUES (?, ?, ?, 'equal', ?)
-            ''', (user_id, symbol, price, datetime.now().isoformat()))
-            db.conn.commit()
-            
-            self.bot.answer_callback_query(call.id, f"✅ هشدار {symbol} در ${price} ثبت شد!")
-            self.bot.send_message(
-                user_id,
-                f"✅ **هشدار قیمتی ثبت شد!**\n\n"
-                f"📊 نماد: {symbol}\n"
-                f"🎯 قیمت هدف: ${price:,.2f}\n\n"
-                f"🔔 به محض رسیدن قیمت به {price}، به شما اطلاع می‌دهم.",
-                parse_mode='Markdown'
-            )
-        
-        # ===== خرید اشتراک =====
-        elif call.data.startswith('buy_'):
-            plan = call.data.split('_')[1]
-            price = {'BASIC': 500000, 'PRO': 2000000, 'VIP': 5000000}.get(plan, 0)
-            
-            if price == 0:
-                db.update_plan(user_id, 'FREE')
-                self.bot.answer_callback_query(call.id, "✅ پلن رایگان فعال شد!")
-                self.bot.send_message(user_id, "✅ **پلن رایگان فعال شد!**\n\nروزانه ۳ سیگنال دریافت کنید.", parse_mode='Markdown')
-            else:
-                self.bot.answer_callback_query(call.id, f"💳 مبلغ {price:,} تومان")
+        for method_idx, method_cmd in enumerate(methods):
+            if method_cmd is None:
+                continue
                 
-                # تولید کد پیگیری
-                ref_code = hashlib.md5(f"{user_id}_{time.time()}".encode()).hexdigest()[:8]
-                
-                self.bot.send_message(
-                    user_id,
-                    f"💳 **خرید اشتراک {plan}**\n\n"
-                    f"💰 مبلغ: {price:,} تومان\n"
-                    f"📅 مدت: ۳۰ روز\n\n"
-                    f"📌 **لطفاً مبلغ را به کارت زیر واریز کنید:**\n"
-                    f"`5892101187322777`\n"
-                    f"به نام: مرتضی نیکخو خنجری\n\n"
-                    f"🆔 کد پیگیری: `{ref_code}`\n\n"
-                    f"📸 **پس از واریز، تصویر فیش را ارسال کنید.**\n\n"
-                    f"💡 برای پیگیری وضعیت، از /balance استفاده کنید.",
-                    parse_mode='Markdown'
-                )
-        
-        # ===== کسب امتیاز =====
-        elif call.data == "earn_points":
-            tasks = [
-                "🎯 یک معامله موفق ثبت کنید: +۵۰ امتیاز",
-                "📤 ربات را به ۵ نفر معرفی کنید: +۱۰۰ امتیاز",
-                "📝 بازخورد خود را بنویسید: +۳۰ امتیاز",
-                "🔔 یک هشدار تنظیم کنید: +۲۰ امتیاز",
-                "📊 ۱۰ سیگنال را بررسی کنید: +۵۰ امتیاز",
-                "🎁 یک دوست را به ربات دعوت کنید: +۵۰ امتیاز"
-            ]
-            
-            text = "⭐ **راه‌های کسب امتیاز:**\n\n" + "\n".join(tasks)
-            text += "\n\n💡 **امتیاز خود را جمع کنید و اشتراک رایگان بگیرید!**"
-            
-            self.bot.send_message(user_id, text, parse_mode='Markdown')
-        
-        # ===== پنل ادمین =====
-        elif call.data == "admin_algorithms":
-            self.admin_algorithms(call)
-        elif call.data == "admin_logs":
-            self.admin_logs(call)
-        elif call.data == "admin_users":
-            self.admin_users(call)
-        elif call.data == "admin_revenue":
-            self.admin_revenue(call)
-        elif call.data == "admin_broadcast":
-            self.admin_broadcast(call)
-        elif call.data == "admin_settings":
-            self.admin_settings(call)
-        elif call.data == "admin_stats":
-            self.admin_stats(call)
-        elif call.data == "admin_restart":
-            self.admin_restart(call)
-        
-        # ===== مدیریت الگوریتم‌ها =====
-        elif call.data.startswith('algo_'):
-            algo_name = call.data.replace('algo_', '')
-            db.set_active_algorithm(algo_name)
-            self.bot.answer_callback_query(call.id, f"✅ الگوریتم {algo_name} فعال شد!")
-            self.admin_algorithms(call)
-        
-        elif call.data == "admin_back":
-            self.handle_admin(call.message)
-    
-    # ================ توابع پنل مدیریت ================
-    
-    def admin_algorithms(self, call):
-        """مدیریت الگوریتم‌ها"""
-        user_id = call.from_user.id
-        
-        db.cursor.execute('SELECT * FROM algorithms ORDER BY performance_score DESC')
-        algorithms = db.cursor.fetchall()
-        
-        text = "🧠 **مدیریت الگوریتم‌های سیگنال‌دهی**\n\n"
-        
-        for algo in algorithms:
-            status = "✅ فعال" if algo[3] else "⏸️ غیرفعال"
-            text += f"• {algo[1]} | {status} | امتیاز: {algo[6]:.1f}%\n"
-            text += f"  سیگنال‌ها: {algo[7]} | نرخ موفقیت: {algo[8]:.1f}%\n\n"
-        
-        text += "\n💡 **برای تغییر الگوریتم فعال، روی دکمه زیر کلیک کنید:**"
-        
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        for algo in algorithms[:4]:
-            markup.add(types.InlineKeyboardButton(
-                f"{'✅' if algo[3] else '⬜'} {algo[1]}", 
-                callback_data=f"algo_{algo[1]}"
-            ))
-        markup.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back"))
-        
-        self.bot.edit_message_text(text, user_id, call.message.message_id, parse_mode='Markdown', reply_markup=markup)
-    
-    def admin_logs(self, call):
-        """مشاهده لاگ‌ها"""
-        user_id = call.from_user.id
-        
-        db.cursor.execute('SELECT level, message, created_at FROM logs ORDER BY created_at DESC LIMIT 20')
-        logs = db.cursor.fetchall()
-        
-        if not logs:
-            text = "📊 **لاگی وجود ندارد.**"
-        else:
-            text = "📊 **۲۰ لاگ اخیر:**\n\n"
-            for log in logs:
-                emoji = "🔴" if log[0] == 'ERROR' else "🟡" if log[0] == 'WARNING' else "🟢"
-                text += f"{emoji} [{log[2][:16]}] {log[1][:60]}\n"
-        
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🔄 بروزرسانی", callback_data="admin_logs"))
-        markup.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back"))
-        
-        self.bot.edit_message_text(text, user_id, call.message.message_id, parse_mode='Markdown', reply_markup=markup)
-    
-    def admin_users(self, call):
-        """مدیریت کاربران"""
-        user_id = call.from_user.id
-        
-        db.cursor.execute('''
-            SELECT user_id, username, first_name, plan, points, total_trades, winning_trades, joined_at
-            FROM users
-            WHERE is_banned = 0
-            ORDER BY points DESC
-            LIMIT 20
-        ''')
-        users = db.cursor.fetchall()
-        
-        text = "👥 **۲۰ کاربر برتر:**\n\n"
-        
-        for user in users:
-            win_rate = (user[6] / user[5] * 100) if user[5] > 0 else 0
-            text += f"• {user[2]} (@{user[1]}) | {user[3]} | ⭐{user[4]} | {win_rate:.1f}%\n"
-        
-        text += "\n💡 برای مدیریت کاربران از دستورات زیر استفاده کنید:\n"
-        text += "• `ban USER_ID` - مسدود کردن کاربر\n"
-        text += "• `unban USER_ID` - رفع مسدودیت\n"
-        text += "• `give USER_ID POINTS` - دادن امتیاز"
-        
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back"))
-        
-        self.bot.edit_message_text(text, user_id, call.message.message_id, parse_mode='Markdown', reply_markup=markup)
-    
-    def admin_revenue(self, call):
-        """مدیریت درآمد"""
-        user_id = call.from_user.id
-        
-        db.cursor.execute('SELECT COALESCE(SUM(balance), 0) FROM users')
-        total_revenue = db.cursor.fetchone()[0]
-        
-        db.cursor.execute('SELECT plan, COUNT(*) FROM users WHERE plan != "FREE" GROUP BY plan')
-        plans = db.cursor.fetchall()
-        
-        text = f"💰 **مدیریت درآمد**\n\n"
-        text += f"📊 کل درآمد: {total_revenue:,} تومان\n\n"
-        text += "📈 **توزیع اشتراک‌ها:**\n"
-        
-        for plan in plans:
-            text += f"• {plan[0]}: {plan[1]} نفر\n"
-        
-        text += "\n💡 **پیشنهادات برای افزایش درآمد:**\n"
-        text += "• افزایش کاربران رایگان برای تبدیل به اشتراک\n"
-        text += "• ارائه تخفیف‌های ویژه\n"
-        text += "• بهبود کیفیت سیگنال‌ها"
-        
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back"))
-        
-        self.bot.edit_message_text(text, user_id, call.message.message_id, parse_mode='Markdown', reply_markup=markup)
-    
-    def admin_broadcast(self, call):
-        """ارسال پیام همگانی"""
-        user_id = call.from_user.id
-        
-        msg = self.bot.send_message(
-            user_id,
-            "📢 **ارسال پیام همگانی**\n\n"
-            "لطفاً متن پیام را ارسال کنید:\n"
-            "(برای ارسال به همه کاربران)",
-            parse_mode='Markdown'
-        )
-        
-        self.bot.register_next_step_handler(msg, self.process_broadcast)
-    
-    def process_broadcast(self, message):
-        """پردازش پیام همگانی"""
-        user_id = message.from_user.id
-        text = message.text
-        
-        if user_id not in ADMIN_IDS:
-            return
-        
-        # دریافت همه کاربران
-        db.cursor.execute('SELECT user_id FROM users WHERE is_banned = 0')
-        users = db.cursor.fetchall()
-        
-        status_msg = self.bot.send_message(user_id, f"🔄 در حال ارسال به {len(users)} کاربر...")
-        
-        sent = 0
-        for user in users:
             try:
-                self.bot.send_message(user[0], text, parse_mode='Markdown')
-                sent += 1
-                time.sleep(0.05)  # جلوگیری از محدودیت
+                logger.info(f"  🔄 روش {method_idx + 1}: {method_cmd[:50]}...")
+                result = subprocess.run(
+                    method_cmd,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=180
+                )
+                
+                if result.returncode == 0:
+                    logger.info(f"✅ کتابخانه {correct_name} با موفقیت نصب شد (روش {method_idx + 1})")
+                    mark_library_installed(correct_name, 0)
+                    return True, correct_name
+                else:
+                    error_msg = result.stderr[:200] if result.stderr else "خطای ناشناخته"
+                    logger.warning(f"  ❌ روش {method_idx + 1} ناموفق: {error_msg}")
+                    
+            except subprocess.TimeoutExpired:
+                logger.warning(f"  ⏰ Timeout در روش {method_idx + 1} برای {correct_name}")
+            except Exception as e:
+                logger.warning(f"  ❌ خطا در روش {method_idx + 1}: {str(e)}")
+            
+            time.sleep(2)
+        
+        if retry < max_retries - 1:
+            logger.info(f"⏳ صبر قبل از تلاش مجدد برای {correct_name}...")
+            time.sleep(3)
+    
+    logger.error(f"❌ نصب {correct_name} پس از {max_retries} تلاش ناموفق بود")
+    return False, None
+
+def install_multiple_libraries_advanced(libraries, progress_callback=None):
+    installed = []
+    failed = []
+    
+    unique_libs = []
+    for lib in libraries:
+        lib_clean = lib.strip().lower()
+        if lib_clean not in STD_LIBRARIES and lib_clean not in unique_libs:
+            unique_libs.append(lib_clean)
+    
+    total = len(unique_libs)
+    logger.info(f"📦 شروع نصب {total} کتابخانه...")
+    
+    for i, lib in enumerate(unique_libs):
+        if progress_callback:
+            progress_callback(i + 1, total, lib)
+        
+        success, installed_lib = install_library_advanced(lib)
+        if success:
+            installed.append(installed_lib)
+        else:
+            failed.append(lib)
+        
+        time.sleep(0.5)
+    
+    logger.info(f"✅ نصب کامل شد: {len(installed)} موفق، {len(failed)} ناموفق")
+    return installed, failed
+
+def install_libraries_on_mother_advanced(libraries, chat_id=None, message_id=None):
+    if not libraries:
+        return [], []
+    
+    installed = []
+    failed = []
+    status_msg = None
+    
+    def send_progress(current, total, lib):
+        if chat_id and status_msg:
+            try:
+                percent = int(current / total * 100)
+                bar = "█" * int(percent / 5) + "░" * (20 - int(percent / 5))
+                text = f"📦 نصب کتابخانه‌ها\n\n[{bar}] {percent}%\n\nدر حال نصب [{current}/{total}]: {lib}\n\n✅ نصب شده: {len(installed)}\n❌ ناموفق: {len(failed)}"
+                edit_safe(chat_id, status_msg.message_id, text)
             except:
                 pass
+        print(f"📦 نصب [{current}/{total}]: {lib}")
+    
+    if chat_id:
+        try:
+            status_msg = send_safe(chat_id, f"📦 در حال نصب {len(libraries)} کتابخانه...\n⏳ لطفاً شکیبا باشید...")
+        except:
+            pass
+    
+    installed, failed = install_multiple_libraries_advanced(libraries, send_progress)
+    
+    if chat_id and status_msg:
+        result_text = f"✅ نصب کتابخانه‌ها کامل شد!\n\n"
+        result_text += f"📦 نصب شده ({len(installed)} مورد):\n"
+        if installed:
+            result_text += f"{', '.join(installed[:30])}"
+            if len(installed) > 30:
+                result_text += f"\n... و {len(installed) - 30} مورد دیگر"
+        else:
+            result_text += "• هیچ کتابخانه‌ای نصب نشد"
         
-        self.bot.edit_message_text(
-            f"✅ **پیام همگانی ارسال شد!**\n\n"
-            f"📨 تعداد دریافت‌کنندگان: {sent} نفر\n"
-            f"📊 از {len(users)} کاربر",
-            user_id, status_msg.message_id,
-            parse_mode='Markdown'
+        if failed:
+            result_text += f"\n\n❌ ناموفق ({len(failed)} مورد):\n"
+            result_text += f"{', '.join(failed[:20])}"
+            if len(failed) > 20:
+                result_text += f"\n... و {len(failed) - 20} مورد دیگر"
+            result_text += f"\n\n⚠️ توجه: برخی کتابخانه‌ها ممکن است نیاز به نصب دستی داشته باشند.\n"
+            result_text += f"برای نصب دستی: pip3 install {failed[0]}"
+        
+        edit_safe(chat_id, status_msg.message_id, result_text)
+    
+    return installed, failed
+
+# ==================== توابع ربات ====================
+
+def detect_requirements_from_code(code):
+    imports = set()
+    lines = code.split('\n')
+    
+    for line in lines:
+        line = line.strip()
+        
+        if line.startswith('import '):
+            parts = line.split()
+            if len(parts) > 1:
+                lib = parts[1].split('.')[0].split(' as ')[0]
+                if lib not in STD_LIBRARIES and not lib.startswith('_'):
+                    imports.add(lib)
+        
+        elif line.startswith('from '):
+            parts = line.split()
+            if len(parts) > 1:
+                lib = parts[1].split('.')[0]
+                if lib not in STD_LIBRARIES and not lib.startswith('_') and lib != '':
+                    imports.add(lib)
+    
+    final_libs = []
+    for lib in imports:
+        if lib in STD_LIBRARIES:
+            continue
+        correct = get_correct_library_name(lib)
+        if correct not in final_libs:
+            final_libs.append(correct)
+    
+    return final_libs
+
+def extract_token(code):
+    patterns = [
+        r'[0-9]{8,10}:[A-Za-z0-9_-]{35}',
+        r'token\s*=\s*["\']([^"\']+)["\']',
+        r'TOKEN\s*=\s*["\']([^"\']+)["\']',
+        r'BOT_TOKEN\s*=\s*["\']([^"\']+)["\']',
+        r'API_TOKEN\s*=\s*["\']([^"\']+)["\']',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, code, re.IGNORECASE)
+        if match:
+            token = match.group(1) if match.lastindex else match.group(0)
+            if len(token) > 30 and ':' in token:
+                return token
+    return None
+
+def extract_admin_id(code):
+    patterns = [
+        r'ADMIN_ID\s*=\s*(\d+)',
+        r'admin_id\s*=\s*(\d+)',
+        r'ADMIN\s*=\s*(\d+)',
+        r'admin\s*=\s*(\d+)',
+        r'OWNER_ID\s*=\s*(\d+)',
+        r'owner_id\s*=\s*(\d+)',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, code)
+        if match:
+            return int(match.group(1))
+    return None
+
+def extract_from_zip(zip_path, extract_to):
+    py_files = []
+    main_code = None
+    try:
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(extract_to)
+        for root, dirs, files in os.walk(extract_to):
+            for file in files:
+                if file.endswith('.py'):
+                    file_path = os.path.join(root, file)
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                        py_files.append({'name': file, 'path': file_path, 'content': content})
+                    except:
+                        pass
+        for pf in py_files:
+            if pf['name'] in ['bot.py', 'main.py', 'run.py']:
+                main_code = pf['content']
+                break
+        if not main_code and py_files:
+            main_code = py_files[0]['content']
+        return main_code, py_files
+    except Exception as e:
+        return None, []
+
+def run_bot_on_mother_server(bot_id, code, token, chat_id=None):
+    max_attempts = 3
+    attempt = 0
+    
+    while attempt < max_attempts:
+        attempt += 1
+        try:
+            bot_dir = os.path.join(RUNNING_DIR, bot_id)
+            os.makedirs(bot_dir, exist_ok=True)
+            
+            code_path = os.path.join(bot_dir, 'bot.py')
+            with open(code_path, 'w', encoding='utf-8') as f:
+                f.write(code)
+            
+            libraries = detect_requirements_from_code(code)
+            
+            if libraries and config.auto_install_libs and attempt == 1:
+                installed, failed = install_libraries_on_mother_advanced(libraries, chat_id)
+                if failed:
+                    logger.warning(f"کتابخانه‌های نصب نشده: {failed}")
+            
+            log_file = os.path.join(bot_dir, 'bot.log')
+            
+            if sys.platform == 'win32':
+                process = subprocess.Popen(
+                    [sys.executable, code_path],
+                    stdout=open(log_file, 'a'),
+                    stderr=subprocess.STDOUT,
+                    cwd=bot_dir,
+                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
+                )
+            else:
+                process = subprocess.Popen(
+                    [sys.executable, code_path],
+                    stdout=open(log_file, 'a'),
+                    stderr=subprocess.STDOUT,
+                    cwd=bot_dir,
+                    start_new_session=True
+                )
+            
+            time.sleep(5)
+            
+            if process.poll() is None:
+                return process.pid, None
+            else:
+                with open(log_file, 'r') as f:
+                    error = f.read()[-500:]
+                if attempt < max_attempts:
+                    logger.info(f"تلاش مجدد برای اجرای ربات {bot_id} (تلاش {attempt + 1})")
+                    continue
+                return None, error if error else "خطای ناشناخته در اجرا"
+        except Exception as e:
+            if attempt < max_attempts:
+                logger.info(f"تلاش مجدد برای اجرای ربات {bot_id} (تلاش {attempt + 1})")
+                continue
+            return None, str(e)
+    
+    return None, "خطا در اجرا بعد از ۳ بار تلاش"
+
+def stop_bot_on_mother(bot_id):
+    try:
+        with get_db() as conn:
+            bot = conn.execute('SELECT pid FROM bots WHERE id = ? AND is_deleted = 0', (bot_id,)).fetchone()
+            if bot and bot['pid']:
+                try:
+                    os.kill(bot['pid'], signal.SIGTERM)
+                except:
+                    pass
+                return True
+        return False
+    except:
+        return False
+
+def stop_bot_on_server(server, bot_id):
+    try:
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client.connect(server['ip'], port=server['port'], username=server['username'], password=server['password'], timeout=10)
+        client.exec_command(f'pkill -f "python.*{bot_id}"')
+        client.close()
+        return True
+    except:
+        return False
+
+def stop_user_bot(bot_id):
+    bot_info = get_bot_by_id(bot_id)
+    if not bot_info:
+        return False
+    return stop_bot_on_mother(bot_id)
+
+def start_user_bot(bot_id, chat_id=None):
+    bot_info = get_bot_by_id(bot_id)
+    if not bot_info:
+        return False, "ربات پیدا نشد"
+    if not os.path.exists(bot_info['file_path']):
+        return False, "فایل ربات پیدا نشد"
+    with open(bot_info['file_path'], 'r', encoding='utf-8') as f:
+        code = f.read()
+    
+    update_bot_start_count(bot_id)
+    pid, error = run_bot_on_mother_server(bot_info['id'], code, bot_info['token'], chat_id)
+    if pid:
+        update_bot_status(bot_id, 'running')
+        return True, "ربات فعال شد"
+    else:
+        return False, error
+
+def build_bot_from_pending(file_id, queue_id=None, chat_id=None, auto_build=False):
+    result = {'success': False, 'error': None, 'name': None, 'username': None, 'bot_id': None}
+    
+    pending = get_pending_file_by_id(file_id)
+    if not pending:
+        result['error'] = "فایل پیدا نشد"
+        if queue_id:
+            update_build_queue_status(queue_id, 'failed', error_message=result['error'])
+        return result
+    
+    if pending.get('is_ready', 0) == 1 and auto_build:
+        if not has_active_subscription(pending['user_id']):
+            result['error'] = "اشتراک فعال ندارید!"
+            return result
+        
+        if not can_create_bot(pending['user_id']):
+            result['error'] = "قبلاً با این اشتراک ربات ساخته‌اید!"
+            return result
+    
+    code = None
+    if pending['file_name'].endswith('.zip'):
+        extract_dir = os.path.join(TEMP_DIR, f"extract_{file_id}_{uuid.uuid4().hex[:8]}")
+        os.makedirs(extract_dir, exist_ok=True)
+        code, _ = extract_from_zip(pending['file_path'], extract_dir)
+        shutil.rmtree(extract_dir, ignore_errors=True)
+    else:
+        with open(pending['file_path'], 'r', encoding='utf-8') as f:
+            code = f.read()
+    
+    if not code:
+        result['error'] = "خطا در خواندن فایل"
+        if queue_id:
+            update_build_queue_status(queue_id, 'failed', error_message=result['error'])
+        return result
+    
+    token = extract_token(code)
+    if not token:
+        result['error'] = "توکن ربات پیدا نشد"
+        if queue_id:
+            update_build_queue_status(queue_id, 'failed', error_message=result['error'])
+        return result
+    
+    try:
+        response = requests.get(f"https://api.telegram.org/bot{token}/getMe", timeout=10)
+        if response.status_code != 200:
+            result['error'] = "توکن نامعتبر است"
+            if queue_id:
+                update_build_queue_status(queue_id, 'failed', error_message=result['error'])
+            return result
+        bot_info = response.json()['result']
+        bot_name = bot_info['first_name']
+        bot_username = bot_info['username']
+    except Exception as e:
+        result['error'] = f"خطا در بررسی توکن: {str(e)[:50]}"
+        if queue_id:
+            update_build_queue_status(queue_id, 'failed', error_message=result['error'])
+        return result
+    
+    bot_id = hashlib.md5(f"{pending['user_id']}_{token}_{time.time()}_{uuid.uuid4().hex[:8]}".encode()).hexdigest()[:12]
+    
+    pid, error = run_bot_on_mother_server(bot_id, code, token, chat_id)
+    
+    if pid:
+        libraries = detect_requirements_from_code(code)
+        requirements = ','.join(libraries)
+        bot_type = 'ready' if pending.get('is_ready', 0) == 1 else 'custom'
+        add_bot(pending['user_id'], pending['subscription_id'], 0, bot_id, token, bot_name, bot_username, pending['file_path'], pid, requirements, bot_type)
+        update_pending_file_status(file_id, 'approved')
+        result['success'] = True
+        result['name'] = bot_name
+        result['username'] = bot_username
+        result['bot_id'] = bot_id
+        if queue_id:
+            update_build_queue_status(queue_id, 'completed', bot_name=bot_name, bot_username=bot_username)
+        try:
+            send_safe(
+                pending['user_id'], 
+                f"✅ ربات شما با موفقیت ساخته شد!\n\n"
+                f"🤖 نام: {bot_name}\n"
+                f"🔗 لینک: https://t.me/{bot_username}\n"
+                f"🆔 آیدی: {bot_id}\n\n"
+                f"از منوی مدیریت ربات می‌توانید آن را فعال/غیرفعال یا حذف کنید."
+            )
+        except:
+            pass
+    else:
+        result['error'] = error or "خطا در اجرای ربات"
+        if queue_id:
+            update_build_queue_status(queue_id, 'failed', error_message=result['error'])
+        try:
+            send_safe(
+                pending['user_id'], 
+                f"❌ خطا در ساخت ربات!\n\n"
+                f"خطا: {result['error'][:200]}\n\n"
+                f"لطفاً با پشتیبانی تماس بگیرید."
+            )
+        except:
+            pass
+    
+    return result
+
+def send_broadcast(message_text, admin_id):
+    users = get_all_users()
+    sent_count = 0
+    for user_id in users:
+        try:
+            send_safe(user_id, message_text)
+            sent_count += 1
+            time.sleep(0.05)
+        except:
+            pass
+    with get_db() as conn:
+        conn.execute('INSERT INTO broadcast_messages (admin_id, message_text, sent_count, created_at, is_active) VALUES (?, ?, ?, ?, 1)', 
+                    (admin_id, message_text, sent_count, datetime.now().isoformat()))
+        conn.commit()
+    return sent_count
+
+def update_countdown(chat_id, message_id, queue_id, start_time):
+    try:
+        queue_item = get_build_queue_item(queue_id)
+        if not queue_item or queue_item['status'] != 'pending':
+            return
+        
+        created_at = datetime.fromisoformat(queue_item['created_at'])
+        elapsed = (datetime.now() - created_at).total_seconds()
+        total_time = 120
+        
+        if elapsed >= total_time:
+            try:
+                send_safe(chat_id, "🔄 در حال ساخت نهایی ربات...")
+            except:
+                pass
+            
+            result = build_bot_from_pending(queue_item['file_id'], queue_id, chat_id)
+            
+            if result['success']:
+                try:
+                    send_safe(
+                        chat_id, 
+                        f"✅ ربات با موفقیت ساخته شد!\n\n"
+                        f"🤖 نام: {result['name']}\n"
+                        f"🔗 لینک: https://t.me/{result['username']}\n"
+                        f"🆔 آیدی: {result['bot_id']}\n\n"
+                        f"🎉 ربات شما آماده استفاده است!"
+                    )
+                except:
+                    send_safe(
+                        chat_id, 
+                        f"✅ ربات با موفقیت ساخته شد!\n\n"
+                        f"🤖 نام: {result['name']}\n"
+                        f"🔗 لینک: https://t.me/{result['username']}\n\n"
+                        f"🎉 ربات شما آماده استفاده است!"
+                    )
+            else:
+                send_safe(
+                    chat_id, 
+                    f"❌ خطا در ساخت ربات!\n\n"
+                    f"⚠️ خطا: {result['error'][:200]}\n\n"
+                    f"لطفاً با پشتیبانی تماس بگیرید."
+                )
+            
+            if queue_id in active_builds:
+                del active_builds[queue_id]
+            return
+        
+        remaining = int(total_time - elapsed)
+        minutes = remaining // 60
+        seconds = remaining % 60
+        progress = int((elapsed / total_time) * 20)
+        bar = "█" * progress + "░" * (20 - progress)
+        
+        if elapsed < 60:
+            phase = "📦 مرحله ۱/۲: آماده‌سازی فایل‌ها"
+        else:
+            phase = "📚 مرحله ۲/۲: نصب کتابخانه‌ها"
+        
+        text = f"🔄 ساخت ربات در حال انجام...\n\n{phase}\n⏳ زمان باقی‌مانده: {minutes:02d}:{seconds:02d}\n\n[{bar}]\n\n🔍 در حال پردازش و نصب کتابخانه‌های مورد نیاز...\n🙏 لطفاً شکیبا باشید..."
+        
+        edit_safe(chat_id, message_id, text)
+        
+        threading.Timer(1.0, update_countdown, args=(chat_id, message_id, queue_id, start_time)).start()
+        
+    except Exception as e:
+        logger.error(f"update_countdown error: {e}")
+
+def queue_worker():
+    global queue_thread_running
+    while queue_thread_running:
+        try:
+            if not build_queue.empty():
+                queue_id = build_queue.get()
+                with get_db() as conn:
+                    queue_item = conn.execute('SELECT * FROM build_queue WHERE id = ? AND status = "pending" AND is_active = 1', (queue_id,)).fetchone()
+                    if queue_item and queue_id in active_builds:
+                        build_info = active_builds[queue_id]
+                        update_countdown(build_info['chat_id'], build_info['message_id'], queue_id, build_info['start_time'])
+            time.sleep(0.5)
+        except Exception as e:
+            logger.error(f"queue_worker error: {e}")
+            time.sleep(1)
+
+def restore_all_bots():
+    try:
+        with get_db() as conn:
+            running_bots = conn.execute("SELECT * FROM bots WHERE (status = 'running' OR status = 'stopped') AND is_deleted = 0").fetchall()
+        
+        restored_count = 0
+        for bot_info in running_bots:
+            bot_info = dict(bot_info)
+            if os.path.exists(bot_info['file_path']):
+                with open(bot_info['file_path'], 'r', encoding='utf-8') as f:
+                    code = f.read()
+                
+                pid, error = run_bot_on_mother_server(bot_info['id'], code, bot_info['token'])
+                if pid:
+                    with get_db() as conn:
+                        conn.execute('UPDATE bots SET status = "running", pid = ? WHERE id = ?', (pid, bot_info['id']))
+                        conn.commit()
+                    restored_count += 1
+                    logger.info(f"ربات {bot_info['id']} ({bot_info['name']}) بازگردانی شد")
+                else:
+                    with get_db() as conn:
+                        conn.execute('UPDATE bots SET status = "stopped" WHERE id = ?', (bot_info['id'],))
+                        conn.commit()
+                    logger.warning(f"ربات {bot_info['id']} بازگردانی نشد: {error}")
+        
+        logger.info(f"✅ {restored_count} ربات بازگردانی شدند")
+    except Exception as e:
+        logger.error(f"خطا در بازگردانی ربات‌ها: {e}")
+
+def restart_all_bots():
+    try:
+        with get_db() as conn:
+            all_bots = conn.execute("SELECT * FROM bots WHERE status NOT IN ('deleted', 'deleted_by_user') AND is_deleted = 0").fetchall()
+        
+        restarted_count = 0
+        for bot_info in all_bots:
+            bot_info = dict(bot_info)
+            stop_bot_on_mother(bot_info['id'])
+            
+            if os.path.exists(bot_info['file_path']):
+                with open(bot_info['file_path'], 'r', encoding='utf-8') as f:
+                    code = f.read()
+                
+                pid, error = run_bot_on_mother_server(bot_info['id'], code, bot_info['token'])
+                if pid:
+                    with get_db() as conn:
+                        conn.execute('UPDATE bots SET status = "running", pid = ? WHERE id = ?', (pid, bot_info['id']))
+                        conn.commit()
+                    restarted_count += 1
+                    logger.info(f"ربات {bot_info['id']} ریستارت شد")
+                else:
+                    with get_db() as conn:
+                        conn.execute('UPDATE bots SET status = "stopped" WHERE id = ?', (bot_info['id'],))
+                        conn.commit()
+                    logger.warning(f"ربات {bot_info['id']} ریستارت نشد: {error}")
+        
+        return restarted_count
+    except Exception as e:
+        logger.error(f"خطا در ریستارت ربات‌ها: {e}")
+        return 0
+
+# ==================== ایجاد و تنظیم ربات ====================
+def setup_bot():
+    bot_instance = telebot.TeleBot(BOT_TOKEN, num_threads=100)
+    try:
+        bot_instance.remove_webhook()
+        time.sleep(1)
+        bot_instance.delete_webhook()
+        time.sleep(0.5)
+    except Exception as e:
+        print(f"⚠️ خطا در حذف وب‌هوک: {e}")
+    return bot_instance
+
+bot = setup_bot()
+
+# ==================== منوها ====================
+
+def get_main_menu(user_id):
+    days_left = get_subscription_days_left(user_id)
+    markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+    
+    buttons = [
+        types.KeyboardButton('🛒 خرید اشتراک'),
+        types.KeyboardButton('🤖 ساخت ربات جدید'),
+        types.KeyboardButton('⚙️ مدیریت ربات'),
+        types.KeyboardButton('💰 برداشت از کیف پول'),
+        types.KeyboardButton('📚 راهنما'),
+        types.KeyboardButton('📞 پشتیبانی'),
+    ]
+    
+    if days_left > 0:
+        buttons.insert(0, types.KeyboardButton(f'📅 {days_left} روز مونده'))
+    
+    if user_id in ADMIN_IDS:
+        buttons.append(types.KeyboardButton('👑 پنل ادمین'))
+    
+    markup.add(*buttons)
+    return markup
+
+# ==================== هندلرها ====================
+
+@bot.message_handler(commands=['start'])
+def cmd_start(message):
+    user_id = message.from_user.id
+    username = message.from_user.username or ""
+    first_name = message.from_user.first_name or ""
+    last_name = message.from_user.last_name or ""
+    referred_by = None
+    args = message.text.split()
+    if len(args) > 1:
+        with get_db() as conn:
+            referrer = conn.execute('SELECT user_id FROM users WHERE referral_code = ?', (args[1],)).fetchone()
+            if referrer and referrer['user_id'] != user_id:
+                referred_by = referrer['user_id']
+    create_user(user_id, username, first_name, last_name, referred_by)
+    bot_username = bot.get_me().username
+    user = get_user(user_id)
+    referral_link = f"https://t.me/{bot_username}?start={user['referral_code']}" if user else ""
+    welcome = texts.welcome_text.format(bot_username)
+    welcome += f"\n\n🎁 لینک رفرال شما:\n{referral_link}"
+    send_safe(message.chat.id, welcome, reply_markup=get_main_menu(user_id))
+
+@bot.message_handler(func=lambda m: m.text == '🛒 خرید اشتراک')
+def buy_subscription(message):
+    user_id = message.from_user.id
+    
+    if has_active_subscription(user_id):
+        days_left = get_subscription_days_left(user_id)
+        send_safe(message.chat.id, f"✅ اشتراک فعال دارید! {days_left} روز مونده.")
+        return
+    
+    msg = send_safe(message.chat.id, 
+        "💰 خرید اشتراک\n\n"
+        f"💳 شماره کارت: {config.card_number}\n"
+        f"👤 به نام: {config.card_holder}\n\n"
+        "📌 مبلغ: ۳,۰۰۰,۰۰۰ تومان\n\n"
+        "🔹 پس از واریز، فیش را ارسال کنید."
+    )
+    bot.register_next_step_handler(msg, process_subscription_amount)
+
+def process_subscription_amount(message):
+    user_id = message.from_user.id
+    
+    try:
+        amount = SUBSCRIPTION_PRICE
+        
+        sub_id, sub_code = create_subscription(user_id, amount, 'card')
+        if not sub_id:
+            send_safe(message.chat.id, "❌ خطا در ایجاد اشتراک!")
+            return
+        
+        subscription_text = texts.subscription_text.format(
+            config.card_number,
+            config.card_holder,
+            sub_code,
+            amount,
+            config.subscription_days
         )
         
-        # ذخیره در لاگ
-        db.log('INFO', f"پیام همگانی ارسال شد به {sent} کاربر", 'ADMIN')
-    
-    def admin_settings(self, call):
-        """تنظیمات پیشرفته"""
-        user_id = call.from_user.id
+        send_markdown(message.chat.id, subscription_text)
         
-        text = """
-⚙️ **تنظیمات پیشرفته**
+        send_safe(message.chat.id, 
+            "📸 پس از واریز، لطفاً تصویر فیش را ارسال کنید.\n\n"
+            f"🆔 کد پیگیری: {sub_code}\n"
+            f"💰 مبلغ: {amount:,} تومان"
+        )
+        
+    except ValueError:
+        send_safe(message.chat.id, "❌ لطفاً یک عدد معتبر وارد کنید!")
 
-🔧 **تنظیمات سیگنال:**
-• حداقل اطمینان: ۷۰٪
-• حداقل نسبت ریسک به سود: ۲.۰
-• تایم‌فریم‌های تحلیل: ۱h, ۴h, ۱d
+@bot.message_handler(content_types=['photo'])
+def handle_receipt(message):
+    user_id = message.from_user.id
+    
+    with get_db() as conn:
+        pending_sub = conn.execute('SELECT * FROM subscriptions WHERE user_id = ? AND status = "pending" AND payment_method = "card" ORDER BY created_at DESC LIMIT 1', (user_id,)).fetchone()
+    
+    if not pending_sub:
+        send_safe(message.chat.id, "❌ اشتراک در انتظاری ندارید.\nلطفاً ابتدا از دکمه خرید اشتراک استفاده کنید.")
+        return
+    
+    try:
+        file_info = bot.get_file(message.photo[-1].file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        payment_code = hashlib.md5(f"{user_id}_{time.time()}_{random.randint(1000,9999)}".encode()).hexdigest()[:12].upper()
+        receipt_path = os.path.join(RECEIPTS_DIR, f"{user_id}_{payment_code}.jpg")
+        with open(receipt_path, 'wb') as f:
+            f.write(downloaded_file)
+        
+        with get_db() as conn:
+            conn.execute('INSERT INTO receipts (user_id, subscription_id, amount, receipt_path, payment_code, created_at, is_verified) VALUES (?, ?, ?, ?, ?, ?, 0)', 
+                        (user_id, pending_sub['id'], pending_sub['amount'], receipt_path, payment_code, datetime.now().isoformat()))
+            conn.commit()
+        
+        send_safe(message.chat.id, 
+            f"✅ فیش شما با موفقیت ارسال شد!\n\n"
+            f"🆔 کد پیگیری: {payment_code}\n"
+            f"💰 مبلغ: {pending_sub['amount']:,} تومان\n"
+            f"⏳ پس از تایید، اشتراک شما فعال می‌شود."
+        )
+        
+        for admin_id in ADMIN_IDS:
+            try:
+                bot.send_photo(admin_id, open(receipt_path, 'rb'), 
+                    caption=f"📸 فیش جدید\n\n"
+                    f"👤 کاربر: {user_id}\n"
+                    f"💰 مبلغ: {pending_sub['amount']:,} تومان\n"
+                    f"🆔 کد: {payment_code}\n"
+                    f"📅 زمان: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                )
+            except:
+                pass
+                
+    except Exception as e:
+        send_safe(message.chat.id, f"❌ خطا در ارسال فیش: {str(e)[:100]}")
 
-💰 **تنظیمات مالی:**
-• قیمت پایه: ۵۰۰,۰۰۰ تومان
-• قیمت حرفه‌ای: ۲,۰۰۰,۰۰۰ تومان
-• قیمت VIP: ۵,۰۰۰,۰۰۰ تومان
+@bot.message_handler(func=lambda m: m.text == '🤖 ساخت ربات جدید')
+def build_new_bot(message):
+    user_id = message.from_user.id
+    
+    if not has_active_subscription(user_id):
+        send_safe(message.chat.id, 
+            f"❌ اشتراک فعال ندارید!\n\n"
+            f"💰 برای خرید اشتراک از دکمه زیر استفاده کنید:\n"
+            f"🛒 خرید اشتراک"
+        )
+        return
+    
+    if not can_create_bot(user_id):
+        send_safe(message.chat.id, 
+            f"❌ شما قبلاً با این اشتراک ربات ساخته‌اید!\n\n"
+            f"💰 برای ساخت ربات جدید، اشتراک جدید بخرید."
+        )
+        return
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("📤 ارسال فایل شخصی", callback_data="build_custom"),
+        types.InlineKeyboardButton("📦 استفاده از فایل آماده", callback_data="build_ready")
+    )
+    
+    send_safe(message.chat.id, 
+        "🤖 ساخت ربات جدید\n\n"
+        "لطفاً روش ساخت را انتخاب کنید:\n\n"
+        "📤 فایل شخصی: فایل .py یا .zip خود را ارسال کنید\n"
+        "📦 فایل آماده: از فایل‌های آماده استفاده کنید",
+        reply_markup=markup
+    )
 
-👥 **تنظیمات کاربران:**
-• سیگنال رایگان: ۳ عدد/روز
-• اعتبار رفرال: ۱۰۰ امتیاز
+@bot.callback_query_handler(func=lambda call: call.data == "build_custom")
+def build_custom(call):
+    user_id = call.from_user.id
+    
+    if not has_active_subscription(user_id):
+        bot.answer_callback_query(call.id, "❌ اشتراک فعال ندارید!", show_alert=True)
+        return
+    
+    if not can_create_bot(user_id):
+        bot.answer_callback_query(call.id, "❌ قبلاً ربات ساخته‌اید!", show_alert=True)
+        return
+    
+    bot.answer_callback_query(call.id, "📤 لطفاً فایل ربات خود را ارسال کنید")
+    
+    send_safe(call.message.chat.id, 
+        "📤 ارسال فایل ربات\n\n"
+        "فایل .py یا .zip خود را ارسال کنید.\n\n"
+        "✅ پس از تایید ادمین، ربات ساخته می‌شود.\n"
+        "📦 کتابخانه‌های مورد نیاز به صورت خودکار نصب می‌شوند."
+    )
 
-💡 **برای تغییر هر کدام، به ادمین پیام دهید.**
-        """
+@bot.callback_query_handler(func=lambda call: call.data == "build_ready")
+def build_ready(call):
+    user_id = call.from_user.id
+    
+    if not has_active_subscription(user_id):
+        bot.answer_callback_query(call.id, "❌ اشتراک فعال ندارید!", show_alert=True)
+        return
+    
+    if not can_create_bot(user_id):
+        bot.answer_callback_query(call.id, "❌ قبلاً ربات ساخته‌اید!", show_alert=True)
+        return
+    
+    ready_files = get_ready_files()
+    
+    if not ready_files:
+        bot.answer_callback_query(call.id, "❌ هیچ فایل آماده‌ای وجود ندارد!", show_alert=True)
+        return
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    for file in ready_files:
+        markup.add(types.InlineKeyboardButton(
+            f"📦 {file['name']}", 
+            callback_data=f"select_ready_{file['id']}"
+        ))
+    markup.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_build"))
+    
+    edit_safe(
+        call.message.chat.id,
+        call.message.message_id,
+        "📦 انتخاب فایل آماده\n\n"
+        "یکی از فایل‌های زیر را انتخاب کنید:\n\n"
+        "⚠️ قیمت: ۳,۰۰۰,۰۰۰ تومان",
+        reply_markup=markup
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('select_ready_'))
+def select_ready_file(call):
+    file_id = int(call.data.replace('select_ready_', ''))
+    user_id = call.from_user.id
+    
+    if not has_active_subscription(user_id):
+        bot.answer_callback_query(call.id, "❌ اشتراک فعال ندارید!", show_alert=True)
+        return
+    
+    if not can_create_bot(user_id):
+        bot.answer_callback_query(call.id, "❌ قبلاً ربات ساخته‌اید!", show_alert=True)
+        return
+    
+    ready_file = get_ready_file_by_id(file_id)
+    if not ready_file:
+        bot.answer_callback_query(call.id, "❌ فایل پیدا نشد!", show_alert=True)
+        return
+    
+    bot.answer_callback_query(call.id, f"📦 {ready_file['name']} انتخاب شد")
+    
+    msg = send_safe(
+        call.message.chat.id,
+        f"📦 فایل آماده انتخاب شد: {ready_file['name']}\n\n"
+        f"📝 توضیحات: {ready_file['description'] or 'بدون توضیحات'}\n"
+        f"💰 قیمت: {ready_file['price']:,} تومان\n\n"
+        f"لطفاً توکن ربات خود را ارسال کنید:\n"
+        f"(توکنی که از @BotFather دریافت کرده‌اید)"
+    )
+    
+    bot.register_next_step_handler(msg, process_ready_token, ready_file)
+
+def process_ready_token(message, ready_file):
+    user_id = message.from_user.id
+    token = message.text.strip()
+    
+    if not re.match(r'^[0-9]{8,10}:[A-Za-z0-9_-]{35}$', token):
+        send_safe(message.chat.id, "❌ توکن نامعتبر است! لطفاً توکن صحیح را ارسال کنید.")
+        return
+    
+    msg = send_safe(
+        message.chat.id,
+        f"✅ توکن دریافت شد!\n\n"
+        f"لطفاً آیدی عددی ادمین ربات را ارسال کنید:\n"
+        f"(مثال: 123456789)"
+    )
+    
+    bot.register_next_step_handler(msg, process_ready_admin, ready_file, token)
+
+def process_ready_admin(message, ready_file, token):
+    user_id = message.from_user.id
+    admin_id_text = message.text.strip()
+    
+    try:
+        admin_id = int(admin_id_text)
+    except:
+        send_safe(message.chat.id, "❌ آیدی ادمین نامعتبر است! لطفاً یک عدد صحیح ارسال کنید.")
+        return
+    
+    try:
+        with open(ready_file['file_path'], 'r', encoding='utf-8') as f:
+            code = f.read()
+    except:
+        send_safe(message.chat.id, "❌ خطا در خواندن فایل آماده!")
+        return
+    
+    code = re.sub(r'BOT_TOKEN\s*=\s*["\'][^"\']*["\']', f'BOT_TOKEN = "{token}"', code)
+    code = re.sub(r'TOKEN\s*=\s*["\'][^"\']*["\']', f'TOKEN = "{token}"', code)
+    code = re.sub(r'API_TOKEN\s*=\s*["\'][^"\']*["\']', f'API_TOKEN = "{token}"', code)
+    code = re.sub(r'ADMIN_ID\s*=\s*\d+', f'ADMIN_ID = {admin_id}', code)
+    code = re.sub(r'admin_id\s*=\s*\d+', f'admin_id = {admin_id}', code)
+    code = re.sub(r'ADMIN\s*=\s*\d+', f'ADMIN = {admin_id}', code)
+    code = re.sub(r'admin\s*=\s*\d+', f'admin = {admin_id}', code)
+    code = re.sub(r'OWNER_ID\s*=\s*\d+', f'OWNER_ID = {admin_id}', code)
+    code = re.sub(r'owner_id\s*=\s*\d+', f'owner_id = {admin_id}', code)
+    
+    user_file_dir = os.path.join(PENDING_FILES_DIR, str(user_id))
+    os.makedirs(user_file_dir, exist_ok=True)
+    
+    file_name = f"ready_{ready_file['id']}_{int(time.time())}.py"
+    file_path = os.path.join(user_file_dir, file_name)
+    
+    with open(file_path, 'w', encoding='utf-8') as f:
+        f.write(code)
+    
+    file_hash = hashlib.sha256(open(file_path, 'rb').read()).hexdigest()
+    
+    with get_db() as conn:
+        sub = conn.execute('SELECT id FROM subscriptions WHERE user_id = ? AND status = "active" ORDER BY paid_at DESC LIMIT 1', (user_id,)).fetchone()
+        if not sub:
+            send_safe(message.chat.id, "❌ اشتراک فعال پیدا نشد!")
+            return
+        subscription_id = sub['id']
+    
+    file_id = save_pending_file(user_id, subscription_id, file_path, file_name, file_hash, is_ready=1, ready_file_id=ready_file['id'])
+    
+    if not file_id:
+        send_safe(message.chat.id, "❌ خطا در ذخیره فایل!")
+        return
+    
+    send_safe(message.chat.id, 
+        f"✅ فایل آماده با موفقیت ثبت شد!\n\n"
+        f"📦 نام: {ready_file['name']}\n"
+        f"🤖 توکن: {token[:10]}...\n"
+        f"👤 ادمین: {admin_id}\n\n"
+        f"🔄 ربات شما به صورت خودکار ساخته می‌شود!\n"
+        f"⏳ لطفاً چند لحظه صبر کنید..."
+    )
+    
+    threading.Thread(target=auto_build_ready_bot, args=(file_id, user_id, call.message.chat.id)).start()
+
+def auto_build_ready_bot(file_id, user_id, chat_id):
+    try:
+        time.sleep(3)
+        
+        if not has_active_subscription(user_id):
+            send_safe(chat_id, "❌ اشتراک شما منقضی شده است!")
+            return
+        
+        if not can_create_bot(user_id):
+            send_safe(chat_id, "❌ قبلاً با این اشتراک ربات ساخته‌اید!")
+            return
+        
+        send_safe(chat_id, "🔄 در حال ساخت خودکار ربات شما...\n⏳ لطفاً شکیبا باشید...")
+        
+        result = build_bot_from_pending(file_id, None, chat_id, auto_build=True)
+        
+        if result['success']:
+            send_safe(
+                chat_id, 
+                f"✅ ربات شما با موفقیت ساخته شد!\n\n"
+                f"🤖 نام: {result['name']}\n"
+                f"🔗 لینک: https://t.me/{result['username']}\n"
+                f"🆔 آیدی: {result['bot_id']}\n\n"
+                f"از منوی مدیریت ربات می‌توانید آن را مدیریت کنید."
+            )
+        else:
+            send_safe(
+                chat_id, 
+                f"❌ خطا در ساخت خودکار ربات!\n\n"
+                f"⚠️ خطا: {result['error'][:200]}\n\n"
+                f"لطفاً با پشتیبانی تماس بگیرید."
+            )
+            
+        for admin in ADMIN_IDS:
+            try:
+                send_safe(
+                    admin,
+                    f"{'✅' if result['success'] else '❌'} ساخت خودکار ربات آماده\n\n"
+                    f"👤 کاربر: {user_id}\n"
+                    f"📦 فایل: {get_ready_file_by_id(file_id)['name'] if file_id else 'نامشخص'}\n"
+                    f"🔄 وضعیت: {'موفق' if result['success'] else 'ناموفق'}\n"
+                    f"📝 پیام: {result.get('error', 'ساخته شد')[:100]}"
+                )
+            except:
+                pass
+                
+    except Exception as e:
+        logger.error(f"auto_build_ready_bot error: {e}")
+        send_safe(chat_id, f"❌ خطا در ساخت خودکار: {str(e)[:100]}")
+
+@bot.callback_query_handler(func=lambda call: call.data == "back_to_build")
+def back_to_build(call):
+    bot.answer_callback_query(call.id, "🔙 بازگشت")
+    build_new_bot(call.message)
+
+@bot.message_handler(content_types=['document'])
+def handle_bot_file(message):
+    user_id = message.from_user.id
+    if not has_active_subscription(user_id):
+        send_safe(message.chat.id, "❌ اشتراک فعال ندارید!")
+        return
+    if not can_create_bot(user_id):
+        send_safe(message.chat.id, "❌ قبلاً ربات ساخته‌اید!")
+        return
+    
+    file_name = message.document.file_name
+    if not (file_name.endswith('.py') or file_name.endswith('.zip')):
+        send_safe(message.chat.id, "❌ فقط فایل .py یا .zip مجاز است!")
+        return
+    if message.document.file_size > 20 * 1024 * 1024:
+        send_safe(message.chat.id, "❌ حجم بیشتر از ۲۰ مگابایت!")
+        return
+    
+    try:
+        file_info = bot.get_file(message.document.file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        
+        user_file_dir = os.path.join(PENDING_FILES_DIR, str(user_id))
+        os.makedirs(user_file_dir, exist_ok=True)
+        
+        file_path = os.path.join(user_file_dir, f"{int(time.time())}_{file_name}")
+        with open(file_path, 'wb') as f:
+            f.write(downloaded_file)
+        file_hash = hashlib.sha256(open(file_path, 'rb').read()).hexdigest()
+        
+        with get_db() as conn:
+            sub = conn.execute('SELECT id FROM subscriptions WHERE user_id = ? AND status = "active" ORDER BY paid_at DESC LIMIT 1', (user_id,)).fetchone()
+            if not sub:
+                send_safe(message.chat.id, "❌ اشتراک فعال پیدا نشد!")
+                return
+            subscription_id = sub['id']
+        
+        save_pending_file(user_id, subscription_id, file_path, file_name, file_hash, is_ready=0)
+        send_safe(message.chat.id, 
+            f"✅ فایل {file_name} دریافت شد!\n\n"
+            f"⏳ در لیست انتظار بررسی قرار گرفت.\n"
+            f"📦 کتابخانه‌های مورد نیاز هنگام ساخت به صورت خودکار نصب می‌شوند."
+        )
+    except Exception as e:
+        send_safe(message.chat.id, f"❌ خطا: {str(e)[:100]}")
+
+@bot.message_handler(func=lambda m: m.text == '⚙️ مدیریت ربات')
+def manage_bot(message):
+    user_id = message.from_user.id
+    bots = get_user_bots(user_id)
+    
+    if not bots:
+        send_safe(message.chat.id, 
+            "📋 شما رباتی ندارید!\n\n"
+            "برای ساخت ربات، ابتدا اشتراک بخرید و سپس از گزینه «ساخت ربات جدید» استفاده کنید."
+        )
+        return
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    for b in bots:
+        status_emoji = "🟢" if b['status'] == 'running' else "🔴"
+        status_text = "فعال" if b['status'] == 'running' else "غیرفعال"
+        markup.add(types.InlineKeyboardButton(
+            f"{status_emoji} {b['name']} ({status_text})", 
+            callback_data=f"toggle_bot_{b['id']}"
+        ))
+    
+    markup.row(
+        types.InlineKeyboardButton("🗑️ حذف ربات", callback_data="delete_bot_menu")
+    )
+    
+    send_safe(message.chat.id, 
+        "🤖 مدیریت ربات‌های شما\n\n"
+        "برای فعال/غیرفعال کردن هر ربات، روی آن کلیک کنید:\n"
+        "برای حذف ربات، از دکمه پایین استفاده کنید.",
+        reply_markup=markup
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data == "delete_bot_menu")
+def delete_bot_menu(call):
+    user_id = call.from_user.id
+    bots = get_user_bots(user_id)
+    
+    if not bots:
+        bot.answer_callback_query(call.id, "❌ رباتی برای حذف وجود ندارد!", show_alert=True)
+        return
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    for b in bots:
+        markup.add(types.InlineKeyboardButton(
+            f"🗑️ {b['name']}", 
+            callback_data=f"confirm_delete_{b['id']}"
+        ))
+    markup.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_manage"))
+    
+    edit_safe(
+        call.message.chat.id,
+        call.message.message_id,
+        "🗑️ حذف ربات\n\n"
+        "روی رباتی که می‌خواهید حذف کنید کلیک کنید:\n\n"
+        "⚠️ توجه: این عمل غیرقابل بازگشت است!",
+        reply_markup=markup
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('confirm_delete_'))
+def confirm_delete_bot(call):
+    bot_id = call.data.replace('confirm_delete_', '')
+    user_id = call.from_user.id
+    
+    bot_info = get_bot_by_id(bot_id)
+    if not bot_info or bot_info['user_id'] != user_id:
+        bot.answer_callback_query(call.id, "❌ ربات پیدا نشد!", show_alert=True)
+        return
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton("✅ بله، حذف کن", callback_data=f"delete_now_{bot_id}"),
+        types.InlineKeyboardButton("❌ انصراف", callback_data="back_to_manage")
+    )
+    
+    edit_safe(
+        call.message.chat.id,
+        call.message.message_id,
+        f"⚠️ تأیید حذف ربات\n\n"
+        f"🤖 نام: {bot_info['name']}\n"
+        f"🆔 آیدی: {bot_id}\n\n"
+        f"آیا از حذف این ربات مطمئن هستید؟\n"
+        f"این عمل غیرقابل بازگشت است!",
+        reply_markup=markup
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('delete_now_'))
+def delete_now_bot(call):
+    bot_id = call.data.replace('delete_now_', '')
+    user_id = call.from_user.id
+    
+    if delete_bot_complete(bot_id, user_id):
+        bot.answer_callback_query(call.id, "✅ ربات با موفقیت حذف شد!", show_alert=True)
+        edit_safe(
+            call.message.chat.id,
+            call.message.message_id,
+            f"✅ ربات با موفقیت حذف شد!\n\n"
+            f"🆔 آیدی: {bot_id}\n\n"
+            f"تمام فایل‌های مربوط به ربات پاک شد."
+        )
+    else:
+        bot.answer_callback_query(call.id, "❌ خطا در حذف ربات!", show_alert=True)
+
+@bot.callback_query_handler(func=lambda call: call.data == "back_to_manage")
+def back_to_manage(call):
+    bot.answer_callback_query(call.id, "🔙 بازگشت")
+    manage_bot(call.message)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('toggle_bot_'))
+def toggle_bot(call):
+    bot_id = call.data.replace('toggle_bot_', '')
+    user_id = call.from_user.id
+    bot_info = get_bot_by_id(bot_id)
+    
+    if not bot_info or bot_info['user_id'] != user_id:
+        bot.answer_callback_query(call.id, "❌ ربات پیدا نشد!")
+        return
+    
+    if bot_info['status'] == 'running':
+        if stop_user_bot(bot_id):
+            bot.answer_callback_query(call.id, "🛑 ربات غیرفعال شد")
+            edit_safe(
+                call.message.chat.id, 
+                call.message.message_id,
+                f"🛑 ربات {bot_info['name']} غیرفعال شد.\n\n"
+                f"برای فعال کردن دوباره از منوی مدیریت استفاده کنید."
+            )
+        else:
+            bot.answer_callback_query(call.id, "❌ خطا در غیرفعال کردن")
+    else:
+        days_left = get_subscription_days_left(user_id)
+        if days_left <= 0:
+            bot.answer_callback_query(call.id, "❌ اشتراک شما منقضی شده است!")
+            edit_safe(
+                call.message.chat.id, 
+                call.message.message_id,
+                f"❌ اشتراک شما منقضی شده است.\n\n"
+                f"لطفاً برای فعال کردن ربات، اشتراک جدید بخرید."
+            )
+            return
+        
+        success, msg = start_user_bot(bot_id, call.message.chat.id)
+        if success:
+            bot.answer_callback_query(call.id, "✅ ربات فعال شد")
+            edit_safe(
+                call.message.chat.id, 
+                call.message.message_id,
+                f"✅ ربات {bot_info['name']} فعال شد.\n\n"
+                f"برای غیرفعال کردن از منوی مدیریت استفاده کنید."
+            )
+        else:
+            bot.answer_callback_query(call.id, f"❌ {msg[:30]}")
+
+@bot.message_handler(func=lambda m: m.text == '💰 برداشت از کیف پول')
+def wallet(message):
+    user_id = message.from_user.id
+    user = get_user(user_id)
+    balance = get_user_balance(user_id)
+    bot_username = bot.get_me().username
+    
+    if not user:
+        send_safe(message.chat.id, "❌ /start را بزنید")
+        return
+    
+    referral_count, subscribed_count, total_bonus = get_referral_stats(user_id)
+    
+    with get_db() as conn:
+        total_bots = conn.execute('SELECT COUNT(*) FROM bots WHERE user_id = ? AND status NOT IN ("deleted", "deleted_by_user") AND is_deleted = 0', (user_id,)).fetchone()[0]
+    
+    text = f"💰 کیف پول شما\n\n"
+    text += f"👤 کاربر: {user['first_name']}\n"
+    text += f"💰 موجودی: {balance:,} تومان\n"
+    text += f"📈 کل درآمد: {user['total_earned']:,} تومان\n"
+    text += f"🎁 تعداد رفرال: {referral_count} نفر\n"
+    text += f"✅ اشتراک خرید: {subscribed_count} نفر\n"
+    text += f"💵 پاداش دریافتی: {total_bonus:,} تومان\n"
+    text += f"🤖 تعداد ربات: {total_bots} عدد\n"
+    text += f"🎯 حداقل برداشت: {config.min_withdraw:,} تومان\n\n"
+    text += f"🎁 لینک رفرال:\nhttps://t.me/{bot_username}?start={user['referral_code']}"
+    
+    markup = types.InlineKeyboardMarkup()
+    
+    if balance >= config.min_withdraw:
+        markup.add(types.InlineKeyboardButton("🏧 برداشت (فعال)", callback_data="withdraw_active"))
+        text += f"\n\n✅ وضعیت برداشت: فعال (موجودی کافی)"
+    else:
+        markup.add(types.InlineKeyboardButton("🏧 برداشت (غیرفعال)", callback_data="withdraw_inactive"))
+        text += f"\n\n❌ وضعیت برداشت: غیرفعال (نیاز به {config.min_withdraw - balance:,} تومان بیشتر)"
+    
+    send_safe(message.chat.id, text, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == "withdraw_inactive")
+def withdraw_inactive(call):
+    user_id = call.from_user.id
+    balance = get_user_balance(user_id)
+    
+    bot.answer_callback_query(call.id, 
+        f"❌ موجودی کافی نیست!\n"
+        f"نیاز به {config.min_withdraw - balance:,} تومان بیشتر دارید.",
+        show_alert=True
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data == "withdraw_active")
+def withdraw_active(call):
+    user_id = call.from_user.id
+    balance = get_user_balance(user_id)
+    
+    if balance < config.min_withdraw:
+        bot.answer_callback_query(call.id, 
+            f"❌ موجودی کافی نیست!\n"
+            f"موجودی فعلی: {balance:,} تومان",
+            show_alert=True
+        )
+        return
+    
+    msg = send_safe(call.message.chat.id, 
+        f"💰 برداشت از کیف پول\n\n"
+        f"💰 موجودی قابل برداشت: {balance:,} تومان\n"
+        f"💳 لطفاً شماره کارت (۱۶ رقم) خود را وارد کنید:"
+    )
+    bot.register_next_step_handler(msg, process_withdraw)
+
+def process_withdraw(message):
+    user_id = message.from_user.id
+    card = message.text.strip().replace(' ', '')
+    
+    if not re.match(r'^\d{16}$', card):
+        send_safe(message.chat.id, "❌ شماره کارت نامعتبر است! لطفاً ۱۶ رقم را وارد کنید.")
+        return
+    
+    balance = get_user_balance(user_id)
+    
+    if balance < config.min_withdraw:
+        send_safe(message.chat.id, f"❌ موجودی کافی نیست! ({balance:,} تومان)")
+        return
+    
+    with get_db() as conn:
+        conn.execute('INSERT INTO withdraw_requests (user_id, amount, card_number, created_at, is_verified) VALUES (?, ?, ?, ?, 0)', 
+                    (user_id, balance, card, datetime.now().isoformat()))
+        conn.execute('UPDATE users SET balance = 0 WHERE user_id = ?', (user_id,))
+        conn.commit()
+    
+    send_safe(message.chat.id,
+        f"✅ درخواست برداشت ثبت شد!\n\n"
+        f"💰 مبلغ: {balance:,} تومان\n"
+        f"💳 شماره کارت: {card}\n"
+        f"⏳ زمان تقریبی واریز: ۲۴-۴۸ ساعت\n\n"
+        f"🔔 پس از واریز به شما اطلاع داده می‌شود."
+    )
+    
+    for admin_id in ADMIN_IDS:
+        try:
+            send_safe(admin_id,
+                f"💰 درخواست برداشت جدید\n\n"
+                f"👤 کاربر: {user_id}\n"
+                f"💰 مبلغ: {balance:,} تومان\n"
+                f"💳 کارت: {card}\n"
+                f"📅 زمان: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            )
+        except:
+            pass
+
+@bot.message_handler(func=lambda m: m.text == '📚 راهنما')
+def guide(message):
+    bot_username = bot.get_me().username
+    guide_text = texts.guide_text.format(config.price, config.card_number, config.card_holder, bot_username)
+    send_markdown(message.chat.id, guide_text)
+
+@bot.message_handler(func=lambda m: m.text == '📞 پشتیبانی')
+def support(message):
+    send_safe(message.chat.id, "📞 پشتیبانی: @shahraghee13")
+
+@bot.message_handler(func=lambda m: m.text and m.text.startswith('📅'))
+def show_days(message):
+    days = get_subscription_days_left(message.from_user.id)
+    send_safe(message.chat.id, f"📅 {days} روز مونده" if days > 0 else "❌ اشتراک فعال ندارید")
+
+# ==================== پنل ادمین ====================
+
+@bot.message_handler(func=lambda m: m.text == '👑 پنل ادمین')
+def admin_panel(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    with get_db() as conn:
+        total_users = conn.execute('SELECT COUNT(*) FROM users WHERE is_locked = 0').fetchone()[0]
+        active_subs = conn.execute('SELECT COUNT(*) FROM users WHERE active_subscription = 1 AND is_locked = 0').fetchone()[0]
+        running_bots = conn.execute('SELECT COUNT(*) FROM bots WHERE status = "running" AND is_deleted = 0').fetchone()[0]
+        pending_files = conn.execute('SELECT COUNT(*) FROM pending_files WHERE status = "pending" AND is_active = 1').fetchone()[0]
+        pending_receipts = conn.execute('SELECT COUNT(*) FROM receipts WHERE status = "pending" AND is_verified = 0').fetchone()[0]
+        queue_size = conn.execute('SELECT COUNT(*) FROM build_queue WHERE status = "pending" AND is_active = 1').fetchone()[0]
+        total_balance = conn.execute('SELECT COALESCE(SUM(balance), 0) FROM users WHERE is_locked = 0').fetchone()[0]
+        referral_count = conn.execute('SELECT COUNT(*) FROM referral_logs WHERE status = "registered" AND is_active = 1').fetchone()[0]
+        subscribed_count = conn.execute('SELECT COUNT(*) FROM referral_logs WHERE status = "subscribed" AND is_active = 1').fetchone()[0]
+        servers_count = conn.execute('SELECT COUNT(*) FROM servers WHERE status = "active" AND is_active = 1').fetchone()[0]
+        total_bots = conn.execute('SELECT COUNT(*) FROM bots WHERE is_deleted = 0').fetchone()[0]
+        ready_files_count = conn.execute('SELECT COUNT(*) FROM ready_files WHERE is_active = 1').fetchone()[0]
+        
+        today = datetime.now().strftime('%Y-%m-%d')
+        today_users = conn.execute('SELECT COUNT(*) FROM users WHERE DATE(created_at) = ?', (today,)).fetchone()[0]
+        today_subs = conn.execute('SELECT COUNT(*) FROM subscriptions WHERE DATE(paid_at) = ? AND status = "active"', (today,)).fetchone()[0]
+    
+    text = f"""
+👑 پنل مدیریت پیشرفته
+
+📊 آمار کلی:
+👥 کل کاربران: {total_users}
+✅ اشتراک فعال: {active_subs}
+🤖 ربات‌های در حال اجرا: {running_bots}
+📦 کل ربات‌های ساخته شده: {total_bots}
+📥 فایل‌های در انتظار: {pending_files}
+📸 فیش‌های در انتظار: {pending_receipts}
+⏳ صف ساخت: {queue_size}
+💰 مجموع موجودی: {total_balance:,} تومان
+🎁 رفرال ثبت: {referral_count}
+🎁 اشتراک خرید رفرال: {subscribed_count}
+🖥️ سرورهای فعال: {servers_count}
+📦 فایل‌های آماده: {ready_files_count}
+
+📈 آمار امروز:
+👤 کاربران جدید: {today_users}
+🛒 اشتراک فروخته: {today_subs}
+    """
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("📸 فیش‌ها", callback_data="admin_receipts"),
+        types.InlineKeyboardButton("📥 فایل‌ها", callback_data="admin_files"),
+        types.InlineKeyboardButton("➕ افزودن سرور", callback_data="admin_add_server"),
+        types.InlineKeyboardButton("💰 برداشت‌ها", callback_data="admin_withdraws"),
+        types.InlineKeyboardButton("📢 پیام همگانی", callback_data="admin_broadcast"),
+        types.InlineKeyboardButton("📝 تنظیم متون", callback_data="admin_texts"),
+        types.InlineKeyboardButton("⚙️ تنظیمات", callback_data="admin_settings"),
+        types.InlineKeyboardButton("🎁 تایید اشتراک", callback_data="admin_manual_sub"),
+        types.InlineKeyboardButton("📦 مدیریت کتابخانه‌ها", callback_data="admin_libraries"),
+        types.InlineKeyboardButton("📦 مدیریت فایل‌های آماده", callback_data="admin_ready_files"),
+        types.InlineKeyboardButton("🔄 ریستارت ربات‌ها", callback_data="admin_restart_bots"),
+        types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back")
+    )
+    
+    send_safe(message.chat.id, text, reply_markup=markup)
+
+# ==================== مدیریت فایل‌های آماده ====================
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_ready_files")
+def admin_ready_files(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    ready_files = get_ready_files()
+    
+    text = "📦 مدیریت فایل‌های آماده\n\n"
+    if ready_files:
+        for f in ready_files:
+            text += f"🆔 {f['id']} - {f['name']}\n"
+            text += f"   📄 {f['file_name']}\n"
+            text += f"   💰 {f['price']:,} تومان\n\n"
+    else:
+        text += "• هیچ فایل آماده‌ای وجود ندارد\n"
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("📤 آپلود فایل آماده", callback_data="upload_ready_file"),
+        types.InlineKeyboardButton("🗑️ حذف فایل آماده", callback_data="delete_ready_file"),
+        types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back")
+    )
+    
+    edit_safe(
+        call.message.chat.id,
+        call.message.message_id,
+        text,
+        reply_markup=markup
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data == "upload_ready_file")
+def upload_ready_file(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    msg = send_safe(
+        call.message.chat.id,
+        "📤 آپلود فایل آماده\n\n"
+        "لطفاً نام فایل را وارد کنید:\n"
+        "مثال: فروشگاهی"
+    )
+    bot.register_next_step_handler(msg, process_ready_file_name)
+
+def process_ready_file_name(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    name = message.text.strip()
+    if not name:
+        send_safe(message.chat.id, "❌ نام نمی‌تواند خالی باشد!")
+        return
+    
+    msg = send_safe(
+        message.chat.id,
+        f"✅ نام ثبت شد: {name}\n\n"
+        f"📤 لطفاً فایل .py یا .zip را ارسال کنید:"
+    )
+    bot.register_next_step_handler(msg, process_ready_file_upload, name)
+
+def process_ready_file_upload(message, name):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    if not message.document:
+        send_safe(message.chat.id, "❌ لطفاً یک فایل ارسال کنید!")
+        return
+    
+    file_name = message.document.file_name
+    if not (file_name.endswith('.py') or file_name.endswith('.zip')):
+        send_safe(message.chat.id, "❌ فقط فایل .py یا .zip مجاز است!")
+        return
+    
+    if message.document.file_size > 20 * 1024 * 1024:
+        send_safe(message.chat.id, "❌ حجم بیشتر از ۲۰ مگابایت!")
+        return
+    
+    try:
+        file_info = bot.get_file(message.document.file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        
+        ready_file_path = os.path.join(READY_FILES_DIR, f"{int(time.time())}_{file_name}")
+        with open(ready_file_path, 'wb') as f:
+            f.write(downloaded_file)
+        
+        msg = send_safe(
+            message.chat.id,
+            f"✅ فایل دریافت شد!\n\n"
+            f"📝 توضیحات (اختیاری) را وارد کنید:\n"
+            f"(برای رد شدن، - بفرستید)"
+        )
+        bot.register_next_step_handler(msg, process_ready_file_desc, name, file_name, ready_file_path)
+        
+    except Exception as e:
+        send_safe(message.chat.id, f"❌ خطا: {str(e)[:100]}")
+
+def process_ready_file_desc(message, name, file_name, ready_file_path):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    description = message.text.strip()
+    if description == '-':
+        description = ""
+    
+    if add_ready_file(name, file_name, ready_file_path, description):
+        send_safe(
+            message.chat.id,
+            f"✅ فایل آماده با موفقیت اضافه شد!\n\n"
+            f"📦 نام: {name}\n"
+            f"📄 فایل: {file_name}\n"
+            f"💰 قیمت: {SUBSCRIPTION_PRICE:,} تومان\n"
+            f"📝 توضیحات: {description or 'بدون توضیحات'}"
+        )
+        
+        for admin in ADMIN_IDS:
+            try:
+                send_safe(admin,
+                    f"✅ فایل آماده جدید اضافه شد!\n\n"
+                    f"📦 نام: {name}\n"
+                    f"📄 فایل: {file_name}"
+                )
+            except:
+                pass
+    else:
+        send_safe(message.chat.id, "❌ خطا در ذخیره فایل!")
+
+@bot.callback_query_handler(func=lambda call: call.data == "delete_ready_file")
+def delete_ready_file_menu(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    ready_files = get_ready_files()
+    
+    if not ready_files:
+        bot.answer_callback_query(call.id, "❌ هیچ فایل آماده‌ای وجود ندارد!", show_alert=True)
+        return
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    for f in ready_files:
+        markup.add(types.InlineKeyboardButton(
+            f"🗑️ {f['name']}", 
+            callback_data=f"confirm_delete_ready_{f['id']}"
+        ))
+    markup.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_ready_files"))
+    
+    edit_safe(
+        call.message.chat.id,
+        call.message.message_id,
+        "🗑️ حذف فایل آماده\n\n"
+        "روی فایلی که می‌خواهید حذف کنید کلیک کنید:\n\n"
+        "⚠️ این عمل غیرقابل بازگشت است!",
+        reply_markup=markup
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('confirm_delete_ready_'))
+def confirm_delete_ready(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    file_id = int(call.data.replace('confirm_delete_ready_', ''))
+    
+    if delete_ready_file(file_id):
+        bot.answer_callback_query(call.id, "✅ فایل با موفقیت حذف شد!", show_alert=True)
+        edit_safe(
+            call.message.chat.id,
+            call.message.message_id,
+            f"✅ فایل آماده با موفقیت حذف شد!\n\n"
+            f"🆔 آیدی: {file_id}"
+        )
+    else:
+        bot.answer_callback_query(call.id, "❌ خطا در حذف فایل!", show_alert=True)
+
+# ==================== سایر هندلرهای ادمین ====================
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_restart_bots")
+def admin_restart_bots(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    msg = send_safe(call.message.chat.id, 
+        "🔄 در حال ریستارت تمام ربات‌ها...\n⏳ لطفاً شکیبا باشید..."
+    )
+    
+    restarted = restart_all_bots()
+    
+    edit_safe(
+        call.message.chat.id, 
+        msg.message_id,
+        f"✅ ریستارت کامل شد!\n\n"
+        f"🔄 {restarted} ربات با موفقیت راه‌اندازی مجدد شدند.\n"
+        f"📊 تمام ربات‌های مرده دوباره فعال شدند."
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_add_server")
+def admin_add_server(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    msg = send_safe(call.message.chat.id, 
+        "➕ افزودن سرور جدید\n\n"
+        "لطفاً IP سرور را وارد کنید:\n"
+        "مثال: 82.115.20.73"
+    )
+    bot.register_next_step_handler(msg, process_server_ip)
+
+def process_server_ip(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    ip = message.text.strip()
+    if not re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$', ip):
+        send_safe(message.chat.id, "❌ IP نامعتبر است!")
+        return
+    
+    msg = send_safe(message.chat.id, f"✅ IP ثبت شد: {ip}\n\nلطفاً رمز SSH را وارد کنید:")
+    bot.register_next_step_handler(msg, lambda m: process_server_password(m, ip))
+
+def process_server_password(message, ip):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    password = message.text.strip()
+    if not password:
+        send_safe(message.chat.id, "❌ رمز نمی‌تواند خالی باشد!")
+        return
+    
+    msg = send_safe(message.chat.id, 
+        "🔄 در حال اتصال به سرور و نصب کتابخانه‌ها...\n"
+        "⏳ این عملیات چند دقیقه طول می‌کشد..."
+    )
+    
+    required_libs = [
+        "pyTelegramBotAPI", "python-telegram-bot", "psycopg2-binary",
+        "paramiko", "requests", "sqlalchemy", "redis", "pymongo",
+        "numpy", "pandas", "loguru", "rich", "tqdm", "click"
+    ]
+    
+    try:
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client.connect(ip, port=22, username='root', password=password, timeout=30)
+        client.close()
+        
+        installed, failed = install_libraries_on_server(ip, 22, 'root', password, required_libs)
+        
+        if add_server_to_db(f"Server_{ip}", ip, 22, 'root', password, installed):
+            edit_safe(
+                message.chat.id, 
+                msg.message_id,
+                f"✅ سرور با موفقیت اضافه شد!\n\n"
+                f"🖥️ IP: {ip}\n"
+                f"📦 کتابخانه‌های نصب شده: {len(installed)} مورد\n"
+                f"❌ ناموفق: {len(failed)} مورد\n\n"
+                f"✅ سرور آماده استفاده است!"
+            )
+            
+            for admin_id in ADMIN_IDS:
+                try:
+                    send_safe(admin_id,
+                        f"✅ سرور جدید اضافه شد!\n\n"
+                        f"🖥️ IP: {ip}\n"
+                        f"📦 کتابخانه‌ها: {', '.join(installed[:10])}..."
+                    )
+                except:
+                    pass
+        else:
+            edit_safe(
+                message.chat.id, 
+                msg.message_id,
+                f"❌ خطا در ذخیره سرور!\n\n"
+                f"اتصال برقرار بود اما ذخیره در دیتابیس انجام نشد."
+            )
+            
+    except Exception as e:
+        edit_safe(
+            message.chat.id, 
+            msg.message_id,
+            f"❌ خطا در اتصال به سرور!\n\n"
+            f"⚠️ خطا: {str(e)[:200]}\n\n"
+            f"لطفاً IP و رمز را بررسی کنید."
+        )
+
+def install_libraries_on_server(server_ip, server_port, server_username, server_password, libraries):
+    try:
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client.connect(server_ip, port=server_port, username=server_username, password=server_password, timeout=30)
+        
+        client.exec_command('pip3 install --upgrade pip')
+        time.sleep(2)
+        
+        installed = []
+        failed = []
+        
+        for lib in libraries:
+            try:
+                stdin, stdout, stderr = client.exec_command(f'pip3 install {lib} --quiet')
+                exit_status = stdout.channel.recv_exit_status()
+                if exit_status == 0:
+                    installed.append(lib)
+                    logger.info(f"✅ کتابخانه {lib} روی سرور {server_ip} نصب شد")
+                else:
+                    failed.append(lib)
+                    logger.warning(f"❌ خطا در نصب {lib} روی سرور {server_ip}")
+            except Exception as e:
+                failed.append(lib)
+                logger.error(f"خطا در نصب {lib}: {e}")
+            time.sleep(0.5)
+        
+        client.close()
+        return installed, failed
+    except Exception as e:
+        logger.error(f"خطا در اتصال به سرور {server_ip}: {e}")
+        return [], [str(e)]
+
+def add_server_to_db(name, ip, port, username, password, installed_libs=None):
+    try:
+        with get_db() as conn:
+            now = datetime.now().isoformat()
+            if installed_libs:
+                libs_str = ','.join(installed_libs)
+            else:
+                libs_str = ''
+            conn.execute('INSERT INTO servers (name, ip, port, username, password, created_at, last_heartbeat, installed_libs, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)', 
+                        (name, ip, port, username, password, now, now, libs_str))
+            conn.commit()
+            return True
+    except:
+        return False
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_receipts")
+def admin_receipts_list(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    with get_db() as conn:
+        receipts = conn.execute('SELECT * FROM receipts WHERE status = "pending" AND is_verified = 0 ORDER BY created_at DESC').fetchall()
+    
+    if not receipts:
+        send_safe(call.message.chat.id, "📸 فیشی وجود ندارد")
+        return
+    
+    for r in receipts:
+        text = f"📸 فیش #{r['id']}\n\n"
+        text += f"👤 کاربر: {r['user_id']}\n"
+        text += f"💰 مبلغ: {r['amount']:,} تومان\n"
+        text += f"🆔 کد: {r['payment_code']}\n"
+        text += f"📅 زمان: {r['created_at'][:10]}"
         
         markup = types.InlineKeyboardMarkup()
         markup.add(
-            types.InlineKeyboardButton("🔄 تنظیم مجدد", callback_data="admin_reset_settings"),
-            types.InlineKeyboardButton("📊 پشتیبان‌گیری", callback_data="admin_backup"),
-            types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back")
+            types.InlineKeyboardButton("✅ تایید و فعال‌سازی", callback_data=f"approve_payment_{r['id']}"),
+            types.InlineKeyboardButton("❌ رد", callback_data=f"reject_payment_{r['id']}")
         )
-        
-        self.bot.edit_message_text(text, user_id, call.message.message_id, parse_mode='Markdown', reply_markup=markup)
+        if os.path.exists(r['receipt_path']):
+            with open(r['receipt_path'], 'rb') as f:
+                bot.send_photo(call.message.chat.id, f, caption=text, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('approve_payment_'))
+def approve_payment(call):
+    receipt_id = int(call.data.replace('approve_payment_', ''))
     
-    def admin_stats(self, call):
-        """آمار پیشرفته"""
-        user_id = call.from_user.id
-        
-        # آمار کلی
-        db.cursor.execute('SELECT COUNT(*) FROM users')
-        total_users = db.cursor.fetchone()[0]
-        
-        db.cursor.execute('SELECT COUNT(*) FROM users WHERE plan != "FREE"')
-        paid_users = db.cursor.fetchone()[0]
-        
-        db.cursor.execute('SELECT COUNT(*) FROM signals')
-        total_signals = db.cursor.fetchone()[0]
-        
-        db.cursor.execute('SELECT COUNT(*) FROM user_trades')
-        total_trades = db.cursor.fetchone()[0]
-        
-        db.cursor.execute('SELECT COALESCE(AVG(profit_loss), 0) FROM user_trades WHERE status = "closed"')
-        avg_profit = db.cursor.fetchone()[0]
-        
-        db.cursor.execute('SELECT COUNT(*) FROM user_trades WHERE status = "open"')
-        open_trades = db.cursor.fetchone()[0]
-        
-        text = f"""
-📊 **آمار پیشرفته**
+    with get_db() as conn:
+        receipt = conn.execute('SELECT * FROM receipts WHERE id = ? AND is_verified = 0', (receipt_id,)).fetchone()
+        if receipt:
+            success = activate_subscription(receipt['subscription_id'], receipt['user_id'], receipt['amount'])
+            
+            if success:
+                conn.execute('UPDATE receipts SET status = "approved", is_verified = 1 WHERE id = ?', (receipt_id,))
+                conn.commit()
+                
+                bot.answer_callback_query(call.id, "✅ تایید و فعال‌سازی شد!")
+                
+                send_safe(receipt['user_id'], 
+                    f"✅ اشتراک شما فعال شد!\n\n"
+                    f"📅 {config.subscription_days} روز اعتبار.\n"
+                    f"🤖 از منوی «ساخت ربات جدید» استفاده کنید."
+                )
+                
+                bot.delete_message(call.message.chat.id, call.message.message_id)
+            else:
+                bot.answer_callback_query(call.id, "❌ خطا در فعال‌سازی!")
+        else:
+            bot.answer_callback_query(call.id, "❌ فیش پیدا نشد!")
 
-👥 **کاربران:**
-• کل: {total_users}
-• فعال: {paid_users}
-• نرخ تبدیل: {(paid_users/total_users*100) if total_users > 0 else 0:.1f}%
+@bot.callback_query_handler(func=lambda call: call.data.startswith('reject_payment_'))
+def reject_payment(call):
+    receipt_id = int(call.data.replace('reject_payment_', ''))
+    
+    with get_db() as conn:
+        conn.execute('UPDATE receipts SET status = "rejected", is_verified = 1 WHERE id = ?', (receipt_id,))
+        conn.commit()
+    
+    bot.answer_callback_query(call.id, "❌ رد شد")
+    bot.delete_message(call.message.chat.id, call.message.message_id)
 
-📊 **سیگنال‌ها:**
-• کل سیگنال‌ها: {total_signals}
-• میانگین روزانه: {total_signals/30:.1f}
-
-📈 **معاملات:**
-• کل: {total_trades}
-• باز: {open_trades}
-• میانگین سود: {avg_profit:+.2f}%
-
-💡 **عملکرد کلی:**
-{'✅ عالی' if avg_profit > 5 else '🟡 خوب' if avg_profit > 2 else '🔄 نیاز به بهبود'}
-        """
+@bot.callback_query_handler(func=lambda call: call.data == "admin_files")
+def admin_files_list(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    files = get_pending_files()
+    if not files:
+        send_safe(call.message.chat.id, "📥 فایلی وجود ندارد")
+        return
+    
+    for f in files:
+        file_type = "📦 آماده" if f.get('is_ready', 0) == 1 else "📤 شخصی"
+        
+        text = f"📥 فایل #{f['id']} [{file_type}]\n\n"
+        text += f"👤 کاربر: {f['user_id']}\n"
+        text += f"📄 نام: {f['file_name']}\n"
+        text += f"📅 زمان: {f['submitted_at'][:10]}"
         
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🔄 بروزرسانی", callback_data="admin_stats"))
-        markup.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back"))
-        
-        self.bot.edit_message_text(text, user_id, call.message.message_id, parse_mode='Markdown', reply_markup=markup)
+        markup.add(
+            types.InlineKeyboardButton("✅ تایید و ساخت", callback_data=f"build_file_{f['id']}"),
+            types.InlineKeyboardButton("❌ حذف", callback_data=f"delete_file_{f['id']}")
+        )
+        if os.path.exists(f['file_path']):
+            with open(f['file_path'], 'rb') as file:
+                bot.send_document(call.message.chat.id, file, caption=text, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('build_file_'))
+def build_file(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
     
-    def admin_restart(self, call):
-        """ریستارت ربات"""
-        user_id = call.from_user.id
-        
-        self.bot.answer_callback_query(call.id, "🔄 در حال ریستارت...")
-        self.bot.send_message(user_id, "🔄 **ربات در حال ریستارت...**\n⏳ چند ثانیه صبر کنید...", parse_mode='Markdown')
-        
-        # ریستارت در ترد جداگانه
-        def restart():
-            time.sleep(2)
-            os.execv(sys.executable, ['python'] + sys.argv)
-        
-        threading.Thread(target=restart, daemon=True).start()
+    file_id = int(call.data.replace('build_file_', ''))
+    pending = get_pending_file_by_id(file_id)
     
-    # ================ اجرا ================
+    if not pending:
+        bot.answer_callback_query(call.id, "❌ فایل پیدا نشد!", show_alert=True)
+        return
     
-    def run(self):
-        print("=" * 80)
-        print("🚀 ربات سیگنال‌دهی فوق‌پیشرفته نسخه ۵.۰")
-        print("=" * 80)
-        print(f"👤 ادمین‌ها: {ADMIN_IDS}")
-        print(f"📊 نمادها: {self.engine.symbols}")
-        print(f"🧠 الگوریتم‌ها: ۴ الگوریتم پیش‌فرض")
-        print(f"📈 تایم‌فریم‌ها: ۱h, ۴h, ۱d")
-        print("=" * 80)
-        print("✅ ربات با موفقیت راه‌اندازی شد!")
-        print("📊 در حال دریافت داده‌های بازار...")
-        print("=" * 80)
+    if pending.get('is_ready', 0) == 1:
+        bot.answer_callback_query(call.id, "✅ این فایل آماده است و خودکار ساخته می‌شود!")
         
-        # اجرای تحلیل خودکار در ترد جداگانه
-        def auto_analysis():
-            while True:
-                try:
-                    signals = self.engine.run_analysis()
-                    if signals:
-                        print(f"✅ {len(signals)} سیگنال جدید تولید شد")
-                        
-                        # ارسال به ادمین‌ها
-                        for admin in ADMIN_IDS:
-                            for signal in signals[:3]:
-                                self.send_signal(admin, signal)
-                except Exception as e:
-                    print(f"❌ خطا در تحلیل خودکار: {e}")
-                    db.log('ERROR', f"خطا در تحلیل خودکار: {e}")
-                time.sleep(3600)  # هر ۱ ساعت
+        threading.Thread(target=auto_build_ready_bot, args=(file_id, pending['user_id'], call.message.chat.id)).start()
         
-        thread = threading.Thread(target=auto_analysis, daemon=True)
-        thread.start()
+        edit_safe(
+            call.message.chat.id,
+            call.message.message_id,
+            f"🔄 ساخت خودکار فایل آماده در حال انجام...\n\n"
+            f"📦 فایل: {pending['file_name']}\n"
+            f"👤 کاربر: {pending['user_id']}\n\n"
+            f"⏳ لطفاً شکیبا باشید..."
+        )
+        return
+    
+    msg = send_safe(call.message.chat.id, 
+        "🔄 در حال افزودن به صف ساخت...\n\n"
+        "⏳ لطفاً شکیبا باشید...\n"
+        "📦 کتابخانه‌های مورد نیاز به صورت خودکار نصب خواهند شد."
+    )
+    queue_id = add_to_build_queue(file_id, call.from_user.id)
+    
+    if queue_id:
+        active_builds[queue_id] = {
+            'chat_id': call.message.chat.id,
+            'message_id': msg.message_id,
+            'start_time': datetime.now(),
+            'file_id': file_id,
+            'user_id': call.from_user.id
+        }
+        update_countdown(call.message.chat.id, msg.message_id, queue_id, datetime.now())
+        edit_safe(
+            call.message.chat.id, 
+            call.message.message_id,
+            f"✅ فایل به صف ساخت اضافه شد\n\n"
+            f"🆔 شماره صف: {queue_id}\n"
+            f"🕐 زمان ساخت: حدود ۲ دقیقه\n"
+            f"📦 کتابخانه‌های مورد نیاز به صورت خودکار نصب می‌شوند\n\n"
+            f"⏳ در حال نمایش ثانیه‌شمار..."
+        )
+    else:
+        edit_safe(
+            call.message.chat.id, 
+            call.message.message_id,
+            "🔄 در حال ساخت مستقیم ربات...\n"
+            "📦 در حال نصب کتابخانه‌ها..."
+        )
+        result = build_bot_from_pending(file_id, None, call.message.chat.id)
+        if result['success']:
+            edit_safe(
+                call.message.chat.id, 
+                call.message.message_id,
+                f"✅ ربات ساخته شد!\n\n"
+                f"🤖 {result['name']}\n"
+                f"🔗 https://t.me/{result['username']}\n\n"
+                f"📦 کتابخانه‌های مورد نیاز نصب شدند."
+            )
+        else:
+            edit_safe(
+                call.message.chat.id, 
+                call.message.message_id,
+                f"❌ خطا: {result['error']}"
+            )
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('delete_file_'))
+def delete_file(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    file_id = int(call.data.replace('delete_file_', ''))
+    update_pending_file_status(file_id, 'deleted')
+    bot.answer_callback_query(call.id, "❌ حذف شد")
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_withdraws")
+def admin_withdraws_list(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    with get_db() as conn:
+        withdraws = conn.execute('SELECT * FROM withdraw_requests WHERE status = "pending" AND is_verified = 0 ORDER BY created_at DESC').fetchall()
+    
+    if not withdraws:
+        send_safe(call.message.chat.id, "💰 درخواستی وجود ندارد")
+        return
+    
+    for w in withdraws:
+        text = f"💰 درخواست برداشت #{w['id']}\n\n"
+        text += f"👤 کاربر: {w['user_id']}\n"
+        text += f"💰 مبلغ: {w['amount']:,} تومان\n"
+        text += f"💳 کارت: {w['card_number']}\n"
+        text += f"📅 زمان: {w['created_at'][:10]}"
         
-        # بررسی هشدارها در ترد جداگانه
-        def check_alerts():
-            while True:
-                try:
-                    db.cursor.execute('''
-                        SELECT * FROM alerts 
-                        WHERE triggered = 0 
-                        AND datetime(created_at) > datetime("now", "-7 days")
-                    ''')
-                    alerts = db.cursor.fetchall()
-                    
-                    for alert in alerts:
-                        symbol = alert[2]
-                        target = alert[3]
-                        condition = alert[4]
-                        user_id = alert[1]
-                        
-                        price = self.engine.get_price(symbol)
-                        if price:
-                            if condition == 'equal' and abs(price - target) / target < 0.01:
-                                # هشدار فعال شد
-                                db.cursor.execute('UPDATE alerts SET triggered = 1 WHERE id = ?', (alert[0],))
-                                db.conn.commit()
-                                
-                                self.bot.send_message(
-                                    user_id,
-                                    f"🔔 **هشدار قیمتی فعال شد!**\n\n"
-                                    f"📊 نماد: {symbol}\n"
-                                    f"🎯 قیمت هدف: ${target:,.2f}\n"
-                                    f"💰 قیمت فعلی: ${price:,.2f}\n\n"
-                                    f"💡 زمان اقدام مناسب است!",
-                                    parse_mode='Markdown'
-                                )
-                except Exception as e:
-                    print(f"❌ خطا در بررسی هشدارها: {e}")
-                time.sleep(60)  # هر ۱ دقیقه
-        
-        thread2 = threading.Thread(target=check_alerts, daemon=True)
-        thread2.start()
-        
-        # اجرای ربات
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton("✅ تایید و پرداخت", callback_data=f"approve_withdraw_{w['id']}"),
+            types.InlineKeyboardButton("❌ رد", callback_data=f"reject_withdraw_{w['id']}")
+        )
+        send_safe(call.message.chat.id, text, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('approve_withdraw_'))
+def approve_withdraw(call):
+    wid = int(call.data.replace('approve_withdraw_', ''))
+    
+    with get_db() as conn:
+        conn.execute('UPDATE withdraw_requests SET status = "approved", processed_at = ?, is_verified = 1 WHERE id = ?', 
+                    (datetime.now().isoformat(), wid))
+        conn.commit()
+    
+    bot.answer_callback_query(call.id, "✅ تایید و پرداخت شد")
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('reject_withdraw_'))
+def reject_withdraw(call):
+    wid = int(call.data.replace('reject_withdraw_', ''))
+    
+    with get_db() as conn:
+        w = conn.execute('SELECT * FROM withdraw_requests WHERE id = ? AND is_verified = 0', (wid,)).fetchone()
+        if w:
+            conn.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (w['amount'], w['user_id']))
+            conn.execute('UPDATE withdraw_requests SET status = "rejected", is_verified = 1 WHERE id = ?', (wid,))
+            conn.commit()
+    
+    bot.answer_callback_query(call.id, "❌ رد شد")
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_texts")
+def admin_texts(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton("💰 متن خرید اشتراک", callback_data="edit_subscription"),
+        types.InlineKeyboardButton("📚 متن راهنما", callback_data="edit_guide"),
+        types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back")
+    )
+    edit_safe(
+        call.message.chat.id, 
+        call.message.message_id,
+        "📝 مدیریت متون\n\n"
+        "هر کدام از متون زیر را می‌توانید تغییر دهید:",
+        reply_markup=markup
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data == "edit_subscription")
+def edit_subscription(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    msg = send_safe(call.message.chat.id, 
+        f"💰 متن جدید خرید اشتراک را ارسال کنید:\n\n"
+        f"متن فعلی:\n{texts.subscription_text[:200]}"
+    )
+    bot.register_next_step_handler(msg, save_subscription_text)
+
+def save_subscription_text(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    texts.subscription_text = message.text
+    texts.save_to_db()
+    send_safe(message.chat.id, "✅ متن خرید اشتراک تغییر کرد!")
+
+@bot.callback_query_handler(func=lambda call: call.data == "edit_guide")
+def edit_guide(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    msg = send_safe(call.message.chat.id, 
+        f"📚 متن جدید راهنما را ارسال کنید:\n\n"
+        f"متن فعلی:\n{texts.guide_text[:200]}"
+    )
+    bot.register_next_step_handler(msg, save_guide_text)
+
+def save_guide_text(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    texts.guide_text = message.text
+    texts.save_to_db()
+    send_safe(message.chat.id, "✅ متن راهنما تغییر کرد!")
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_settings")
+def admin_settings(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("💰 تغییر قیمت", callback_data="set_price"),
+        types.InlineKeyboardButton("💳 تغییر کارت", callback_data="set_card"),
+        types.InlineKeyboardButton("👤 تغییر صاحب کارت", callback_data="set_holder"),
+        types.InlineKeyboardButton("⏰ تغییر مدت اشتراک", callback_data="set_duration"),
+        types.InlineKeyboardButton("💰 حداقل برداشت", callback_data="set_min_withdraw"),
+        types.InlineKeyboardButton("🎁 پاداش رفرال", callback_data="set_referral_bonus"),
+        types.InlineKeyboardButton("⚙️ نصب خودکار کتابخانه", callback_data="toggle_auto_install"),
+        types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back")
+    )
+    
+    auto_status = "✅ فعال" if config.auto_install_libs else "❌ غیرفعال"
+    text = f"""
+⚙️ تنظیمات
+
+💰 قیمت: {config.price:,} تومان
+💳 کارت: {config.card_number}
+👤 صاحب کارت: {config.card_holder}
+⏰ مدت اشتراک: {config.subscription_days} روز
+💰 حداقل برداشت: {config.min_withdraw:,} تومان
+🎁 پاداش رفرال: {config.referral_bonus}%
+📦 نصب خودکار کتابخانه: {auto_status}
+    """
+    
+    edit_safe(
+        call.message.chat.id, 
+        call.message.message_id,
+        text,
+        reply_markup=markup
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data == "toggle_auto_install")
+def toggle_auto_install(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    config.auto_install_libs = not config.auto_install_libs
+    config.save_to_db()
+    bot.answer_callback_query(call.id, f"نصب خودکار کتابخانه‌ها {'فعال' if config.auto_install_libs else 'غیرفعال'} شد")
+    admin_settings(call)
+
+@bot.callback_query_handler(func=lambda call: call.data == "set_price")
+def set_price(call):
+    msg = send_safe(call.message.chat.id, f"💰 قیمت جدید (فعلی: {config.price:,}):")
+    bot.register_next_step_handler(msg, lambda m: set_config(m, 'price', int))
+
+@bot.callback_query_handler(func=lambda call: call.data == "set_card")
+def set_card(call):
+    msg = send_safe(call.message.chat.id, f"💳 کارت جدید (فعلی: {config.card_number}):")
+    bot.register_next_step_handler(msg, lambda m: set_config(m, 'card_number', str))
+
+@bot.callback_query_handler(func=lambda call: call.data == "set_holder")
+def set_holder(call):
+    msg = send_safe(call.message.chat.id, f"👤 صاحب کارت جدید (فعلی: {config.card_holder}):")
+    bot.register_next_step_handler(msg, lambda m: set_config(m, 'card_holder', str))
+
+@bot.callback_query_handler(func=lambda call: call.data == "set_duration")
+def set_duration(call):
+    msg = send_safe(call.message.chat.id, f"⏰ مدت اشتراک به روز (فعلی: {config.subscription_days}):")
+    bot.register_next_step_handler(msg, lambda m: set_config(m, 'subscription_days', int))
+
+@bot.callback_query_handler(func=lambda call: call.data == "set_min_withdraw")
+def set_min_withdraw(call):
+    msg = send_safe(call.message.chat.id, f"💰 حداقل برداشت جدید (فعلی: {config.min_withdraw:,}):")
+    bot.register_next_step_handler(msg, lambda m: set_config(m, 'min_withdraw', int))
+
+@bot.callback_query_handler(func=lambda call: call.data == "set_referral_bonus")
+def set_referral_bonus(call):
+    msg = send_safe(call.message.chat.id, f"🎁 پاداش رفرال جدید (فعلی: {config.referral_bonus}%):")
+    bot.register_next_step_handler(msg, lambda m: set_config(m, 'referral_bonus', int))
+
+def set_config(message, key, cast):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    try:
+        val = cast(message.text.strip())
+        setattr(config, key, val)
+        config.save_to_db()
+        send_safe(message.chat.id, f"✅ {key} تغییر کرد")
+    except:
+        send_safe(message.chat.id, "❌ خطا")
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_manual_sub")
+def admin_manual_sub(call):
+    msg = send_safe(call.message.chat.id, "🎁 آیدی کاربر را وارد کنید:")
+    bot.register_next_step_handler(msg, process_manual_sub)
+
+def process_manual_sub(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    try:
+        user_id = int(message.text.strip())
+        sub_id, code = create_subscription(user_id, config.price, 'manual')
+        if sub_id and activate_subscription(sub_id, user_id, config.price):
+            send_safe(message.chat.id, f"✅ اشتراک {user_id} فعال شد")
+            send_safe(user_id, f"✅ اشتراک شما فعال شد!\n📤 فایل ربات خود را ارسال کنید.")
+        else:
+            send_safe(message.chat.id, "❌ خطا")
+    except:
+        send_safe(message.chat.id, "❌ خطا")
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_libraries")
+def admin_libraries(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    with get_db() as conn:
+        installed = conn.execute('SELECT library_name, installed_at FROM installed_libraries ORDER BY installed_at DESC LIMIT 50').fetchall()
+    
+    text = "📦 مدیریت کتابخانه‌ها\n\n"
+    text += "🔧 کتابخانه‌های نصب شده:\n"
+    if installed:
+        for lib in installed[:20]:
+            text += f"• {lib['library_name']}\n"
+    else:
+        text += "• هیچ کتابخانه‌ای نصب نشده است\n"
+    text += f"\n📚 تعداد کل کتابخانه‌های قابل نصب: {len(POPULAR_LIBRARIES)}\n"
+    text += "\n💡 هر کتابخانه‌ای که کاربر وارد کند نصب می‌شود!\n"
+    text += "🔧 با ۵ روش مختلف و ۵ بار تلاش مجدد"
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("📦 نصب کتابخانه جدید", callback_data="install_new_library"),
+        types.InlineKeyboardButton("🔧 نصب همه کتابخانه‌ها", callback_data="install_all_libs"),
+        types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back")
+    )
+    
+    edit_safe(
+        call.message.chat.id,
+        call.message.message_id,
+        text,
+        reply_markup=markup
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data == "install_new_library")
+def install_new_library(call):
+    if call.from_user.id not in ADMIN_IDS:
+        bot.answer_callback_query(call.id, "❌ دسترسی غیرمجاز!", show_alert=True)
+        return
+    
+    msg = send_safe(
+        call.message.chat.id,
+        "📦 نصب کتابخانه جدید\n\n"
+        "لطفاً نام کتابخانه مورد نظر را وارد کنید:\n"
+        "مثال: numpy یا requests\n\n"
+        "⚠️ می‌توانید چند کتابخانه را با فاصله وارد کنید:\n"
+        "مثال: numpy pandas requests aiohttp\n\n"
+        "🔧 تضمین نصب: با ۵ روش مختلف و ۵ بار تلاش مجدد"
+    )
+    bot.register_next_step_handler(msg, process_install_library)
+
+def process_install_library(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    
+    libraries = message.text.strip().split()
+    
+    if not libraries:
+        send_safe(message.chat.id, "❌ هیچ کتابخانه‌ای وارد نشد!")
+        return
+    
+    status_msg = send_safe(
+        message.chat.id,
+        f"🔄 در حال نصب {len(libraries)} کتابخانه...\n\n"
+        f"⏳ لطفاً شکیبا باشید...\n"
+        f"🔧 با ۵ روش مختلف و ۵ بار تلاش مجدد"
+    )
+    
+    installed, failed = install_libraries_on_mother_advanced(
+        libraries,
+        chat_id=message.chat.id,
+        message_id=status_msg.message_id
+    )
+    
+    result_text = f"✅ نصب کتابخانه‌ها کامل شد!\n\n"
+    result_text += f"📦 نصب شده ({len(installed)} مورد):\n"
+    if installed:
+        result_text += f"{', '.join(installed[:20])}"
+        if len(installed) > 20:
+            result_text += f"\n... و {len(installed) - 20} مورد دیگر"
+    else:
+        result_text += "• هیچ کتابخانه‌ای نصب نشد"
+    
+    if failed:
+        result_text += f"\n\n❌ ناموفق ({len(failed)} مورد):\n"
+        result_text += f"{', '.join(failed[:20])}"
+        if len(failed) > 20:
+            result_text += f"\n... و {len(failed) - 20} مورد دیگر"
+        result_text += f"\n\n⚠️ برای نصب دستی:\n"
+        result_text += f"pip3 install {' '.join(failed)}"
+    
+    edit_safe(message.chat.id, status_msg.message_id, result_text)
+
+@bot.callback_query_handler(func=lambda call: call.data == "install_all_libs")
+def install_all_libs(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    
+    status_msg = send_safe(
+        call.message.chat.id,
+        f"🔄 در حال نصب {len(POPULAR_LIBRARIES)} کتابخانه پرکاربرد...\n\n"
+        f"⏳ این عملیات ممکن است ۲۰-۳۰ دقیقه طول بکشد...\n"
+        f"📦 لطفاً شکیبا باشید...\n"
+        f"🔧 با ۵ روش مختلف و ۵ بار تلاش مجدد برای هر کتابخانه"
+    )
+    
+    installed, failed = install_libraries_on_mother_advanced(
+        POPULAR_LIBRARIES,
+        chat_id=call.message.chat.id,
+        message_id=status_msg.message_id
+    )
+    
+    result_text = f"✅ نصب همه کتابخانه‌ها کامل شد!\n\n"
+    result_text += f"📦 نصب شده ({len(installed)} مورد):\n"
+    if installed:
+        result_text += f"{', '.join(installed[:30])}"
+        if len(installed) > 30:
+            result_text += f"\n... و {len(installed) - 30} مورد دیگر"
+    else:
+        result_text += "• هیچ کتابخانه‌ای نصب نشد"
+    
+    if failed:
+        result_text += f"\n\n❌ ناموفق ({len(failed)} مورد):\n"
+        result_text += f"{', '.join(failed[:20])}"
+        if len(failed) > 20:
+            result_text += f"\n... و {len(failed) - 20} مورد دیگر"
+        result_text += f"\n\n⚠️ برای نصب دستی:\n"
+        result_text += f"pip3 install {' '.join(failed[:5])}"
+        if len(failed) > 5:
+            result_text += f"\n... و {len(failed) - 5} مورد دیگر"
+    
+    edit_safe(call.message.chat.id, status_msg.message_id, result_text)
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_broadcast")
+def admin_broadcast(call):
+    if call.from_user.id not in ADMIN_IDS:
+        return
+    msg = send_safe(call.message.chat.id, 
+        "📢 متن پیام همگانی را ارسال کنید:\n\n(برای ارسال به همه کاربران)"
+    )
+    bot.register_next_step_handler(msg, process_broadcast)
+
+def process_broadcast(message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    text = message.text
+    status_msg = send_safe(message.chat.id, "🔄 در حال ارسال پیام همگانی...")
+    sent_count = send_broadcast(text, message.from_user.id)
+    edit_safe(
+        message.chat.id, 
+        status_msg.message_id,
+        f"✅ پیام همگانی ارسال شد!\n\n"
+        f"📨 تعداد دریافت‌کنندگان: {sent_count} نفر"
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_back")
+def admin_back(call):
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except:
+        pass
+    send_safe(call.message.chat.id, "🚀 منوی اصلی:", reply_markup=get_main_menu(call.from_user.id))
+
+# ==================== بررسی انقضا ====================
+
+def check_expired():
+    while True:
         try:
-            self.bot.remove_webhook()
-            self.bot.infinity_polling(timeout=60, skip_pending=True)
+            with get_db() as conn:
+                expired = conn.execute('SELECT user_id FROM users WHERE active_subscription = 1 AND julianday(subscription_expire) - julianday("now") < 0 AND is_locked = 0').fetchall()
+                for user in expired:
+                    conn.execute('UPDATE users SET active_subscription = 0 WHERE user_id = ?', (user['user_id'],))
+                    bots = conn.execute('SELECT id, server_id FROM bots WHERE user_id = ? AND status = "running" AND is_deleted = 0', (user['user_id'],)).fetchall()
+                    for bot_info in bots:
+                        stop_bot_on_mother(bot_info['id'])
+                        conn.execute('UPDATE bots SET status = "expired" WHERE id = ?', (bot_info['id'],))
+                    try:
+                        send_safe(user['user_id'], 
+                            "❌ اشتراک شما منقضی شد!\n\n"
+                            "ربات شما غیرفعال شد.\n"
+                            "برای ادامه، اشتراک جدید بخرید."
+                        )
+                    except:
+                        pass
+                
+                warning = conn.execute('SELECT user_id, subscription_expire FROM users WHERE active_subscription = 1 AND julianday(subscription_expire) - julianday("now") BETWEEN 0 AND 3 AND is_locked = 0').fetchall()
+                for user in warning:
+                    days_left = (datetime.fromisoformat(user['subscription_expire']) - datetime.now()).days
+                    if days_left > 0:
+                        try:
+                            send_safe(user['user_id'], 
+                                f"⚠️ {days_left} روز تا اتمام اشتراک!\n\n"
+                                f"لطفاً تمدید کنید تا ربات شما غیرفعال نشود."
+                            )
+                        except:
+                            pass
+                
+                conn.commit()
+            time.sleep(3600)
         except Exception as e:
-            print(f"❌ خطا: {e}")
-            db.log('ERROR', f"خطا در اجرای ربات: {e}")
-            time.sleep(5)
-            self.run()
+            logger.error(f"check_expired error: {e}")
+            time.sleep(3600)
+
+# ==================== بکاپ خودکار ====================
+
+def auto_backup():
+    while True:
+        try:
+            backup_file = os.path.join(BACKUP_DIR, f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db")
+            shutil.copy2(os.path.join(DB_DIR, 'mother_bot.db'), backup_file)
+            
+            with get_db() as conn:
+                conn.execute('INSERT INTO backups (file_path, created_at, size, is_active) VALUES (?, ?, ?, 1)', 
+                            (backup_file, datetime.now().isoformat(), os.path.getsize(backup_file)))
+                conn.commit()
+            
+            backups = sorted([f for f in os.listdir(BACKUP_DIR) if f.startswith('backup_')])
+            if len(backups) > 20:
+                for old_file in backups[:-20]:
+                    os.remove(os.path.join(BACKUP_DIR, old_file))
+            
+            logger.info(f"✅ بکاپ خودکار انجام شد: {backup_file}")
+            time.sleep(3600 * 6)
+        except Exception as e:
+            logger.error(f"auto_backup error: {e}")
+            time.sleep(3600)
 
 # ==================== اجرا ====================
+
 if __name__ == "__main__":
-    bot = SuperTradingBot()
-    bot.run()
+    check_and_create_pid()
+    
+    print("=" * 80)
+    print("🚀 ربات مادر نسخه ۲۱.۳ - رفع کامل خطای Markdown")
+    print("=" * 80)
+    print(f"✅ ادمین: {ADMIN_IDS}")
+    print(f"✅ قیمت اشتراک: {SUBSCRIPTION_PRICE:,} تومان")
+    print(f"✅ مدت اشتراک: {config.subscription_days} روز")
+    print(f"✅ حداقل برداشت: {config.min_withdraw:,} تومان")
+    print(f"✅ پاداش رفرال: {config.referral_bonus}%")
+    print(f"✅ نصب خودکار کتابخانه: {'فعال' if config.auto_install_libs else 'غیرفعال'}")
+    print(f"✅ کتابخانه‌های قابل نصب: {len(POPULAR_LIBRARIES)} مورد")
+    print(f"✅ روش‌های نصب: ۵ روش مختلف")
+    print(f"✅ تلاش مجدد: ۵ بار برای هر کتابخانه")
+    print(f"✅ ایزوله‌سازی کامل فایل‌ها با UUID")
+    print(f"✅ پشتیبانی از فایل‌های آماده با ساخت خودکار")
+    print(f"✅ حذف کامل ربات با پاک کردن فایل‌ها")
+    print(f"✅ کش دیتابیس با TTL ۶۰ ثانیه")
+    print(f"✅ Thread Pool: {MAX_THREADS} کارگر")
+    print(f"✅ پول اتصالات دیتابیس: {DB_POOL_SIZE} عدد")
+    print("=" * 80)
+    print("🟢 در حال بازیابی ربات‌های قبلی...")
+    
+    restore_all_bots()
+    
+    print("✅ ربات‌ها بازیابی شدند!")
+    print("🟢 ربات مادر در حال اجراست...")
+    print("=" * 80)
+    print("📌 ویژگی‌های نسخه ۲۱.۳:")
+    print("🔹 رفع کامل خطای Bad Request: can't parse")
+    print("🔹 توابع send_safe و edit_safe برای ارسال بدون Markdown")
+    print("🔹 توابع send_markdown و edit_markdown با ایمن‌سازی خودکار")
+    print("🔹 افزایش سرعت پاسخ‌دهی دکمه‌ها با کش و Thread Pool")
+    print("🔹 ساخت خودکار فایل‌های آماده بعد از دریافت توکن و ایدی")
+    print("🔹 نصب تضمینی کتابخانه‌ها با ۵ روش مختلف")
+    print("🔹 ایزوله‌سازی کامل فایل‌ها با UUID")
+    print("🔹 دکمه حذف ربات با پاک کردن کامل فایل‌ها")
+    print("🔹 هر اشتراک = ۱ ربات (قابل تمدید با خرید مجدد)")
+    print("🔹 قیمت اشتراک: ۳,۰۰۰,۰۰۰ تومان")
+    print("=" * 80)
+    
+    expiry_thread = threading.Thread(target=check_expired, daemon=True)
+    expiry_thread.start()
+    
+    backup_thread = threading.Thread(target=auto_backup, daemon=True)
+    backup_thread.start()
+    
+    queue_worker_thread = threading.Thread(target=queue_worker, daemon=True)
+    queue_worker_thread.start()
+    
+    while True:
+        try:
+            bot.remove_webhook()
+            time.sleep(1)
+            bot.infinity_polling(timeout=60, skip_pending=True)
+        except Exception as e:
+            print(f"خطا: {e}")
+            print("در حال تلاش مجدد در ۵ ثانیه...")
+            time.sleep(5)
