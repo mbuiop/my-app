@@ -2,18 +2,18 @@
 # -*- coding: utf-8 -*-
 
 """
-ربات تحلیل تکنیکال نسخه نهایی - ۱۰۰ برابر قوی‌تر
-====================================================
+ربات تحلیل تکنیکال نسخه نهایی - با مدیریت خطا و تاخیر هوشمند
+============================================================
 🔥 ۱۰۰۰۰+ الگوریتم ترکیبی
 📊 ۲۰ اندیکاتور اصلی بازار + حمایت و مقاومت
 🎯 ۳ روش تحلیلی مجزا
 💎 سیستم اشتراک کامل
 🤖 معاملات خودکار هوشمند
-👑 پنل مدیریت کاملاً بدون باگ
+👑 پنل مدیریت بدون باگ
 📈 دقت ۹۹.۹۹۹۹٪
 ⚡ پردازش موازی ۲۰۰ Thread
-🔄 نمایش پیشرفت تحلیل
-====================================================
+🔄 مدیریت خطا و تاخیر هوشمند
+============================================================
 """
 
 import logging
@@ -34,7 +34,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # ==================== مدیریت Conflict ====================
-PID_FILE = "bot_ultimate_v3.pid"
+PID_FILE = "bot_ultimate_v4.pid"
 
 def check_and_create_pid():
     try:
@@ -70,6 +70,7 @@ def remove_pid():
 # ==================== کتابخانه‌ها ====================
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.error import RetryAfter, TimedOut, NetworkError, Forbidden
 import requests
 import numpy as np
 from scipy import stats
@@ -103,15 +104,15 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('bot_ultimate_v3.log'),
+        logging.FileHandler('bot_ultimate_v4.log'),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = "8787172986:AAHtlVXWZTTFUrvWc0OcVI-CehKxkPmF7nA"
+BOT_TOKEN = "8195783182:AAH408rNKlNZYnnB_E65xA0dG6I_dGpUS7I"
 ADMIN_ID = 327855654
-BOT_USERNAME = "@ROBTTSAZE_bot"
+BOT_USERNAME = "@Maynir_Bot"
 EXCHANGE_URL = "https://www.toobit.com/fa/r?i=5EQpCT"
 
 # ==================== لیست ارزها ====================
@@ -132,7 +133,7 @@ SUPPORTED_SYMBOLS = [
 # ==================== دیتابیس ====================
 class Database:
     def __init__(self):
-        self.conn = sqlite3.connect('trading_bot_ultimate_v3.db', check_same_thread=False)
+        self.conn = sqlite3.connect('trading_bot_ultimate_v4.db', check_same_thread=False)
         self.cursor = self.conn.cursor()
         self.init_tables()
         self.cache = {}
@@ -358,7 +359,7 @@ class Database:
             signal_data.get('stop_loss', 0),
             signal_data.get('leverage', 10),
             signal_data.get('confidence', 0),
-            signal_data.get('algorithm', 'ULTIMATE_V3'),
+            signal_data.get('algorithm', 'ULTIMATE_V4'),
             json.dumps(signal_data.get('indicators_used', [])),
             json.dumps(signal_data.get('market_data', {})),
             json.dumps(signal_data.get('support_levels', [])),
@@ -523,7 +524,7 @@ class PriceService:
 
 price_service = PriceService()
 
-# ==================== موتور سیگنال‌دهی نهایی ====================
+# ==================== موتور سیگنال‌دهی ====================
 class UltimateSignalEngine:
     """تولید سیگنال با ۱۰۰۰۰+ الگوریتم - ۴۰ مدل ML - ۳ روش تحلیلی"""
     
@@ -537,42 +538,26 @@ class UltimateSignalEngine:
         self._init_models()
     
     def _init_models(self):
-        """۴۰ مدل ML مختلف"""
         self.models = {
-            # جنگل‌های تصادفی
             'rf_1': RandomForestRegressor(n_estimators=500, max_depth=20, random_state=42, n_jobs=-1),
             'rf_2': RandomForestRegressor(n_estimators=1000, max_depth=30, random_state=43, n_jobs=-1),
             'rf_3': RandomForestRegressor(n_estimators=1500, max_depth=40, random_state=44, n_jobs=-1),
-            
-            # گرادیان تقویتی
             'gb_1': GradientBoostingRegressor(n_estimators=500, learning_rate=0.05, max_depth=10, random_state=42),
             'gb_2': GradientBoostingRegressor(n_estimators=1000, learning_rate=0.03, max_depth=15, random_state=43),
             'gb_3': GradientBoostingRegressor(n_estimators=1500, learning_rate=0.02, max_depth=20, random_state=44),
-            
-            # درخت‌های اضافی
             'et_1': ExtraTreesRegressor(n_estimators=500, max_depth=20, random_state=42, n_jobs=-1),
             'et_2': ExtraTreesRegressor(n_estimators=1000, max_depth=30, random_state=43, n_jobs=-1),
-            
-            # AdaBoost
             'ada_1': AdaBoostRegressor(n_estimators=300, learning_rate=0.05, random_state=42),
             'ada_2': AdaBoostRegressor(n_estimators=500, learning_rate=0.03, random_state=43),
-            
-            # Hist Gradient Boosting
             'hgb_1': HistGradientBoostingRegressor(max_iter=500, learning_rate=0.05, max_depth=15, random_state=42),
             'hgb_2': HistGradientBoostingRegressor(max_iter=1000, learning_rate=0.03, max_depth=20, random_state=43),
-            
-            # SVM
             'svr_1': SVR(kernel='rbf', C=0.5, epsilon=0.1),
             'svr_2': SVR(kernel='rbf', C=1.0, epsilon=0.05),
             'svr_3': SVR(kernel='rbf', C=2.0, epsilon=0.03),
             'svr_4': SVR(kernel='poly', C=1.0, epsilon=0.05, degree=3),
-            
-            # MLP
             'mlp_1': MLPRegressor(hidden_layer_sizes=(100, 50), max_iter=1000, random_state=42),
             'mlp_2': MLPRegressor(hidden_layer_sizes=(200, 100, 50), max_iter=1500, random_state=43),
             'mlp_3': MLPRegressor(hidden_layer_sizes=(300, 200, 100, 50), max_iter=2000, random_state=44),
-            
-            # رگرسیون خطی
             'ridge': Ridge(alpha=0.5),
             'ridge_2': Ridge(alpha=1.0),
             'lasso': Lasso(alpha=0.005),
@@ -585,29 +570,20 @@ class UltimateSignalEngine:
             'ransac': RANSACRegressor(random_state=42),
             'theil_sen': TheilSenRegressor(random_state=42),
             'omp': OrthogonalMatchingPursuit(),
-            
-            # گاوسی
             'gaussian_1': GaussianProcessRegressor(kernel=RBF() + WhiteKernel(), random_state=42),
             'gaussian_2': GaussianProcessRegressor(kernel=Matern() + WhiteKernel(), random_state=43),
-            
-            # کرنل ریج
             'kernel_ridge_1': KernelRidge(kernel='rbf', alpha=0.1),
             'kernel_ridge_2': KernelRidge(kernel='rbf', alpha=0.5),
-            
-            # درخت تصمیم
             'dt_1': DecisionTreeRegressor(max_depth=20, random_state=42),
             'dt_2': DecisionTreeRegressor(max_depth=30, random_state=43),
             'extra_tree_1': ExtraTreeRegressor(max_depth=20, random_state=42),
             'extra_tree_2': ExtraTreeRegressor(max_depth=30, random_state=43),
-            
-            # سایر
             'passive': PassiveAggressiveRegressor(max_iter=1000, random_state=42),
             'ard': ARDRegression(),
             'isotonic': IsotonicRegression()
         }
     
     def _find_support_resistance(self, candles):
-        """تشخیص حمایت و مقاومت با ۵ روش مختلف"""
         closes = [c['close'] for c in candles]
         highs = [c['high'] for c in candles]
         lows = [c['low'] for c in candles]
@@ -616,7 +592,6 @@ class UltimateSignalEngine:
         resistance_levels = []
         current_price = closes[-1]
         
-        # روش ۱: نقاط افراطی محلی
         if len(closes) > 20:
             peaks = argrelextrema(np.array(highs), np.greater, order=5)[0]
             for peak in peaks[-5:]:
@@ -636,7 +611,6 @@ class UltimateSignalEngine:
                         'method': 'local_valleys'
                     })
         
-        # روش ۲: میانگین متحرک
         for period in [20, 50, 100]:
             if len(closes) >= period:
                 ma = np.mean(closes[-period:])
@@ -645,7 +619,6 @@ class UltimateSignalEngine:
                 else:
                     resistance_levels.append({'level': ma, 'strength': 'MEDIUM', 'method': f'SMA_{period}'})
         
-        # روش ۳: باند بولینگر
         if len(closes) >= 20:
             sma_20 = np.mean(closes[-20:])
             std_20 = np.std(closes[-20:])
@@ -656,7 +629,6 @@ class UltimateSignalEngine:
             if bb_upper > current_price:
                 resistance_levels.append({'level': bb_upper, 'strength': 'HIGH', 'method': 'BB_upper'})
         
-        # روش ۴: فیبوناچی
         if len(highs) > 20 and len(lows) > 20:
             high = max(highs[-50:])
             low = min(lows[-50:])
@@ -669,7 +641,6 @@ class UltimateSignalEngine:
                     else:
                         resistance_levels.append({'level': fib_level, 'strength': 'MEDIUM', 'method': f'Fib_{level}'})
         
-        # روش ۵: نقاط محوری
         if len(highs) > 1 and len(lows) > 1:
             pivot = (highs[-1] + lows[-1] + closes[-1]) / 3
             r1 = 2 * pivot - lows[-1]
@@ -688,7 +659,6 @@ class UltimateSignalEngine:
         return support_levels, resistance_levels
     
     def _calculate_all_indicators(self, candles):
-        """محاسبه ۲۰ اندیکاتور اصلی"""
         if len(candles) < 50:
             return {}
         
@@ -700,7 +670,6 @@ class UltimateSignalEngine:
         last_price = closes[-1]
         indicators = {}
         
-        # RSI با ۳ دوره مختلف
         delta = np.diff(closes)
         for period in [7, 14, 21]:
             if len(closes) >= period:
@@ -709,7 +678,6 @@ class UltimateSignalEngine:
                 rs = gain / loss if loss > 0 else 100
                 indicators[f'RSI_{period}'] = 100 - (100 / (1 + rs))
         
-        # MACD با ۳ تنظیمات
         for fast, slow in [(8, 21), (12, 26), (19, 39)]:
             if len(closes) >= slow:
                 ema_f = np.mean(closes[-fast:])
@@ -718,15 +686,12 @@ class UltimateSignalEngine:
                 indicators[f'MACD_{fast}_{slow}'] = macd_v
                 indicators[f'MACD_Signal_{fast}_{slow}'] = macd_v * 0.8 + ema_f * 0.2
         
-        # EMA
         for period in [5, 10, 20, 30, 50, 100, 200]:
             indicators[f'EMA_{period}'] = np.mean(closes[-period:]) if len(closes) >= period else last_price
         
-        # SMA
         for period in [10, 20, 50, 100, 200]:
             indicators[f'SMA_{period}'] = np.mean(closes[-period:]) if len(closes) >= period else last_price
         
-        # Bollinger Bands
         for period, std_mult in [(10, 2), (20, 2), (30, 2.5)]:
             if len(closes) >= period:
                 sma = np.mean(closes[-period:])
@@ -735,79 +700,60 @@ class UltimateSignalEngine:
                 indicators[f'BB_Middle_{period}'] = sma
                 indicators[f'BB_Lower_{period}'] = sma - std * std_mult
         
-        # Stochastic
         for k_period in [5, 9, 14]:
             if len(lows) >= k_period and len(highs) >= k_period:
                 low_k = np.min(lows[-k_period:])
                 high_k = np.max(highs[-k_period:])
                 indicators[f'Stoch_K_{k_period}'] = 100 * ((last_price - low_k) / (high_k - low_k)) if high_k > low_k else 50
         
-        # CCI
         for period in [10, 20, 30]:
             if len(closes) >= period and np.std(closes[-period:]) > 0:
                 indicators[f'CCI_{period}'] = (last_price - np.mean(closes[-period:])) / (0.015 * np.std(closes[-period:]))
         
-        # MFI
         indicators['MFI'] = 50 + (np.mean(volumes[-14:]) / 1000000) * 10 if volumes else 50
         
-        # Williams
         for period in [7, 14, 21]:
             if len(lows) >= period and len(highs) >= period:
                 low_p = np.min(lows[-period:])
                 high_p = np.max(highs[-period:])
                 indicators[f'Williams_{period}'] = -100 * ((high_p - last_price) / (high_p - low_p)) if high_p > low_p else -50
         
-        # Momentum
         for period in [10, 20, 30]:
             indicators[f'Momentum_{period}'] = (last_price - closes[-period]) / closes[-period] * 100 if len(closes) >= period else 0
         
-        # ADX
         indicators['ADX'] = 35
         
-        # ATR
         for period in [7, 14, 21]:
             if len(highs) >= period:
                 true_ranges = [max(highs[i] - lows[i], abs(highs[i] - closes[i-1]), abs(lows[i] - closes[i-1])) 
                               for i in range(1, len(highs))]
                 indicators[f'ATR_{period}'] = np.mean(true_ranges[-period:]) if len(true_ranges) >= period else last_price * 0.02
         
-        # OBV
         indicators['OBV'] = np.sum(volumes) / 1000 if volumes else 0
-        
-        # Ichimoku
         indicators['Ichimoku'] = (np.mean(closes[-9:]) + np.mean(closes[-26:])) / 2 if len(closes) >= 26 else last_price
-        
-        # KDJ
         indicators['KDJ'] = indicators.get('Stoch_K_14', 50) * 0.8 + (indicators.get('RSI_14', 50) / 100) * 20
         
-        # ROC
         for period in [10, 20, 30]:
             indicators[f'ROC_{period}'] = (last_price - closes[-period]) / closes[-period] * 100 if len(closes) >= period else 0
         
-        # WPR
         for period in [7, 14, 21]:
             if len(lows) >= period and len(highs) >= period:
                 low_p = np.min(lows[-period:])
                 high_p = np.max(highs[-period:])
                 indicators[f'WPR_{period}'] = -100 * ((high_p - last_price) / (high_p - low_p)) if high_p > low_p else -50
         
-        # Volatility
         returns = np.diff(closes) / closes[:-1]
         indicators['Volatility'] = np.std(returns[-30:]) * np.sqrt(252) if len(returns) >= 30 else 0
-        
-        # Skewness & Kurtosis
         indicators['Skewness'] = stats.skew(closes[-60:]) if len(closes) >= 60 else 0
         indicators['Kurtosis'] = stats.kurtosis(closes[-60:]) if len(closes) >= 60 else 0
         
         return {k: float(v) for k, v in indicators.items() if v is not None}
     
     def _method_technical(self, indicators, current_price):
-        """روش اول: تحلیل تکنیکال"""
         buy_score = 50
         sell_score = 50
         signals = []
         
-        # RSI
         rsi = indicators.get('RSI_14', 50)
         if rsi < 20:
             buy_score += 30
@@ -822,7 +768,6 @@ class UltimateSignalEngine:
             sell_score += 20
             signals.append("📉 RSI: Near Overbought")
         
-        # MACD
         macd = indicators.get('MACD_12_26', 0)
         macd_signal = indicators.get('MACD_Signal_12_26', 0)
         if macd > macd_signal:
@@ -832,7 +777,6 @@ class UltimateSignalEngine:
             sell_score += 25
             signals.append("📉 MACD: Bearish")
         
-        # Bollinger Bands
         bb_upper = indicators.get('BB_Upper_20', 0)
         bb_lower = indicators.get('BB_Lower_20', 0)
         if bb_upper and bb_lower:
@@ -843,7 +787,6 @@ class UltimateSignalEngine:
                 sell_score += 20
                 signals.append("📉 BB: Above Upper")
         
-        # EMA
         ema5 = indicators.get('EMA_5', 0)
         ema20 = indicators.get('EMA_20', 0)
         ema50 = indicators.get('EMA_50', 0)
@@ -854,7 +797,6 @@ class UltimateSignalEngine:
             sell_score += 15
             signals.append("📉 EMA: Bearish Alignment")
         
-        # Stochastic
         stoch = indicators.get('Stoch_K_14', 50)
         if stoch < 20:
             buy_score += 15
@@ -863,7 +805,6 @@ class UltimateSignalEngine:
             sell_score += 15
             signals.append("📉 Stoch: Overbought")
         
-        # CCI
         cci = indicators.get('CCI_20', 0)
         if cci < -100:
             buy_score += 15
@@ -875,7 +816,6 @@ class UltimateSignalEngine:
         return buy_score, sell_score, signals
     
     def _method_algorithmic(self, candles, indicators, current_price):
-        """روش دوم: تحلیل الگوریتمی با ۴۰ مدل ML"""
         buy_score = 50
         sell_score = 50
         signals = []
@@ -916,7 +856,6 @@ class UltimateSignalEngine:
         return buy_score, sell_score, signals
     
     def _method_intelligent(self, indicators, support_levels, resistance_levels, current_price):
-        """روش سوم: تحلیل هوشمند با ترکیب حمایت و مقاومت"""
         buy_score = 50
         sell_score = 50
         signals = []
@@ -954,7 +893,6 @@ class UltimateSignalEngine:
         return buy_score, sell_score, signals
     
     def generate_signal_ultra(self, candles, symbol="BTCUSDT"):
-        """تولید سیگنال نهایی با ۳ روش تحلیلی"""
         if not candles or len(candles) < 50:
             return self._empty_signal(symbol)
         
@@ -1036,7 +974,7 @@ class UltimateSignalEngine:
             'total_score': round(total_score, 1),
             'signals_count': len(all_signals),
             'top_signals': all_signals[:15],
-            'algorithm': 'ULTIMATE_V3_3_METHODS',
+            'algorithm': 'ULTIMATE_V4_3_METHODS',
             'indicators': indicators,
             'support_levels': support_levels,
             'resistance_levels': resistance_levels,
@@ -1057,7 +995,7 @@ class UltimateSignalEngine:
             'total_score': 0,
             'signals_count': 0,
             'top_signals': [],
-            'algorithm': 'ULTIMATE_V3',
+            'algorithm': 'ULTIMATE_V4',
             'support_levels': [],
             'resistance_levels': []
         }
@@ -1206,6 +1144,66 @@ def get_subscription_keyboard(user_id):
             [KeyboardButton("🔙 بازگشت")]
         ], resize_keyboard=True)
 
+# ==================== تابع ارسال با مدیریت خطا ====================
+async def safe_send_message(chat_id, text, reply_markup=None, parse_mode=None, retries=3):
+    """ارسال پیام با مدیریت خطا و تاخیر هوشمند"""
+    for attempt in range(retries):
+        try:
+            # تاخیر تصادفی برای جلوگیری از Rate Limiting
+            await asyncio.sleep(random.uniform(0.3, 0.8))
+            return await bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode=parse_mode,
+                reply_markup=reply_markup
+            )
+        except RetryAfter as e:
+            wait_time = e.retry_after + 1
+            logger.warning(f"Rate limited! Waiting {wait_time} seconds...")
+            await asyncio.sleep(wait_time)
+        except (TimedOut, NetworkError) as e:
+            logger.warning(f"Network error: {e}. Retry {attempt+1}/{retries}")
+            await asyncio.sleep(2 ** attempt)
+        except Forbidden:
+            logger.error(f"Forbidden: User {chat_id} blocked the bot")
+            return None
+        except Exception as e:
+            logger.error(f"Send error: {e}")
+            if attempt == retries - 1:
+                return None
+            await asyncio.sleep(2)
+    
+    return None
+
+async def safe_edit_message(text, chat_id, message_id, reply_markup=None, parse_mode=None, retries=3):
+    """ویرایش پیام با مدیریت خطا"""
+    for attempt in range(retries):
+        try:
+            await asyncio.sleep(random.uniform(0.3, 0.8))
+            return await bot.edit_message_text(
+                text=text,
+                chat_id=chat_id,
+                message_id=message_id,
+                parse_mode=parse_mode,
+                reply_markup=reply_markup
+            )
+        except RetryAfter as e:
+            wait_time = e.retry_after + 1
+            logger.warning(f"Rate limited! Waiting {wait_time} seconds...")
+            await asyncio.sleep(wait_time)
+        except (TimedOut, NetworkError) as e:
+            logger.warning(f"Network error: {e}. Retry {attempt+1}/{retries}")
+            await asyncio.sleep(2 ** attempt)
+        except Exception as e:
+            logger.error(f"Edit error: {e}")
+            if attempt == retries - 1:
+                return None
+            await asyncio.sleep(2)
+    
+    return None
+
+bot = None  # Global bot instance
+
 # ==================== هندلرها ====================
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -1237,8 +1235,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not welcome_text:
         welcome_text = TEXTS_FA['welcome']
     
-    await update.effective_chat.send_message(
-        welcome_text,
+    await safe_send_message(
+        chat_id=update.effective_chat.id,
+        text=welcome_text,
         reply_markup=get_main_keyboard(user_id),
         parse_mode='Markdown'
     )
@@ -1265,15 +1264,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             free_limit = int(db.get_setting('free_analysis_limit') or 5)
             
             if daily_count >= free_limit:
-                await update.effective_chat.send_message(
-                    f"⚠️ شما امروز {free_limit} تحلیل رایگان انجام داده‌اید!\n\n💎 برای ادامه، اشتراک تهیه کنید.",
+                await safe_send_message(
+                    chat_id=update.effective_chat.id,
+                    text=f"⚠️ شما امروز {free_limit} تحلیل رایگان انجام داده‌اید!\n\n💎 برای ادامه، اشتراک تهیه کنید.",
                     reply_markup=get_main_keyboard(user_id)
                 )
                 return
         
         user_data[user_id]['state'] = 'selecting_symbol'
-        await update.effective_chat.send_message(
-            "🔍 لطفاً ارز مورد نظر را انتخاب کنید:",
+        await safe_send_message(
+            chat_id=update.effective_chat.id,
+            text="🔍 لطفاً ارز مورد نظر را انتخاب کنید:",
             reply_markup=get_symbol_keyboard(user_id)
         )
         return
@@ -1284,53 +1285,68 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_data[user_id]['symbol'] = text
             user_data[user_id]['state'] = 'analyzing'
             
-            msg = await update.effective_chat.send_message(
-                f"🔄 **در حال تحلیل {text}...**\n"
-                f"📊 مرحله ۱: دریافت داده‌های بازار\n"
-                f"⏳ لطفاً صبر کنید...",
+            # پیام اولیه با تاخیر
+            msg = await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text=f"🔄 **در حال تحلیل {text}...**\n"
+                     f"📊 مرحله ۱: دریافت داده‌های بازار\n"
+                     f"⏳ لطفاً صبر کنید...",
                 parse_mode='Markdown'
             )
+            
+            if not msg:
+                return
             
             candles = price_service.get_klines(text, "1h", 300)
             price = price_service.get_price(text)
             stats = price_service.get_24h_stats(text)
             
             if not candles:
-                await msg.edit_text(
-                    "❌ خطا در دریافت داده‌ها! در حال تلاش مجدد...",
+                await safe_edit_message(
+                    text="❌ خطا در دریافت داده‌ها! در حال تلاش مجدد...",
+                    chat_id=update.effective_chat.id,
+                    message_id=msg.message_id,
                     reply_markup=get_main_keyboard(user_id)
                 )
                 time.sleep(1)
                 candles = price_service.get_klines(text, "1h", 300)
                 if not candles:
-                    await msg.edit_text(
-                        "❌ خطا در دریافت داده‌ها! لطفاً دوباره تلاش کنید.",
+                    await safe_edit_message(
+                        text="❌ خطا در دریافت داده‌ها! لطفاً دوباره تلاش کنید.",
+                        chat_id=update.effective_chat.id,
+                        message_id=msg.message_id,
                         reply_markup=get_main_keyboard(user_id)
                     )
                     user_data[user_id]['state'] = 'menu'
                     return
             
-            await msg.edit_text(
-                f"🔄 **در حال تحلیل {text}...**\n"
-                f"📊 مرحله ۲: محاسبه ۲۰ اندیکاتور اصلی\n"
-                f"⏳ لطفاً صبر کنید...",
+            await safe_edit_message(
+                text=f"🔄 **در حال تحلیل {text}...**\n"
+                     f"📊 مرحله ۲: محاسبه ۲۰ اندیکاتور اصلی\n"
+                     f"⏳ لطفاً صبر کنید...",
+                chat_id=update.effective_chat.id,
+                message_id=msg.message_id,
                 parse_mode='Markdown'
             )
             
-            await msg.edit_text(
-                f"🔄 **در حال تحلیل {text}...**\n"
-                f"📊 مرحله ۳: تشخیص حمایت و مقاومت با ۵ روش\n"
-                f"⏳ لطفاً صبر کنید...",
+            await safe_edit_message(
+                text=f"🔄 **در حال تحلیل {text}...**\n"
+                     f"📊 مرحله ۳: تشخیص حمایت و مقاومت با ۵ روش\n"
+                     f"⏳ لطفاً صبر کنید...",
+                chat_id=update.effective_chat.id,
+                message_id=msg.message_id,
                 parse_mode='Markdown'
             )
             
-            await msg.edit_text(
-                f"🔄 **در حال تحلیل {text}...**\n"
-                f"📊 مرحله ۴: تحلیل با ۳ روش مجزا\n"
-                f"✅ روش ۱: تحلیل تکنیکال\n"
-                f"✅ روش ۲: تحلیل الگوریتمی (۴۰ مدل ML)\n"
-                f"✅ روش ۳: تحلیل هوشمند\n"
-                f"⏳ لطفاً صبر کنید...",
+            await safe_edit_message(
+                text=f"🔄 **در حال تحلیل {text}...**\n"
+                     f"📊 مرحله ۴: تحلیل با ۳ روش مجزا\n"
+                     f"✅ روش ۱: تحلیل تکنیکال\n"
+                     f"✅ روش ۲: تحلیل الگوریتمی (۴۰ مدل ML)\n"
+                     f"✅ روش ۳: تحلیل هوشمند\n"
+                     f"⏳ لطفاً صبر کنید...",
+                chat_id=update.effective_chat.id,
+                message_id=msg.message_id,
                 parse_mode='Markdown'
             )
             
@@ -1342,9 +1358,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if price and price > 0:
                 signal['entry'] = price
             
-            await msg.edit_text(
-                f"✅ **تحلیل {text} با موفقیت کامل شد!**\n"
-                f"📊 استخراج نتیجه...",
+            await safe_edit_message(
+                text=f"✅ **تحلیل {text} با موفقیت کامل شد!**\n"
+                     f"📊 استخراج نتیجه...",
+                chat_id=update.effective_chat.id,
+                message_id=msg.message_id,
                 parse_mode='Markdown'
             )
             
@@ -1436,21 +1454,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             user_data[user_id]['state'] = 'menu'
             
-            await msg.edit_text(
-                result,
+            # ارسال نتیجه نهایی با تاخیر
+            await asyncio.sleep(0.5)
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text=result,
                 reply_markup=get_main_keyboard(user_id),
                 parse_mode='Markdown'
             )
             
         elif "🔙" in text:
             user_data[user_id]['state'] = 'menu'
-            await update.effective_chat.send_message(
-                "🔙 بازگشت",
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text="🔙 بازگشت",
                 reply_markup=get_main_keyboard(user_id)
             )
         else:
-            await update.effective_chat.send_message(
-                "❌ لطفاً یکی از ارزهای لیست را انتخاب کنید!",
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text="❌ لطفاً یکی از ارزهای لیست را انتخاب کنید!",
                 reply_markup=get_symbol_keyboard(user_id)
             )
         return
@@ -1470,15 +1493,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg += f"🏅 نرخ برد: {win_rate:.1f}%\n"
             msg += f"✅ برد: {wins} | ❌ باخت: {losses}\n"
             
-            await update.effective_chat.send_message(msg, reply_markup=get_main_keyboard(user_id), parse_mode='Markdown')
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text=msg,
+                reply_markup=get_main_keyboard(user_id),
+                parse_mode='Markdown'
+            )
         else:
-            await update.effective_chat.send_message("📊 هنوز تحلیلی نداشته‌اید!", reply_markup=get_main_keyboard(user_id))
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text="📊 هنوز تحلیلی نداشته‌اید!",
+                reply_markup=get_main_keyboard(user_id)
+            )
         return
     
     # ===== صرافی =====
     if "صرافی" in text or "Toobit" in text:
-        await update.effective_chat.send_message(
-            f"💱 **Toobit Exchange**\n\n🔗 {EXCHANGE_URL}",
+        await safe_send_message(
+            chat_id=update.effective_chat.id,
+            text=f"💱 **Toobit Exchange**\n\n🔗 {EXCHANGE_URL}",
             reply_markup=get_main_keyboard(user_id),
             parse_mode='Markdown'
         )
@@ -1487,8 +1520,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ===== رفرال =====
     if "دعوت" in text or "Invite" in text:
         bot_name = BOT_USERNAME.replace('@', '')
-        await update.effective_chat.send_message(
-            f"🎁 **لینک دعوت**\n\n`https://t.me/{bot_name}?start=ref_{user_id}`",
+        await safe_send_message(
+            chat_id=update.effective_chat.id,
+            text=f"🎁 **لینک دعوت**\n\n`https://t.me/{bot_name}?start=ref_{user_id}`",
             reply_markup=get_main_keyboard(user_id),
             parse_mode='Markdown'
         )
@@ -1506,15 +1540,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         keyboard = [[KeyboardButton("✅ فعال کردن" if not auto_trade else "❌ غیرفعال کردن")],
                     [KeyboardButton("🔙 بازگشت" if lang == 'fa' else "🔙 Back")]]
-        await update.effective_chat.send_message(msg, reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True), parse_mode='Markdown')
+        await safe_send_message(
+            chat_id=update.effective_chat.id,
+            text=msg,
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True),
+            parse_mode='Markdown'
+        )
         return
     
     if "فعال کردن" in text or "غیرفعال کردن" in text:
         auto_trade = 1 if "فعال" in text else 0
         db.cursor.execute('UPDATE users SET auto_trade = ? WHERE user_id = ?', (auto_trade, user_id))
         db.conn.commit()
-        await update.effective_chat.send_message(
-            f"✅ معاملات خودکار {'فعال' if auto_trade else 'غیرفعال'} شد!",
+        await safe_send_message(
+            chat_id=update.effective_chat.id,
+            text=f"✅ معاملات خودکار {'فعال' if auto_trade else 'غیرفعال'} شد!",
             reply_markup=get_main_keyboard(user_id)
         )
         return
@@ -1532,9 +1572,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 total_profit += trade[8] or 0
             msg += f"\n💰 سود کل: ${total_profit:.2f}"
             
-            await update.effective_chat.send_message(msg, reply_markup=get_main_keyboard(user_id), parse_mode='Markdown')
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text=msg,
+                reply_markup=get_main_keyboard(user_id),
+                parse_mode='Markdown'
+            )
         else:
-            await update.effective_chat.send_message("📊 هیچ معامله‌ای یافت نشد!", reply_markup=get_main_keyboard(user_id))
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text="📊 هیچ معامله‌ای یافت نشد!",
+                reply_markup=get_main_keyboard(user_id)
+            )
         return
     
     # ===== تنظیمات =====
@@ -1548,7 +1597,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += f"📊 حداکثر حجم: {max_pos}\n\n"
         msg += f"برای تغییر، دستور /settings را بفرستید."
         
-        await update.effective_chat.send_message(msg, reply_markup=get_main_keyboard(user_id), parse_mode='Markdown')
+        await safe_send_message(
+            chat_id=update.effective_chat.id,
+            text=msg,
+            reply_markup=get_main_keyboard(user_id),
+            parse_mode='Markdown'
+        )
         return
     
     # ===== خرید اشتراک =====
@@ -1567,8 +1621,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [KeyboardButton("🇮🇷 فارسی"), KeyboardButton("🇬🇧 English")],
             [KeyboardButton("🔙 بازگشت" if lang == 'fa' else "🔙 Back")]
         ]
-        await update.effective_chat.send_message(
-            "🌐 انتخاب زبان | Choose Language:",
+        await safe_send_message(
+            chat_id=update.effective_chat.id,
+            text="🌐 انتخاب زبان | Choose Language:",
             reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         )
         return
@@ -1576,8 +1631,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text in ["🇮🇷 فارسی", "🇬🇧 English"]:
         new_lang = "fa" if text == "🇮🇷 فارسی" else "en"
         db.update_language(user_id, new_lang)
-        await update.effective_chat.send_message(
-            "✅ زبان تغییر کرد!" if new_lang == 'fa' else "✅ Language changed!",
+        await safe_send_message(
+            chat_id=update.effective_chat.id,
+            text="✅ زبان تغییر کرد!" if new_lang == 'fa' else "✅ Language changed!",
             reply_markup=get_main_keyboard(user_id)
         )
         return
@@ -1585,13 +1641,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ===== پنل ادمین =====
     if "پنل ادمین" in text or "Admin Panel" in text:
         if user_id == ADMIN_ID:
-            await update.effective_chat.send_message(
-                "👑 **پنل ادمین**\n\nلطفاً یکی از گزینه‌ها را انتخاب کنید:",
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text="👑 **پنل ادمین**\n\nلطفاً یکی از گزینه‌ها را انتخاب کنید:",
                 reply_markup=get_admin_keyboard(user_id),
                 parse_mode='Markdown'
             )
         else:
-            await update.effective_chat.send_message("❌ دسترسی غیرمجاز!", reply_markup=get_main_keyboard(user_id))
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text="❌ دسترسی غیرمجاز!",
+                reply_markup=get_main_keyboard(user_id)
+            )
         return
     
     # ===== مدیریت ادمین =====
@@ -1605,16 +1666,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             new_mode = '0' if current_mode == '1' else '1'
             db.update_setting('is_paid_mode', new_mode)
             status = "فعال" if new_mode == '1' else "غیرفعال"
-            await update.effective_chat.send_message(
-                f"✅ حالت پولی {status} شد!",
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text=f"✅ حالت پولی {status} شد!",
                 reply_markup=get_admin_keyboard(user_id)
             )
             return
         
         if "تنظیم قیمت‌ها" in text or "Set Prices" in text:
             user_data[user_id]['state'] = 'setting_prices'
-            await update.effective_chat.send_message(
-                "💲 **تنظیم قیمت‌ها**\n\nفرمت:\nهفتگی: 150000\nماهانه: 500000\nسالانه: 5000000\n\nاعداد را به تومان وارد کنید:",
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text="💲 **تنظیم قیمت‌ها**\n\nفرمت:\nهفتگی: 150000\nماهانه: 500000\nسالانه: 5000000\n\nاعداد را به تومان وارد کنید:",
                 parse_mode='Markdown'
             )
             return
@@ -1634,13 +1697,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         db.update_setting('subscription_price_yearly', str(price))
                 
                 user_data[user_id]['state'] = 'menu'
-                await update.effective_chat.send_message(
-                    "✅ قیمت‌ها با موفقیت بروزرسانی شدند!",
+                await safe_send_message(
+                    chat_id=update.effective_chat.id,
+                    text="✅ قیمت‌ها با موفقیت بروزرسانی شدند!",
                     reply_markup=get_admin_keyboard(user_id)
                 )
             except:
-                await update.effective_chat.send_message(
-                    "❌ فرمت اشتباه! لطفاً مجدداً وارد کنید.",
+                await safe_send_message(
+                    chat_id=update.effective_chat.id,
+                    text="❌ فرمت اشتباه! لطفاً مجدداً وارد کنید.",
                     reply_markup=get_admin_keyboard(user_id)
                 )
             return
@@ -1666,7 +1731,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg += f"💎 پرمیوم: {premium_count}\n"
             msg += f"📊 سیگنال‌ها: {signals_count}\n"
             
-            await update.effective_chat.send_message(msg, reply_markup=get_admin_keyboard(user_id), parse_mode='Markdown')
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text=msg,
+                reply_markup=get_admin_keyboard(user_id),
+                parse_mode='Markdown'
+            )
             return
         
         if "تنظیمات سیستم" in text or "System Settings" in text:
@@ -1683,7 +1753,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg += f"برای تغییر هر کدام، عدد جدید را وارد کنید:"
             
             user_data[user_id]['state'] = 'setting_system'
-            await update.effective_chat.send_message(msg, parse_mode='Markdown')
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text=msg,
+                parse_mode='Markdown'
+            )
             return
         
         if user_data[user_id].get('state') == 'setting_system':
@@ -1701,13 +1775,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         db.update_setting('min_confidence', str(conf))
                 
                 user_data[user_id]['state'] = 'menu'
-                await update.effective_chat.send_message(
-                    "✅ تنظیمات سیستم بروزرسانی شد!",
+                await safe_send_message(
+                    chat_id=update.effective_chat.id,
+                    text="✅ تنظیمات سیستم بروزرسانی شد!",
                     reply_markup=get_admin_keyboard(user_id)
                 )
             except:
-                await update.effective_chat.send_message(
-                    "❌ فرمت اشتباه! لطفاً مجدداً وارد کنید.",
+                await safe_send_message(
+                    chat_id=update.effective_chat.id,
+                    text="❌ فرمت اشتباه! لطفاً مجدداً وارد کنید.",
                     reply_markup=get_admin_keyboard(user_id)
                 )
             return
@@ -1716,8 +1792,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             card_number = db.get_setting('card_number')
             card_holder = db.get_setting('card_holder')
             
-            await update.effective_chat.send_message(
-                f"💰 **کیف پول**\n\n💳 شماره کارت: {card_number}\n👤 صاحب کارت: {card_holder}",
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text=f"💰 **کیف پول**\n\n💳 شماره کارت: {card_number}\n👤 صاحب کارت: {card_holder}",
                 reply_markup=get_admin_keyboard(user_id),
                 parse_mode='Markdown'
             )
@@ -1746,8 +1823,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 msg += f"📊 میانگین اطمینان: {avg_conf:.0f}%\n"
                 msg += f"🏆 بالاترین اطمینان: {max_conf:.0f}%\n"
                 
-                await update.effective_chat.send_message(
-                    msg,
+                await safe_send_message(
+                    chat_id=update.effective_chat.id,
+                    text=msg,
                     reply_markup=get_admin_keyboard(user_id),
                     parse_mode='Markdown'
                 )
@@ -1755,8 +1833,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if "ارسال پیام همگانی" in text or "Broadcast" in text:
             user_data[user_id]['state'] = 'broadcast'
-            await update.effective_chat.send_message(
-                "📝 پیام خود را برای ارسال به تمام کاربران وارد کنید:",
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text="📝 پیام خود را برای ارسال به تمام کاربران وارد کنید:",
                 reply_markup=get_admin_keyboard(user_id)
             )
             return
@@ -1766,20 +1845,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sent = 0
             for uid, lang_user in users:
                 try:
-                    await context.bot.send_message(chat_id=uid, text=text)
+                    await safe_send_message(chat_id=uid, text=text)
                     sent += 1
+                    await asyncio.sleep(0.1)
                 except:
                     continue
             user_data[user_id]['state'] = 'menu'
-            await update.effective_chat.send_message(
-                f"✅ پیام به {sent} کاربر ارسال شد!",
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text=f"✅ پیام به {sent} کاربر ارسال شد!",
                 reply_markup=get_admin_keyboard(user_id)
             )
             return
         
         if "بازگشت" in text or "Back" in text:
-            await update.effective_chat.send_message(
-                "🔙 بازگشت",
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text="🔙 بازگشت",
                 reply_markup=get_main_keyboard(user_id)
             )
             return
@@ -1825,8 +1907,9 @@ async def show_subscription_plans(update: Update, context: ContextTypes.DEFAULT_
         msg += f"👤 Card Holder: {card_holder}\n\n"
         msg += f"📤 After payment, click 'Send Receipt'."
     
-    await update.effective_chat.send_message(
-        msg,
+    await safe_send_message(
+        chat_id=update.effective_chat.id,
+        text=msg,
         reply_markup=get_subscription_keyboard(user_id),
         parse_mode='Markdown'
     )
@@ -1879,8 +1962,9 @@ async def show_subscription_status(update: Update, context: ContextTypes.DEFAULT
             msg += f"📊 Today's analysis: {daily_count}/{free_limit}\n\n"
             msg += f"💎 Click 'Buy Subscription' to purchase."
     
-    await update.effective_chat.send_message(
-        msg,
+    await safe_send_message(
+        chat_id=update.effective_chat.id,
+        text=msg,
         reply_markup=get_main_keyboard(user_id),
         parse_mode='Markdown'
     )
@@ -1892,8 +1976,9 @@ async def show_payment_requests(update: Update, context: ContextTypes.DEFAULT_TY
     payments = db.get_pending_payments()
     
     if not payments:
-        await update.effective_chat.send_message(
-            "✅ هیچ درخواست پرداخت در انتظاری وجود ندارد.",
+        await safe_send_message(
+            chat_id=update.effective_chat.id,
+            text="✅ هیچ درخواست پرداخت در انتظاری وجود ندارد.",
             reply_markup=get_admin_keyboard(ADMIN_ID)
         )
         return
@@ -1906,8 +1991,9 @@ async def show_payment_requests(update: Update, context: ContextTypes.DEFAULT_TY
         msg += f"🔑 {p[4]} | 📤 ارسال: {p[6][:10]}\n"
         msg += f"/verify_{p[0]} - /reject_{p[0]}\n\n"
     
-    await update.effective_chat.send_message(
-        msg,
+    await safe_send_message(
+        chat_id=update.effective_chat.id,
+        text=msg,
         reply_markup=get_admin_keyboard(ADMIN_ID),
         parse_mode='Markdown'
     )
@@ -1917,8 +2003,9 @@ async def handle_payment_receipt(update: Update, context: ContextTypes.DEFAULT_T
     lang = db.get_user(user_id)[4] if db.get_user(user_id) else 'fa'
     
     if user_data[user_id].get('state') != 'waiting_receipt':
-        await update.effective_chat.send_message(
-            "❌ لطفاً ابتدا از منوی اشتراک، گزینه «ارسال فیش» را انتخاب کنید."
+        await safe_send_message(
+            chat_id=update.effective_chat.id,
+            text="❌ لطفاً ابتدا از منوی اشتراک، گزینه «ارسال فیش» را انتخاب کنید."
         )
         return
     
@@ -1953,14 +2040,16 @@ async def handle_payment_receipt(update: Update, context: ContextTypes.DEFAULT_T
     user_data[user_id]['state'] = 'menu'
     
     if lang == 'fa':
-        await update.effective_chat.send_message(
-            f"✅ **فیش شما با موفقیت ارسال شد!**\n\n🆔 کد پیگیری: `{reference_code}`\n⏳ پس از تایید ادمین، اشتراک شما فعال می‌شود.",
+        await safe_send_message(
+            chat_id=update.effective_chat.id,
+            text=f"✅ **فیش شما با موفقیت ارسال شد!**\n\n🆔 کد پیگیری: `{reference_code}`\n⏳ پس از تایید ادمین، اشتراک شما فعال می‌شود.",
             reply_markup=get_main_keyboard(user_id),
             parse_mode='Markdown'
         )
     else:
-        await update.effective_chat.send_message(
-            f"✅ **Your receipt was sent successfully!**\n\n🆔 Tracking Code: `{reference_code}`\n⏳ Your subscription will be activated after admin verification.",
+        await safe_send_message(
+            chat_id=update.effective_chat.id,
+            text=f"✅ **Your receipt was sent successfully!**\n\n🆔 Tracking Code: `{reference_code}`\n⏳ Your subscription will be activated after admin verification.",
             reply_markup=get_main_keyboard(user_id),
             parse_mode='Markdown'
         )
@@ -1984,14 +2073,18 @@ async def handle_admin_commands(update: Update, context: ContextTypes.DEFAULT_TY
                 
                 msg = "🎉 **اشتراک شما با موفقیت فعال شد!**\n\n✅ از این پس می‌توانید از تمام امکانات ربات استفاده کنید.\n📊 تعداد تحلیل‌های شما نامحدود است." if lang == 'fa' else "🎉 **Your subscription has been activated!**\n\n✅ You can now use all bot features.\n📊 Your analysis is unlimited."
                 
-                await context.bot.send_message(chat_id=user_id, text=msg, parse_mode='Markdown')
+                await safe_send_message(chat_id=user_id, text=msg, parse_mode='Markdown')
             
-            await update.effective_chat.send_message(
-                f"✅ پرداخت {payment_id} تایید شد!",
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text=f"✅ پرداخت {payment_id} تایید شد!",
                 reply_markup=get_admin_keyboard(ADMIN_ID)
             )
         except Exception as e:
-            await update.effective_chat.send_message(f"❌ خطا: {e}")
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text=f"❌ خطا: {e}"
+            )
     
     elif text.startswith('/reject_'):
         try:
@@ -2005,19 +2098,25 @@ async def handle_admin_commands(update: Update, context: ContextTypes.DEFAULT_TY
                 
                 msg = "❌ **درخواست پرداخت شما رد شد!**\n\n🔍 لطفاً فیش واریزی خود را بررسی و مجدداً ارسال کنید." if lang == 'fa' else "❌ **Your payment request was rejected!**\n\n🔍 Please check your receipt and try again."
                 
-                await context.bot.send_message(chat_id=user_id, text=msg, parse_mode='Markdown')
+                await safe_send_message(chat_id=user_id, text=msg, parse_mode='Markdown')
             
-            await update.effective_chat.send_message(
-                f"❌ پرداخت {payment_id} رد شد!",
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text=f"❌ پرداخت {payment_id} رد شد!",
                 reply_markup=get_admin_keyboard(ADMIN_ID)
             )
         except Exception as e:
-            await update.effective_chat.send_message(f"❌ خطا: {e}")
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text=f"❌ خطا: {e}"
+            )
 
 # ==================== اجرا ====================
 def main():
+    global bot
+    
     print("=" * 80)
-    print("🚀 ربات تحلیل تکنیکال - نسخه نهایی ۱۰۰ برابر قوی‌تر")
+    print("🚀 ربات تحلیل تکنیکال - نسخه نهایی با مدیریت خطا")
     print("🔥 ۱۰۰۰۰+ الگوریتم - ۴۰ مدل ML - ۳ روش تحلیلی")
     print("=" * 80)
     
@@ -2034,19 +2133,19 @@ def main():
     print(f"🎯 دقت هدف: ۹۹.۹۹۹۹٪")
     print("=" * 80)
     
-    app = Application.builder().token(BOT_TOKEN).build()
+    bot = Application.builder().token(BOT_TOKEN).build()
     
-    app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(CommandHandler("verify", handle_admin_commands))
-    app.add_handler(CommandHandler("reject", handle_admin_commands))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_payment_receipt))
+    bot.add_handler(CommandHandler("start", start_command))
+    bot.add_handler(CommandHandler("verify", handle_admin_commands))
+    bot.add_handler(CommandHandler("reject", handle_admin_commands))
+    bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    bot.add_handler(MessageHandler(filters.PHOTO, handle_payment_receipt))
     
     print("✅ ربات با موفقیت راه‌اندازی شد!")
     print("=" * 80)
     
     try:
-        app.run_polling(
+        bot.run_polling(
             drop_pending_updates=True,
             allowed_updates=['message', 'callback_query'],
             timeout=30
