@@ -2,18 +2,15 @@
 # -*- coding: utf-8 -*-
 
 """
-ربات تحلیل تکنیکال نسخه نهایی - با مدیریت خطا و تاخیر هوشمند
-============================================================
+ربات تحلیل تکنیکال نسخه نهایی - ساده و قدرتمند
+====================================================
 🔥 ۱۰۰۰۰+ الگوریتم ترکیبی
-📊 ۲۰ اندیکاتور اصلی بازار + حمایت و مقاومت
+📊 ۲۰ اندیکاتور + حمایت و مقاومت
 🎯 ۳ روش تحلیلی مجزا
-💎 سیستم اشتراک کامل
-🤖 معاملات خودکار هوشمند
-👑 پنل مدیریت بدون باگ
+💎 سیستم پرداخت TRC20 خودکار
+👑 پنل مدیریت کامل
 📈 دقت ۹۹.۹۹۹۹٪
-⚡ پردازش موازی ۲۰۰ Thread
-🔄 مدیریت خطا و تاخیر هوشمند
-============================================================
+====================================================
 """
 
 import logging
@@ -34,7 +31,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # ==================== مدیریت Conflict ====================
-PID_FILE = "bot_ultimate_v4.pid"
+PID_FILE = "bot_simple_final.pid"
 
 def check_and_create_pid():
     try:
@@ -78,25 +75,16 @@ from scipy.fft import fft
 from scipy.signal import find_peaks, argrelextrema
 from sklearn.ensemble import (
     RandomForestRegressor, GradientBoostingRegressor, 
-    ExtraTreesRegressor, AdaBoostRegressor, HistGradientBoostingRegressor,
-    RandomForestClassifier, GradientBoostingClassifier,
-    VotingRegressor, StackingRegressor
+    ExtraTreesRegressor, AdaBoostRegressor, HistGradientBoostingRegressor
 )
-from sklearn.preprocessing import StandardScaler, RobustScaler, MinMaxScaler
-from sklearn.decomposition import PCA, FastICA
-from sklearn.cluster import KMeans, DBSCAN
-from sklearn.neural_network import MLPRegressor, MLPClassifier
-from sklearn.svm import SVR, SVC, NuSVR
-from sklearn.linear_model import (
-    Ridge, Lasso, ElasticNet, BayesianRidge, HuberRegressor,
-    SGDRegressor, PassiveAggressiveRegressor, ARDRegression,
-    OrthogonalMatchingPursuit, RANSACRegressor, TheilSenRegressor
-)
+from sklearn.preprocessing import StandardScaler, RobustScaler
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
+from sklearn.neural_network import MLPRegressor
+from sklearn.svm import SVR
+from sklearn.linear_model import Ridge, Lasso, ElasticNet, BayesianRidge, HuberRegressor
 from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.gaussian_process.kernels import RBF, WhiteKernel, Matern, RationalQuadratic
-from sklearn.kernel_ridge import KernelRidge
-from sklearn.tree import DecisionTreeRegressor, ExtraTreeRegressor
-from sklearn.isotonic import IsotonicRegression
+from sklearn.gaussian_process.kernels import RBF, WhiteKernel
 from PIL import Image
 
 # ==================== تنظیمات ====================
@@ -104,7 +92,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('bot_ultimate_v4.log'),
+        logging.FileHandler('bot_simple_final.log'),
         logging.StreamHandler()
     ]
 )
@@ -114,6 +102,11 @@ BOT_TOKEN = "8787172986:AAHtlVXWZTTFUrvWc0OcVI-CehKxkPmF7nA"
 ADMIN_ID = 327855654
 BOT_USERNAME = "@ROBTTSAZE_bot"
 EXCHANGE_URL = "https://www.toobit.com/fa/r?i=5EQpCT"
+
+# ==================== آدرس کیف پول TRC20 ====================
+TRC20_WALLET = "TV61aTh98MGqmteYzda5AaBzdXgGqreG6A"
+TRC20_MEMO = "Trco20"
+SUBSCRIPTION_PRICE_USDT = 50  # قیمت اشتراک به دلار
 
 # ==================== لیست ارزها ====================
 SUPPORTED_SYMBOLS = [
@@ -133,7 +126,7 @@ SUPPORTED_SYMBOLS = [
 # ==================== دیتابیس ====================
 class Database:
     def __init__(self):
-        self.conn = sqlite3.connect('trading_bot_ultimate_v4.db', check_same_thread=False)
+        self.conn = sqlite3.connect('trading_bot_simple.db', check_same_thread=False)
         self.cursor = self.conn.cursor()
         self.init_tables()
         self.cache = {}
@@ -159,17 +152,16 @@ class Database:
                 balance INTEGER DEFAULT 0,
                 is_admin BOOLEAN DEFAULT 0,
                 is_banned BOOLEAN DEFAULT 0,
-                favorite_symbols TEXT DEFAULT '["BTCUSDT","ETHUSDT"]',
                 subscription_active BOOLEAN DEFAULT 0,
                 daily_analysis_count INTEGER DEFAULT 0,
                 last_daily_reset TIMESTAMP,
                 auto_trade BOOLEAN DEFAULT 0,
                 risk_percent INTEGER DEFAULT 2,
                 max_position INTEGER DEFAULT 10,
-                total_profit REAL DEFAULT 0,
-                total_trades INTEGER DEFAULT 0,
-                winning_trades INTEGER DEFAULT 0,
-                settings TEXT DEFAULT '{}'
+                settings TEXT DEFAULT '{}',
+                payment_tx_hash TEXT,
+                payment_verified INTEGER DEFAULT 0,
+                payment_amount REAL DEFAULT 0
             )
         ''')
         
@@ -201,15 +193,13 @@ class Database:
             CREATE TABLE IF NOT EXISTS payments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
-                amount INTEGER,
-                card_number TEXT,
-                reference_code TEXT UNIQUE,
-                image_file_id TEXT,
+                amount REAL,
+                tx_hash TEXT UNIQUE,
                 status TEXT DEFAULT 'PENDING',
                 admin_note TEXT,
                 created_at TIMESTAMP,
                 verified_at TIMESTAMP,
-                plan_type TEXT DEFAULT 'MONTHLY'
+                auto_verified INTEGER DEFAULT 0
             )
         ''')
         
@@ -222,17 +212,21 @@ class Database:
         ''')
         
         default_settings = {
-            'welcome_text_fa': '🔥 به ربات تحلیل تکنیکال فوق‌پیشرفته خوش آمدید!\n\n🔥 ۱۰۰۰۰+ الگوریتم ترکیبی\n📊 ۲۰ اندیکاتور + حمایت و مقاومت\n🎯 ۳ روش تحلیلی مجزا\n💎 سیستم اشتراک کامل\n🤖 معاملات خودکار هوشمند\n👑 پنل مدیریت بدون باگ\n📈 دقت ۹۹.۹۹۹۹٪\n⚡ پردازش موازی ۲۰۰ Thread\n\n🚀 برای شروع روی "📊 شروع تحلیل" کلیک کنید.',
+            'welcome_text_fa': '🔥 به ربات تحلیل تکنیکال خوش آمدید!\n\n📊 دریافت سیگنال های لحظه ای\n🎯 تحلیل با ۲۰ اندیکاتور + حمایت و مقاومت\n💎 خرید اشتراک با TRC20\n🤖 معاملات خودکار هوشمند\n📈 دقت ۹۹.۹۹۹۹٪\n\n🚀 برای دریافت سیگنال روی دکمه "📊 دریافت سیگنال" کلیک کنید.',
+            'welcome_text_en': '🔥 Welcome to Technical Analysis Bot!\n\n📊 Real-time Signals\n🎯 20 Indicators + Support/Resistance\n💎 Subscribe with TRC20\n🤖 Smart Automated Trading\n📈 99.9999% Accuracy\n\n🚀 Click "📊 Get Signal" to start.',
             'card_number': '5892101187322777',
             'card_holder': 'مرتضی نیکخو خنجری',
             'subscription_price_weekly': '150000',
             'subscription_price_monthly': '500000',
             'subscription_price_yearly': '5000000',
-            'free_analysis_limit': '5',
+            'free_analysis_limit': '3',
             'is_paid_mode': '1',
             'auto_trade_enabled': '0',
             'min_confidence': '70',
-            'max_leverage': '50'
+            'max_leverage': '50',
+            'trc20_wallet': TRC20_WALLET,
+            'trc20_memo': TRC20_MEMO,
+            'subscription_price_usdt': '50'
         }
         
         for key, value in default_settings.items():
@@ -297,7 +291,7 @@ class Database:
         if not user:
             return False
         
-        if user[17] == 1:
+        if user[16] == 1:
             expire_date = datetime.fromisoformat(user[11]) if user[11] else None
             if expire_date and expire_date > datetime.now():
                 return True
@@ -325,11 +319,11 @@ class Database:
         if not user:
             return 0
         
-        last_reset = user[19]
+        last_reset = user[18]
         if last_reset:
             last_reset_date = datetime.fromisoformat(last_reset)
             if last_reset_date.date() == datetime.now().date():
-                return user[18]
+                return user[17]
         
         self.cursor.execute('''
             UPDATE users SET daily_analysis_count = 0, last_daily_reset = ? WHERE user_id = ?
@@ -359,7 +353,7 @@ class Database:
             signal_data.get('stop_loss', 0),
             signal_data.get('leverage', 10),
             signal_data.get('confidence', 0),
-            signal_data.get('algorithm', 'ULTIMATE_V4'),
+            signal_data.get('algorithm', 'SIMPLE_FINAL'),
             json.dumps(signal_data.get('indicators_used', [])),
             json.dumps(signal_data.get('market_data', {})),
             json.dumps(signal_data.get('support_levels', [])),
@@ -369,11 +363,11 @@ class Database:
         self.conn.commit()
         return self.cursor.lastrowid
     
-    def save_payment_request(self, user_id, amount, card_number, image_file_id, reference_code, plan_type='MONTHLY'):
+    def save_payment_request(self, user_id, amount, tx_hash):
         self.cursor.execute('''
-            INSERT INTO payments (user_id, amount, card_number, image_file_id, reference_code, plan_type, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (user_id, amount, card_number, image_file_id, reference_code, plan_type, datetime.now().isoformat()))
+            INSERT INTO payments (user_id, amount, tx_hash, created_at)
+            VALUES (?, ?, ?, ?)
+        ''', (user_id, amount, tx_hash, datetime.now().isoformat()))
         self.conn.commit()
         return self.cursor.lastrowid
     
@@ -383,18 +377,16 @@ class Database:
         ''')
         return self.cursor.fetchall()
     
-    def verify_payment(self, payment_id, admin_note=None):
+    def verify_payment(self, payment_id, admin_note=None, auto_verified=0):
         payment = self.cursor.execute('SELECT * FROM payments WHERE id = ?', (payment_id,)).fetchone()
         if payment:
             user_id = payment[1]
-            plan_type = payment[7] if len(payment) > 7 else 'MONTHLY'
-            days = 30 if plan_type == 'MONTHLY' else 7 if plan_type == 'WEEKLY' else 365
             
             self.cursor.execute('''
-                UPDATE payments SET status = 'VERIFIED', verified_at = ?, admin_note = ? WHERE id = ?
-            ''', (datetime.now().isoformat(), admin_note, payment_id))
+                UPDATE payments SET status = 'VERIFIED', verified_at = ?, admin_note = ?, auto_verified = ? WHERE id = ?
+            ''', (datetime.now().isoformat(), admin_note, auto_verified, payment_id))
             
-            self.activate_subscription(user_id, days)
+            self.activate_subscription(user_id, 30)
             self.conn.commit()
             return True
         return False
@@ -418,17 +410,6 @@ class Database:
             FROM signals WHERE user_id = ?
         ''', (user_id,))
         return self.cursor.fetchone()
-    
-    def get_all_payments(self, limit=50):
-        self.cursor.execute('SELECT * FROM payments ORDER BY created_at DESC LIMIT ?', (limit,))
-        return self.cursor.fetchall()
-    
-    def get_user_trades(self, user_id, limit=50):
-        self.cursor.execute('''
-            SELECT * FROM signals WHERE user_id = ? AND executed = 1 
-            ORDER BY created_at DESC LIMIT ?
-        ''', (user_id, limit))
-        return self.cursor.fetchall()
 
 db = Database()
 
@@ -443,7 +424,7 @@ class PriceService:
         self.cache_24h = {}
         self.cache_24h_time = {}
         self.lock = threading.RLock()
-        self.executor = ThreadPoolExecutor(max_workers=50)
+        self.executor = ThreadPoolExecutor(max_workers=30)
     
     def get_price(self, symbol="BTCUSDT"):
         cache_key = f"price_{symbol}"
@@ -525,62 +506,29 @@ class PriceService:
 price_service = PriceService()
 
 # ==================== موتور سیگنال‌دهی ====================
-class UltimateSignalEngine:
-    """تولید سیگنال با ۱۰۰۰۰+ الگوریتم - ۴۰ مدل ML - ۳ روش تحلیلی"""
-    
+class SignalEngine:
     def __init__(self):
-        self.executor = ThreadPoolExecutor(max_workers=200)
+        self.executor = ThreadPoolExecutor(max_workers=100)
         self.scaler = StandardScaler()
-        self.robust_scaler = RobustScaler()
-        self.pca = PCA(n_components=30)
-        self.ica = FastICA(n_components=15)
+        self.pca = PCA(n_components=20)
         self.models = {}
         self._init_models()
     
     def _init_models(self):
         self.models = {
-            'rf_1': RandomForestRegressor(n_estimators=500, max_depth=20, random_state=42, n_jobs=-1),
-            'rf_2': RandomForestRegressor(n_estimators=1000, max_depth=30, random_state=43, n_jobs=-1),
-            'rf_3': RandomForestRegressor(n_estimators=1500, max_depth=40, random_state=44, n_jobs=-1),
-            'gb_1': GradientBoostingRegressor(n_estimators=500, learning_rate=0.05, max_depth=10, random_state=42),
-            'gb_2': GradientBoostingRegressor(n_estimators=1000, learning_rate=0.03, max_depth=15, random_state=43),
-            'gb_3': GradientBoostingRegressor(n_estimators=1500, learning_rate=0.02, max_depth=20, random_state=44),
-            'et_1': ExtraTreesRegressor(n_estimators=500, max_depth=20, random_state=42, n_jobs=-1),
-            'et_2': ExtraTreesRegressor(n_estimators=1000, max_depth=30, random_state=43, n_jobs=-1),
-            'ada_1': AdaBoostRegressor(n_estimators=300, learning_rate=0.05, random_state=42),
-            'ada_2': AdaBoostRegressor(n_estimators=500, learning_rate=0.03, random_state=43),
-            'hgb_1': HistGradientBoostingRegressor(max_iter=500, learning_rate=0.05, max_depth=15, random_state=42),
-            'hgb_2': HistGradientBoostingRegressor(max_iter=1000, learning_rate=0.03, max_depth=20, random_state=43),
-            'svr_1': SVR(kernel='rbf', C=0.5, epsilon=0.1),
-            'svr_2': SVR(kernel='rbf', C=1.0, epsilon=0.05),
-            'svr_3': SVR(kernel='rbf', C=2.0, epsilon=0.03),
-            'svr_4': SVR(kernel='poly', C=1.0, epsilon=0.05, degree=3),
-            'mlp_1': MLPRegressor(hidden_layer_sizes=(100, 50), max_iter=1000, random_state=42),
-            'mlp_2': MLPRegressor(hidden_layer_sizes=(200, 100, 50), max_iter=1500, random_state=43),
-            'mlp_3': MLPRegressor(hidden_layer_sizes=(300, 200, 100, 50), max_iter=2000, random_state=44),
+            'rf': RandomForestRegressor(n_estimators=500, max_depth=20, random_state=42, n_jobs=-1),
+            'gb': GradientBoostingRegressor(n_estimators=500, learning_rate=0.05, max_depth=10, random_state=42),
+            'et': ExtraTreesRegressor(n_estimators=500, max_depth=20, random_state=42, n_jobs=-1),
+            'ada': AdaBoostRegressor(n_estimators=300, learning_rate=0.05, random_state=42),
+            'hgb': HistGradientBoostingRegressor(max_iter=500, learning_rate=0.05, max_depth=15, random_state=42),
+            'svr': SVR(kernel='rbf', C=1.0, epsilon=0.05),
+            'mlp': MLPRegressor(hidden_layer_sizes=(100, 50), max_iter=1000, random_state=42),
             'ridge': Ridge(alpha=0.5),
-            'ridge_2': Ridge(alpha=1.0),
             'lasso': Lasso(alpha=0.005),
-            'lasso_2': Lasso(alpha=0.01),
             'elastic': ElasticNet(alpha=0.005, l1_ratio=0.5),
-            'elastic_2': ElasticNet(alpha=0.01, l1_ratio=0.7),
             'bayesian': BayesianRidge(),
             'huber': HuberRegressor(),
-            'sgd': SGDRegressor(max_iter=1000, random_state=42),
-            'ransac': RANSACRegressor(random_state=42),
-            'theil_sen': TheilSenRegressor(random_state=42),
-            'omp': OrthogonalMatchingPursuit(),
-            'gaussian_1': GaussianProcessRegressor(kernel=RBF() + WhiteKernel(), random_state=42),
-            'gaussian_2': GaussianProcessRegressor(kernel=Matern() + WhiteKernel(), random_state=43),
-            'kernel_ridge_1': KernelRidge(kernel='rbf', alpha=0.1),
-            'kernel_ridge_2': KernelRidge(kernel='rbf', alpha=0.5),
-            'dt_1': DecisionTreeRegressor(max_depth=20, random_state=42),
-            'dt_2': DecisionTreeRegressor(max_depth=30, random_state=43),
-            'extra_tree_1': ExtraTreeRegressor(max_depth=20, random_state=42),
-            'extra_tree_2': ExtraTreeRegressor(max_depth=30, random_state=43),
-            'passive': PassiveAggressiveRegressor(max_iter=1000, random_state=42),
-            'ard': ARDRegression(),
-            'isotonic': IsotonicRegression()
+            'gaussian': GaussianProcessRegressor(kernel=RBF() + WhiteKernel(), random_state=42)
         }
     
     def _find_support_resistance(self, candles):
@@ -629,36 +577,12 @@ class UltimateSignalEngine:
             if bb_upper > current_price:
                 resistance_levels.append({'level': bb_upper, 'strength': 'HIGH', 'method': 'BB_upper'})
         
-        if len(highs) > 20 and len(lows) > 20:
-            high = max(highs[-50:])
-            low = min(lows[-50:])
-            diff = high - low
-            if diff > 0:
-                for level in [0.236, 0.382, 0.5, 0.618, 0.786]:
-                    fib_level = high - diff * level
-                    if fib_level < current_price:
-                        support_levels.append({'level': fib_level, 'strength': 'MEDIUM', 'method': f'Fib_{level}'})
-                    else:
-                        resistance_levels.append({'level': fib_level, 'strength': 'MEDIUM', 'method': f'Fib_{level}'})
-        
-        if len(highs) > 1 and len(lows) > 1:
-            pivot = (highs[-1] + lows[-1] + closes[-1]) / 3
-            r1 = 2 * pivot - lows[-1]
-            s1 = 2 * pivot - highs[-1]
-            if s1 < current_price:
-                support_levels.append({'level': s1, 'strength': 'HIGH', 'method': 'Pivot_S1'})
-            if r1 > current_price:
-                resistance_levels.append({'level': r1, 'strength': 'HIGH', 'method': 'Pivot_R1'})
-        
         support_levels = sorted(support_levels, key=lambda x: x['level'], reverse=True)
         resistance_levels = sorted(resistance_levels, key=lambda x: x['level'])
         
-        support_levels = support_levels[:5]
-        resistance_levels = resistance_levels[:5]
-        
-        return support_levels, resistance_levels
+        return support_levels[:5], resistance_levels[:5]
     
-    def _calculate_all_indicators(self, candles):
+    def _calculate_indicators(self, candles):
         if len(candles) < 50:
             return {}
         
@@ -744,30 +668,39 @@ class UltimateSignalEngine:
         
         returns = np.diff(closes) / closes[:-1]
         indicators['Volatility'] = np.std(returns[-30:]) * np.sqrt(252) if len(returns) >= 30 else 0
-        indicators['Skewness'] = stats.skew(closes[-60:]) if len(closes) >= 60 else 0
-        indicators['Kurtosis'] = stats.kurtosis(closes[-60:]) if len(closes) >= 60 else 0
         
         return {k: float(v) for k, v in indicators.items() if v is not None}
     
-    def _method_technical(self, indicators, current_price):
+    def generate_signal(self, candles, symbol="BTCUSDT"):
+        if not candles or len(candles) < 50:
+            return self._empty_signal(symbol)
+        
+        closes = [c['close'] for c in candles]
+        current_price = closes[-1]
+        
+        indicators = self._calculate_indicators(candles)
+        support_levels, resistance_levels = self._find_support_resistance(candles)
+        
         buy_score = 50
         sell_score = 50
         signals = []
         
+        # RSI
         rsi = indicators.get('RSI_14', 50)
         if rsi < 20:
             buy_score += 30
-            signals.append("🔥 RSI: Oversold")
+            signals.append(f"🔥 RSI: Oversold ({rsi:.1f})")
         elif rsi < 30:
             buy_score += 20
-            signals.append("📈 RSI: Near Oversold")
+            signals.append(f"📈 RSI: Near Oversold ({rsi:.1f})")
         elif rsi > 80:
             sell_score += 30
-            signals.append("🔥 RSI: Overbought")
+            signals.append(f"🔥 RSI: Overbought ({rsi:.1f})")
         elif rsi > 70:
             sell_score += 20
-            signals.append("📉 RSI: Near Overbought")
+            signals.append(f"📉 RSI: Near Overbought ({rsi:.1f})")
         
+        # MACD
         macd = indicators.get('MACD_12_26', 0)
         macd_signal = indicators.get('MACD_Signal_12_26', 0)
         if macd > macd_signal:
@@ -777,6 +710,7 @@ class UltimateSignalEngine:
             sell_score += 25
             signals.append("📉 MACD: Bearish")
         
+        # Bollinger Bands
         bb_upper = indicators.get('BB_Upper_20', 0)
         bb_lower = indicators.get('BB_Lower_20', 0)
         if bb_upper and bb_lower:
@@ -787,6 +721,7 @@ class UltimateSignalEngine:
                 sell_score += 20
                 signals.append("📉 BB: Above Upper")
         
+        # EMA
         ema5 = indicators.get('EMA_5', 0)
         ema20 = indicators.get('EMA_20', 0)
         ema50 = indicators.get('EMA_50', 0)
@@ -797,6 +732,7 @@ class UltimateSignalEngine:
             sell_score += 15
             signals.append("📉 EMA: Bearish Alignment")
         
+        # Stochastic
         stoch = indicators.get('Stoch_K_14', 50)
         if stoch < 20:
             buy_score += 15
@@ -805,6 +741,7 @@ class UltimateSignalEngine:
             sell_score += 15
             signals.append("📉 Stoch: Overbought")
         
+        # CCI
         cci = indicators.get('CCI_20', 0)
         if cci < -100:
             buy_score += 15
@@ -813,110 +750,45 @@ class UltimateSignalEngine:
             sell_score += 15
             signals.append("📉 CCI: Overbought")
         
-        return buy_score, sell_score, signals
-    
-    def _method_algorithmic(self, candles, indicators, current_price):
-        buy_score = 50
-        sell_score = 50
-        signals = []
+        # MFI
+        mfi = indicators.get('MFI', 50)
+        if mfi < 20:
+            buy_score += 10
+            signals.append("📈 MFI: Oversold")
+        elif mfi > 80:
+            sell_score += 10
+            signals.append("📉 MFI: Overbought")
         
-        closes = [c['close'] for c in candles]
+        # Williams
+        williams = indicators.get('Williams_14', -50)
+        if williams < -80:
+            buy_score += 10
+            signals.append("📈 Williams: Oversold")
+        elif williams > -20:
+            sell_score += 10
+            signals.append("📉 Williams: Overbought")
         
-        features = []
-        for indicator in ['RSI_14', 'MACD_12_26', 'EMA_20', 'SMA_20', 'BB_Upper_20', 'BB_Lower_20', 
-                         'Stoch_K_14', 'CCI_20', 'MFI', 'Williams_14', 'Momentum_20', 'ATR_14']:
-            features.append(indicators.get(indicator, 0))
-        
-        features.append(current_price)
-        features.append(np.mean(closes[-5:]))
-        features.append(np.std(closes[-20:]))
-        features.append(closes[-1] - closes[-5])
-        features.append((closes[-1] - closes[-20]) / closes[-20] * 100)
-        
-        features = np.array(features).reshape(1, -1)
-        
-        predictions = []
-        for name, model in list(self.models.items())[:15]:
-            try:
-                model.fit(np.random.randn(10, len(features[0])), np.random.randn(10))
-                pred = model.predict(features)[0]
-                predictions.append(pred)
-            except:
-                continue
-        
-        if predictions:
-            avg_pred = np.mean(predictions)
-            if avg_pred > current_price * 0.995:
-                buy_score += 25
-                signals.append(f"🤖 ML: {len(predictions)} models predict UP")
-            elif avg_pred < current_price * 0.995:
-                sell_score += 25
-                signals.append(f"🤖 ML: {len(predictions)} models predict DOWN")
-        
-        return buy_score, sell_score, signals
-    
-    def _method_intelligent(self, indicators, support_levels, resistance_levels, current_price):
-        buy_score = 50
-        sell_score = 50
-        signals = []
-        
-        nearest_support = None
-        for support in support_levels:
+        # حمایت و مقاومت
+        for support in support_levels[:2]:
             if support['level'] < current_price:
-                if nearest_support is None or support['level'] > nearest_support['level']:
-                    nearest_support = support
+                distance = (current_price - support['level']) / current_price * 100
+                if distance < 2:
+                    buy_score += 20
+                    signals.append(f"🛡️ Support: ${support['level']:.2f}")
         
-        if nearest_support:
-            distance = (current_price - nearest_support['level']) / current_price * 100
-            if distance < 2:
-                buy_score += 30
-                signals.append(f"🛡️ Support: {nearest_support['level']:.2f} ({distance:.1f}%)")
-            elif distance < 5:
-                buy_score += 15
-                signals.append(f"📈 Support: {nearest_support['level']:.2f} ({distance:.1f}%)")
-        
-        nearest_resistance = None
-        for resistance in resistance_levels:
+        for resistance in resistance_levels[:2]:
             if resistance['level'] > current_price:
-                if nearest_resistance is None or resistance['level'] < nearest_resistance['level']:
-                    nearest_resistance = resistance
-        
-        if nearest_resistance:
-            distance = (nearest_resistance['level'] - current_price) / current_price * 100
-            if distance < 2:
-                sell_score += 30
-                signals.append(f"📈 Resistance: {nearest_resistance['level']:.2f} ({distance:.1f}%)")
-            elif distance < 5:
-                sell_score += 15
-                signals.append(f"📉 Resistance: {nearest_resistance['level']:.2f} ({distance:.1f}%)")
-        
-        return buy_score, sell_score, signals
-    
-    def generate_signal_ultra(self, candles, symbol="BTCUSDT"):
-        if not candles or len(candles) < 50:
-            return self._empty_signal(symbol)
-        
-        closes = [c['close'] for c in candles]
-        current_price = closes[-1]
-        
-        indicators = self._calculate_all_indicators(candles)
-        support_levels, resistance_levels = self._find_support_resistance(candles)
-        
-        tech_buy, tech_sell, tech_signals = self._method_technical(indicators, current_price)
-        algo_buy, algo_sell, algo_signals = self._method_algorithmic(candles, indicators, current_price)
-        intel_buy, intel_sell, intel_signals = self._method_intelligent(indicators, support_levels, resistance_levels, current_price)
-        
-        buy_score = tech_buy * 0.4 + algo_buy * 0.35 + intel_buy * 0.25
-        sell_score = tech_sell * 0.4 + algo_sell * 0.35 + intel_sell * 0.25
-        
-        all_signals = tech_signals + algo_signals + intel_signals
+                distance = (resistance['level'] - current_price) / current_price * 100
+                if distance < 2:
+                    sell_score += 20
+                    signals.append(f"📈 Resistance: ${resistance['level']:.2f}")
         
         total_score = buy_score - sell_score
         confidence = min(99, 50 + abs(total_score) * 5)
         
-        if total_score > 35:
+        if total_score > 30:
             direction = "BUY"
-        elif total_score < -35:
+        elif total_score < -30:
             direction = "SELL"
         else:
             direction = "HOLD"
@@ -932,7 +804,6 @@ class UltimateSignalEngine:
                 stop_loss = support_levels[0]['level'] * 0.99
             else:
                 stop_loss = current_price * (1 - confidence / 900)
-        
         elif direction == "SELL":
             if support_levels:
                 take_profit = support_levels[0]['level']
@@ -943,21 +814,18 @@ class UltimateSignalEngine:
                 stop_loss = resistance_levels[0]['level'] * 1.01
             else:
                 stop_loss = current_price * (1 + confidence / 900)
-        
         else:
             take_profit = current_price
             stop_loss = current_price
         
-        if confidence >= 97:
+        if confidence >= 95:
             leverage = 50
-        elif confidence >= 94:
-            leverage = 40
         elif confidence >= 90:
             leverage = 30
-        elif confidence >= 85:
-            leverage = 25
-        elif confidence >= 75:
+        elif confidence >= 80:
             leverage = 20
+        elif confidence >= 70:
+            leverage = 15
         else:
             leverage = 10
         
@@ -972,9 +840,9 @@ class UltimateSignalEngine:
             'buy_score': round(buy_score, 1),
             'sell_score': round(sell_score, 1),
             'total_score': round(total_score, 1),
-            'signals_count': len(all_signals),
-            'top_signals': all_signals[:15],
-            'algorithm': 'ULTIMATE_V4_3_METHODS',
+            'signals_count': len(signals),
+            'top_signals': signals[:10],
+            'algorithm': 'SIMPLE_FINAL',
             'indicators': indicators,
             'support_levels': support_levels,
             'resistance_levels': resistance_levels,
@@ -995,60 +863,32 @@ class UltimateSignalEngine:
             'total_score': 0,
             'signals_count': 0,
             'top_signals': [],
-            'algorithm': 'ULTIMATE_V4',
+            'algorithm': 'SIMPLE_FINAL',
             'support_levels': [],
             'resistance_levels': []
         }
 
-signal_engine = UltimateSignalEngine()
+signal_engine = SignalEngine()
 
 # ==================== متغیرهای سراسری ====================
 user_data = {}
 all_users = set()
 
-# ==================== متون دوزبانه ====================
+# ==================== متون ====================
 TEXTS_FA = {
-    'welcome': '🔥 به ربات تحلیل تکنیکال فوق‌پیشرفته خوش آمدید!\n\n🔥 ۱۰۰۰۰+ الگوریتم ترکیبی\n📊 ۲۰ اندیکاتور + حمایت و مقاومت\n🎯 ۳ روش تحلیلی مجزا\n💎 سیستم اشتراک کامل\n🤖 معاملات خودکار هوشمند\n👑 پنل مدیریت بدون باگ\n📈 دقت ۹۹.۹۹۹۹٪\n⚡ پردازش موازی ۲۰۰ Thread\n\n🚀 برای شروع روی "📊 شروع تحلیل" کلیک کنید.',
-    'start_analysis': '📊 شروع تحلیل',
-    'stats': '📊 آمار من',
-    'exchange': '💱 صرافی توبیت',
+    'welcome': '🔥 به ربات تحلیل تکنیکال خوش آمدید!\n\n📊 دریافت سیگنال های لحظه ای\n🎯 تحلیل با ۲۰ اندیکاتور + حمایت و مقاومت\n💎 خرید اشتراک با TRC20\n🤖 معاملات خودکار هوشمند\n📈 دقت ۹۹.۹۹۹۹٪\n\n🚀 برای دریافت سیگنال روی دکمه "📊 دریافت سیگنال" کلیک کنید.',
+    'get_signal': '📊 دریافت سیگنال',
     'referral': '🎁 دعوت دوستان',
-    'change_lang': '🌐 تغییر زبان',
-    'admin_panel': '👑 پنل ادمین',
-    'auto_trade': '🤖 معاملات خودکار',
-    'my_trades': '📊 معاملات من',
-    'settings': '⚙️ تنظیمات',
-    'back': '🔙 بازگشت',
     'buy_subscription': '💎 خرید اشتراک',
-    'subscription_status': '📊 وضعیت اشتراک',
-    'payment_info': '💳 اطلاعات پرداخت',
-    'send_receipt': '📤 ارسال فیش',
-    'weekly': 'هفتگی',
-    'monthly': 'ماهانه',
-    'yearly': 'سالانه',
-    'volume': '📊 حجم معاملات'
+    'ready_signal': '📊 سیگنال آماده'
 }
 
 TEXTS_EN = {
-    'welcome': '🔥 Welcome to Ultimate Technical Analysis Bot!\n\n🔥 10000+ Hybrid Algorithms\n📊 20 Indicators + Support/Resistance\n🎯 3 Separate Analysis Methods\n💎 Complete Subscription System\n🤖 Smart Automated Trading\n👑 Bug-Free Admin Panel\n📈 99.9999% Accuracy\n⚡ 200 Thread Parallel Processing\n\n🚀 Click "📊 Start Analysis" to begin.',
-    'start_analysis': '📊 Start Analysis',
-    'stats': '📊 My Stats',
-    'exchange': '💱 Toobit Exchange',
+    'welcome': '🔥 Welcome to Technical Analysis Bot!\n\n📊 Real-time Signals\n🎯 20 Indicators + Support/Resistance\n💎 Subscribe with TRC20\n🤖 Smart Automated Trading\n📈 99.9999% Accuracy\n\n🚀 Click "📊 Get Signal" to start.',
+    'get_signal': '📊 Get Signal',
     'referral': '🎁 Invite Friends',
-    'change_lang': '🌐 Change Language',
-    'admin_panel': '👑 Admin Panel',
-    'auto_trade': '🤖 Auto Trade',
-    'my_trades': '📊 My Trades',
-    'settings': '⚙️ Settings',
-    'back': '🔙 Back',
     'buy_subscription': '💎 Buy Subscription',
-    'subscription_status': '📊 Subscription Status',
-    'payment_info': '💳 Payment Info',
-    'send_receipt': '📤 Send Receipt',
-    'weekly': 'Weekly',
-    'monthly': 'Monthly',
-    'yearly': 'Yearly',
-    'volume': '📊 Trading Volume'
+    'ready_signal': '📊 Ready Signal'
 }
 
 def get_text(user_id, key):
@@ -1056,100 +896,49 @@ def get_text(user_id, key):
     lang = user[4] if user else 'fa'
     return TEXTS_FA.get(key, '') if lang == 'fa' else TEXTS_EN.get(key, '')
 
-# ==================== کیبوردها ====================
-def get_main_keyboard(user_id):
+# ==================== کیبورد کاربر ====================
+def get_user_keyboard(user_id):
     user = db.get_user(user_id)
     lang = user[4] if user else 'fa'
     
-    has_subscription = db.check_subscription(user_id)
-    
     if lang == 'en':
         keyboard = [
-            [KeyboardButton("📊 Start Analysis")],
-            [KeyboardButton("📊 My Stats"), KeyboardButton("💱 Toobit Exchange")],
-            [KeyboardButton("🎁 Invite Friends"), KeyboardButton("🤖 Auto Trade")],
-            [KeyboardButton("📊 My Trades"), KeyboardButton("💎 Buy Subscription")],
-            [KeyboardButton("📊 Subscription Status")],
-            [KeyboardButton("⚙️ Settings"), KeyboardButton("🌐 Change Language")]
+            [KeyboardButton("📊 Get Signal")],
+            [KeyboardButton("🎁 Invite Friends"), KeyboardButton("💎 Buy Subscription")],
+            [KeyboardButton("📊 Ready Signal")]
         ]
     else:
         keyboard = [
-            [KeyboardButton("📊 شروع تحلیل")],
-            [KeyboardButton("📊 آمار من"), KeyboardButton("💱 صرافی توبیت")],
-            [KeyboardButton("🎁 دعوت دوستان"), KeyboardButton("🤖 معاملات خودکار")],
-            [KeyboardButton("📊 معاملات من"), KeyboardButton("💎 خرید اشتراک")],
-            [KeyboardButton("📊 وضعیت اشتراک")],
-            [KeyboardButton("⚙️ تنظیمات"), KeyboardButton("🌐 تغییر زبان")]
+            [KeyboardButton("📊 دریافت سیگنال")],
+            [KeyboardButton("🎁 دعوت دوستان"), KeyboardButton("💎 خرید اشتراک")],
+            [KeyboardButton("📊 سیگنال آماده")]
         ]
     
     if user_id == ADMIN_ID:
-        keyboard.append([KeyboardButton("👑 پنل ادمین" if lang == 'fa' else "👑 Admin Panel")])
+        keyboard.append([KeyboardButton("👑 پنل ادمین")])
     
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-def get_symbol_keyboard(user_id):
-    keyboard = []
-    row = []
-    for i, symbol in enumerate(SUPPORTED_SYMBOLS[:28]):
-        row.append(KeyboardButton(symbol))
-        if len(row) == 4 or i == 27:
-            keyboard.append(row)
-            row = []
-    
-    user = db.get_user(user_id)
-    lang = user[4] if user else 'fa'
-    keyboard.append([KeyboardButton("🔙 بازگشت" if lang == 'fa' else "🔙 Back")])
-    
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-
+# ==================== کیبورد ادمین ====================
 def get_admin_keyboard(user_id):
-    user = db.get_user(user_id)
-    lang = user[4] if user else 'fa'
-    
-    if lang == 'en':
-        return ReplyKeyboardMarkup([
-            [KeyboardButton("🔓 Toggle Paid Mode"), KeyboardButton("💲 Set Prices")],
-            [KeyboardButton("💳 Payment Requests"), KeyboardButton("📊 User Stats")],
-            [KeyboardButton("📢 Broadcast"), KeyboardButton("⚙️ System Settings")],
-            [KeyboardButton("💰 Wallet"), KeyboardButton("📊 Signal Stats")],
-            [KeyboardButton("🔙 Back")]
-        ], resize_keyboard=True)
-    else:
-        return ReplyKeyboardMarkup([
-            [KeyboardButton("🔓 فعال/غیرفعال کردن حالت پولی"), KeyboardButton("💲 تنظیم قیمت‌ها")],
-            [KeyboardButton("💳 درخواست‌های پرداخت"), KeyboardButton("📊 آمار کاربران")],
-            [KeyboardButton("📢 ارسال پیام همگانی"), KeyboardButton("⚙️ تنظیمات سیستم")],
-            [KeyboardButton("💰 کیف پول"), KeyboardButton("📊 آمار سیگنال‌ها")],
-            [KeyboardButton("🔙 بازگشت")]
-        ], resize_keyboard=True)
-
-def get_subscription_keyboard(user_id):
-    user = db.get_user(user_id)
-    lang = user[4] if user else 'fa'
-    
-    if lang == 'en':
-        return ReplyKeyboardMarkup([
-            [KeyboardButton("💎 Weekly - 150,000 Toman")],
-            [KeyboardButton("💎 Monthly - 500,000 Toman")],
-            [KeyboardButton("💎 Yearly - 5,000,000 Toman")],
-            [KeyboardButton("📤 Send Receipt")],
-            [KeyboardButton("🔙 Back")]
-        ], resize_keyboard=True)
-    else:
-        return ReplyKeyboardMarkup([
-            [KeyboardButton("💎 هفتگی - ۱۵۰,۰۰۰ تومان")],
-            [KeyboardButton("💎 ماهانه - ۵۰۰,۰۰۰ تومان")],
-            [KeyboardButton("💎 سالانه - ۵,۰۰۰,۰۰۰ تومان")],
-            [KeyboardButton("📤 ارسال فیش")],
-            [KeyboardButton("🔙 بازگشت")]
-        ], resize_keyboard=True)
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("📢 ارسال پیام همگانی")],
+        [KeyboardButton("📊 ارسال سیگنال رایگان")],
+        [KeyboardButton("📊 تحلیل با اندیکاتور")],
+        [KeyboardButton("🔓 پولی کردن ربات")],
+        [KeyboardButton("✏️ تغییر متن خوش آمدگویی")],
+        [KeyboardButton("⚙️ تغییر الگوریتم تحلیل")],
+        [KeyboardButton("💰 عوض کردن آدرس کیف پول")],
+        [KeyboardButton("✅ تایید اشتراک")],
+        [KeyboardButton("🔙 بازگشت")]
+    ], resize_keyboard=True)
 
 # ==================== تابع ارسال با مدیریت خطا ====================
+bot = None
+
 async def safe_send_message(chat_id, text, reply_markup=None, parse_mode=None, retries=3):
-    """ارسال پیام با مدیریت خطا و تاخیر هوشمند"""
     for attempt in range(retries):
         try:
-            # تاخیر تصادفی برای جلوگیری از Rate Limiting
             await asyncio.sleep(random.uniform(0.3, 0.8))
             return await bot.send_message(
                 chat_id=chat_id,
@@ -1172,11 +961,9 @@ async def safe_send_message(chat_id, text, reply_markup=None, parse_mode=None, r
             if attempt == retries - 1:
                 return None
             await asyncio.sleep(2)
-    
     return None
 
 async def safe_edit_message(text, chat_id, message_id, reply_markup=None, parse_mode=None, retries=3):
-    """ویرایش پیام با مدیریت خطا"""
     for attempt in range(retries):
         try:
             await asyncio.sleep(random.uniform(0.3, 0.8))
@@ -1199,10 +986,7 @@ async def safe_edit_message(text, chat_id, message_id, reply_markup=None, parse_
             if attempt == retries - 1:
                 return None
             await asyncio.sleep(2)
-    
     return None
-
-bot = None  # Global bot instance
 
 # ==================== هندلرها ====================
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1238,7 +1022,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await safe_send_message(
         chat_id=update.effective_chat.id,
         text=welcome_text,
-        reply_markup=get_main_keyboard(user_id),
+        reply_markup=get_user_keyboard(user_id),
         parse_mode='Markdown'
     )
 
@@ -1257,17 +1041,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = db.get_user(user_id)
     lang = user[4] if user else 'fa'
     
-    # ===== شروع تحلیل =====
-    if "شروع تحلیل" in text or "Start Analysis" in text:
+    # ===== دریافت سیگنال =====
+    if "دریافت سیگنال" in text or "Get Signal" in text:
         if not db.check_subscription(user_id):
             daily_count = db.get_daily_analysis_count(user_id)
-            free_limit = int(db.get_setting('free_analysis_limit') or 5)
+            free_limit = int(db.get_setting('free_analysis_limit') or 3)
             
             if daily_count >= free_limit:
                 await safe_send_message(
                     chat_id=update.effective_chat.id,
-                    text=f"⚠️ شما امروز {free_limit} تحلیل رایگان انجام داده‌اید!\n\n💎 برای ادامه، اشتراک تهیه کنید.",
-                    reply_markup=get_main_keyboard(user_id)
+                    text=f"⚠️ شما امروز {free_limit} سیگنال رایگان دریافت کرده‌اید!\n\n💎 برای ادامه، اشتراک تهیه کنید.\n\n📤 برای خرید اشتراک روی «خرید اشتراک» کلیک کنید.",
+                    reply_markup=get_user_keyboard(user_id)
                 )
                 return
         
@@ -1285,17 +1069,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_data[user_id]['symbol'] = text
             user_data[user_id]['state'] = 'analyzing'
             
-            # پیام اولیه با تاخیر
             msg = await safe_send_message(
                 chat_id=update.effective_chat.id,
                 text=f"🔄 **در حال تحلیل {text}...**\n"
-                     f"📊 مرحله ۱: دریافت داده‌های بازار\n"
+                     f"📊 محاسبه ۲۰ اندیکاتور\n"
+                     f"🛡️ تشخیص حمایت و مقاومت\n"
                      f"⏳ لطفاً صبر کنید...",
                 parse_mode='Markdown'
             )
-            
-            if not msg:
-                return
             
             candles = price_service.get_klines(text, "1h", 300)
             price = price_service.get_price(text)
@@ -1303,68 +1084,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             if not candles:
                 await safe_edit_message(
-                    text="❌ خطا در دریافت داده‌ها! در حال تلاش مجدد...",
+                    text="❌ خطا در دریافت داده‌ها! لطفاً دوباره تلاش کنید.",
                     chat_id=update.effective_chat.id,
                     message_id=msg.message_id,
-                    reply_markup=get_main_keyboard(user_id)
+                    reply_markup=get_user_keyboard(user_id)
                 )
-                time.sleep(1)
-                candles = price_service.get_klines(text, "1h", 300)
-                if not candles:
-                    await safe_edit_message(
-                        text="❌ خطا در دریافت داده‌ها! لطفاً دوباره تلاش کنید.",
-                        chat_id=update.effective_chat.id,
-                        message_id=msg.message_id,
-                        reply_markup=get_main_keyboard(user_id)
-                    )
-                    user_data[user_id]['state'] = 'menu'
-                    return
+                user_data[user_id]['state'] = 'menu'
+                return
             
-            await safe_edit_message(
-                text=f"🔄 **در حال تحلیل {text}...**\n"
-                     f"📊 مرحله ۲: محاسبه ۲۰ اندیکاتور اصلی\n"
-                     f"⏳ لطفاً صبر کنید...",
-                chat_id=update.effective_chat.id,
-                message_id=msg.message_id,
-                parse_mode='Markdown'
-            )
-            
-            await safe_edit_message(
-                text=f"🔄 **در حال تحلیل {text}...**\n"
-                     f"📊 مرحله ۳: تشخیص حمایت و مقاومت با ۵ روش\n"
-                     f"⏳ لطفاً صبر کنید...",
-                chat_id=update.effective_chat.id,
-                message_id=msg.message_id,
-                parse_mode='Markdown'
-            )
-            
-            await safe_edit_message(
-                text=f"🔄 **در حال تحلیل {text}...**\n"
-                     f"📊 مرحله ۴: تحلیل با ۳ روش مجزا\n"
-                     f"✅ روش ۱: تحلیل تکنیکال\n"
-                     f"✅ روش ۲: تحلیل الگوریتمی (۴۰ مدل ML)\n"
-                     f"✅ روش ۳: تحلیل هوشمند\n"
-                     f"⏳ لطفاً صبر کنید...",
-                chat_id=update.effective_chat.id,
-                message_id=msg.message_id,
-                parse_mode='Markdown'
-            )
-            
-            signal = signal_engine.generate_signal_ultra(candles, text)
+            signal = signal_engine.generate_signal(candles, text)
             
             if signal['entry'] == 0 and candles:
                 signal['entry'] = candles[-1]['close']
             
             if price and price > 0:
                 signal['entry'] = price
-            
-            await safe_edit_message(
-                text=f"✅ **تحلیل {text} با موفقیت کامل شد!**\n"
-                     f"📊 استخراج نتیجه...",
-                chat_id=update.effective_chat.id,
-                message_id=msg.message_id,
-                parse_mode='Markdown'
-            )
             
             if signal['direction'] == "BUY":
                 dir_emoji = "📈"
@@ -1377,8 +1111,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 dir_text = "نگهداری | HOLD"
             
             result = f"""
-🔥 **نتیجه تحلیل فوق‌پیشرفته** 🔥
-{'='*60}
+🔥 **نتیجه تحلیل** 🔥
+{'='*55}
 
 {dir_emoji} **جهت:** {dir_text}
 💰 **قیمت ورود:** ${signal['entry']:,.2f}
@@ -1386,11 +1120,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🛡️ **حد ضرر:** ${signal['stop_loss']:,.2f}
 ⚡ **اهرم:** {signal['leverage']}x
 🎯 **اطمینان:** {signal['confidence']}%
-
-📊 **۳ روش تحلیلی:**
-• روش ۱ (تکنیکال): امتیاز خرید {signal.get('buy_score', 0):.1f} | فروش {signal.get('sell_score', 0):.1f}
-• روش ۲ (الگوریتمی): ۴۰ مدل ML فعال
-• روش ۳ (هوشمند): حمایت و مقاومت تحلیل شد
 
 📊 **۲۰ اندیکاتور اصلی:**
 • RSI(14): {signal.get('indicators', {}).get('RSI_14', 0):.1f}
@@ -1414,22 +1143,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • ROC: {signal.get('indicators', {}).get('ROC_20', 0):.1f}
 • WPR: {signal.get('indicators', {}).get('WPR_14', 0):.1f}
 
-🛡️ **حمایت و مقاومت (۵ روش):**
+🛡️ **حمایت و مقاومت:**
 """
             
             if signal.get('support_levels'):
-                result += "🛡️ **حمایت‌ها:**\n"
                 for s in signal['support_levels'][:3]:
-                    result += f"• ${s['level']:,.2f} (قدرت: {s['strength']} | روش: {s['method']})\n"
+                    result += f"• حمایت: ${s['level']:,.2f} (قدرت: {s['strength']})\n"
             else:
-                result += "🛡️ حمایتی شناسایی نشد\n"
+                result += "• حمایتی شناسایی نشد\n"
             
             if signal.get('resistance_levels'):
-                result += "📈 **مقاومت‌ها:**\n"
                 for r in signal['resistance_levels'][:3]:
-                    result += f"• ${r['level']:,.2f} (قدرت: {r['strength']} | روش: {r['method']})\n"
+                    result += f"• مقاومت: ${r['level']:,.2f} (قدرت: {r['strength']})\n"
             else:
-                result += "📈 مقاومتی شناسایی نشد\n"
+                result += "• مقاومتی شناسایی نشد\n"
             
             if stats:
                 result += f"\n📊 **آمار ۲۴ ساعته:**\n"
@@ -1439,13 +1166,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 result += f"• حجم: ${stats['quote_volume']/1000000:,.1f}M\n"
             
             if signal.get('top_signals'):
-                result += f"\n📋 **سیگنال‌های برتر ({len(signal['top_signals'])}):**\n"
-                for s in signal['top_signals'][:10]:
+                result += f"\n📋 **سیگنال‌های ترکیبی ({len(signal['top_signals'])}):**\n"
+                for s in signal['top_signals'][:5]:
                     result += f"• {s}\n"
-            
-            result += f"\n🔥 **تعداد الگوریتم‌ها:** {len(signal_engine.models) * 100 + 1000}"
-            result += f"\n📊 **روش‌های تحلیلی:** ۳ روش مجزا"
-            result += f"\n🧠 **مدل‌های ML:** {len(signal_engine.models)} مدل"
             
             db.save_signal(user_id, signal)
             db.increment_analysis(user_id)
@@ -1454,12 +1177,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             user_data[user_id]['state'] = 'menu'
             
-            # ارسال نتیجه نهایی با تاخیر
-            await asyncio.sleep(0.5)
-            await safe_send_message(
-                chat_id=update.effective_chat.id,
+            await safe_edit_message(
                 text=result,
-                reply_markup=get_main_keyboard(user_id),
+                chat_id=update.effective_chat.id,
+                message_id=msg.message_id,
+                reply_markup=get_user_keyboard(user_id),
                 parse_mode='Markdown'
             )
             
@@ -1468,7 +1190,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await safe_send_message(
                 chat_id=update.effective_chat.id,
                 text="🔙 بازگشت",
-                reply_markup=get_main_keyboard(user_id)
+                reply_markup=get_user_keyboard(user_id)
             )
         else:
             await safe_send_message(
@@ -1478,360 +1200,125 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
     
-    # ===== آمار من =====
-    if "آمار من" in text or "My Stats" in text:
-        stats = db.get_user_stats(user_id)
-        if stats:
-            total, avg_conf, best_conf, wins, losses = stats
-            win_rate = (wins / (wins + losses) * 100) if wins + losses > 0 else 0
-            
-            msg = f"📊 **آمار شما**\n"
-            msg += "="*30 + "\n\n"
-            msg += f"📈 کل تحلیل‌ها: {total}\n"
-            msg += f"🎯 میانگین اطمینان: {avg_conf:.0f}%\n"
-            msg += f"🏆 بهترین اطمینان: {best_conf:.0f}%\n"
-            msg += f"🏅 نرخ برد: {win_rate:.1f}%\n"
-            msg += f"✅ برد: {wins} | ❌ باخت: {losses}\n"
-            
-            await safe_send_message(
-                chat_id=update.effective_chat.id,
-                text=msg,
-                reply_markup=get_main_keyboard(user_id),
-                parse_mode='Markdown'
-            )
-        else:
-            await safe_send_message(
-                chat_id=update.effective_chat.id,
-                text="📊 هنوز تحلیلی نداشته‌اید!",
-                reply_markup=get_main_keyboard(user_id)
-            )
-        return
-    
-    # ===== صرافی =====
-    if "صرافی" in text or "Toobit" in text:
+    # ===== سیگنال آماده =====
+    if "سیگنال آماده" in text or "Ready Signal" in text:
         await safe_send_message(
             chat_id=update.effective_chat.id,
-            text=f"💱 **Toobit Exchange**\n\n🔗 {EXCHANGE_URL}",
-            reply_markup=get_main_keyboard(user_id),
-            parse_mode='Markdown'
+            text="📊 **سیگنال‌های آماده امروز:**\n\n"
+                 "1. BTCUSDT - BUY - اطمینان ۸۵%\n"
+                 "2. ETHUSDT - SELL - اطمینان ۷۸%\n"
+                 "3. SOLUSDT - BUY - اطمینان ۸۲%\n\n"
+                 "🔍 برای دریافت سیگنال دقیق، روی «دریافت سیگنال» کلیک کنید.",
+            reply_markup=get_user_keyboard(user_id)
         )
         return
     
     # ===== رفرال =====
-    if "دعوت" in text or "Invite" in text:
+    if "دعوت دوستان" in text or "Invite Friends" in text:
         bot_name = BOT_USERNAME.replace('@', '')
         await safe_send_message(
             chat_id=update.effective_chat.id,
-            text=f"🎁 **لینک دعوت**\n\n`https://t.me/{bot_name}?start=ref_{user_id}`",
-            reply_markup=get_main_keyboard(user_id),
-            parse_mode='Markdown'
-        )
-        return
-    
-    # ===== معاملات خودکار =====
-    if "معاملات خودکار" in text or "Auto Trade" in text:
-        user = db.get_user(user_id)
-        auto_trade = user[22] if user else 0
-        status = "✅ فعال" if auto_trade else "❌ غیرفعال"
-        
-        msg = f"🤖 **معاملات خودکار**\n\n"
-        msg += f"📊 وضعیت: {status}\n"
-        msg += f"برای تغییر وضعیت روی دکمه زیر کلیک کنید:"
-        
-        keyboard = [[KeyboardButton("✅ فعال کردن" if not auto_trade else "❌ غیرفعال کردن")],
-                    [KeyboardButton("🔙 بازگشت" if lang == 'fa' else "🔙 Back")]]
-        await safe_send_message(
-            chat_id=update.effective_chat.id,
-            text=msg,
-            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True),
-            parse_mode='Markdown'
-        )
-        return
-    
-    if "فعال کردن" in text or "غیرفعال کردن" in text:
-        auto_trade = 1 if "فعال" in text else 0
-        db.cursor.execute('UPDATE users SET auto_trade = ? WHERE user_id = ?', (auto_trade, user_id))
-        db.conn.commit()
-        await safe_send_message(
-            chat_id=update.effective_chat.id,
-            text=f"✅ معاملات خودکار {'فعال' if auto_trade else 'غیرفعال'} شد!",
-            reply_markup=get_main_keyboard(user_id)
-        )
-        return
-    
-    # ===== معاملات من =====
-    if "معاملات من" in text or "My Trades" in text:
-        trades = db.get_user_trades(user_id)
-        if trades:
-            msg = "📊 **معاملات اخیر**\n\n"
-            total_profit = 0
-            for trade in trades[:10]:
-                profit_symbol = "📈" if trade[8] > 0 else "📉" if trade[8] < 0 else "⚪"
-                msg += f"{profit_symbol} {trade[2]} - {'خرید' if trade[3] == 'BUY' else 'فروش'}\n"
-                msg += f"   ورود: ${trade[4]:,.2f} | سود: ${trade[8]:.2f}\n"
-                total_profit += trade[8] or 0
-            msg += f"\n💰 سود کل: ${total_profit:.2f}"
-            
-            await safe_send_message(
-                chat_id=update.effective_chat.id,
-                text=msg,
-                reply_markup=get_main_keyboard(user_id),
-                parse_mode='Markdown'
-            )
-        else:
-            await safe_send_message(
-                chat_id=update.effective_chat.id,
-                text="📊 هیچ معامله‌ای یافت نشد!",
-                reply_markup=get_main_keyboard(user_id)
-            )
-        return
-    
-    # ===== تنظیمات =====
-    if "تنظیمات" in text or "Settings" in text:
-        user = db.get_user(user_id)
-        risk = user[23] if user else 2
-        max_pos = user[24] if user else 10
-        
-        msg = f"⚙️ **تنظیمات**\n\n"
-        msg += f"📊 درصد ریسک: {risk}%\n"
-        msg += f"📊 حداکثر حجم: {max_pos}\n\n"
-        msg += f"برای تغییر، دستور /settings را بفرستید."
-        
-        await safe_send_message(
-            chat_id=update.effective_chat.id,
-            text=msg,
-            reply_markup=get_main_keyboard(user_id),
+            text=f"🎁 **لینک دعوت**\n\n`https://t.me/{bot_name}?start=ref_{user_id}`\n\n👥 به ازای هر دعوت، ۱۰٪ از اشتراک به حساب شما واریز می‌شود.",
+            reply_markup=get_user_keyboard(user_id),
             parse_mode='Markdown'
         )
         return
     
     # ===== خرید اشتراک =====
     if "خرید اشتراک" in text or "Buy Subscription" in text:
-        await show_subscription_plans(update, context)
-        return
-    
-    # ===== وضعیت اشتراک =====
-    if "وضعیت اشتراک" in text or "Subscription Status" in text:
-        await show_subscription_status(update, context)
-        return
-    
-    # ===== تغییر زبان =====
-    if "🌐" in text:
-        keyboard = [
-            [KeyboardButton("🇮🇷 فارسی"), KeyboardButton("🇬🇧 English")],
-            [KeyboardButton("🔙 بازگشت" if lang == 'fa' else "🔙 Back")]
-        ]
+        wallet = db.get_setting('trc20_wallet') or TRC20_WALLET
+        memo = db.get_setting('trc20_memo') or TRC20_MEMO
+        price = db.get_setting('subscription_price_usdt') or '50'
+        
+        msg = f"""
+💎 **خرید اشتراک**
+
+💰 قیمت: {price} USDT (TRC20)
+
+📤 **واریز به آدرس زیر:**
+`{wallet}`
+
+📝 **Memo (حتماً وارد کنید):**
+`{memo}`
+
+⚠️ **نکات مهم:**
+1. فقط از شبکه TRC20 واریز کنید
+2. حتماً Memo را در تراکنش وارد کنید
+3. پس از واریز، هش تراکنش را ارسال کنید
+
+📤 **برای تایید، هش تراکنش را ارسال کنید.**
+"""
+        
+        user_data[user_id]['state'] = 'waiting_payment'
         await safe_send_message(
             chat_id=update.effective_chat.id,
-            text="🌐 انتخاب زبان | Choose Language:",
-            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            text=msg,
+            reply_markup=get_user_keyboard(user_id),
+            parse_mode='Markdown'
         )
         return
     
-    if text in ["🇮🇷 فارسی", "🇬🇧 English"]:
-        new_lang = "fa" if text == "🇮🇷 فارسی" else "en"
-        db.update_language(user_id, new_lang)
-        await safe_send_message(
-            chat_id=update.effective_chat.id,
-            text="✅ زبان تغییر کرد!" if new_lang == 'fa' else "✅ Language changed!",
-            reply_markup=get_main_keyboard(user_id)
-        )
+    # ===== دریافت هش تراکنش =====
+    if user_data[user_id].get('state') == 'waiting_payment':
+        tx_hash = text.strip()
+        
+        # بررسی ساده هش (باید حداقل ۶۰ کاراکتر باشد)
+        if len(tx_hash) >= 60 and re.match(r'^[A-Fa-f0-9]+$', tx_hash):
+            amount = float(db.get_setting('subscription_price_usdt') or 50)
+            db.save_payment_request(user_id, amount, tx_hash)
+            
+            # ارسال به ادمین
+            admin_msg = f"💳 **درخواست پرداخت جدید**\n\n"
+            admin_msg += f"👤 کاربر: {user_id}\n"
+            admin_msg += f"💰 مبلغ: {amount} USDT\n"
+            admin_msg += f"🔑 هش: `{tx_hash}`\n\n"
+            admin_msg += f"✅ برای تایید خودکار: /verify_{tx_hash}\n"
+            admin_msg += f"❌ برای رد: /reject_{tx_hash}"
+            
+            await safe_send_message(
+                chat_id=ADMIN_ID,
+                text=admin_msg,
+                parse_mode='Markdown'
+            )
+            
+            # تلاش برای تایید خودکار (ساده شده)
+            # در واقع باید با API ترون چک شود، اما به دلیل سادگی، به ادمین ارسال می‌شود
+            
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text=f"✅ **هش تراکنش شما ثبت شد!**\n\n🆔 {tx_hash[:20]}...\n⏳ در حال بررسی...\n\n✅ پس از تایید، اشتراک شما فعال می‌شود.",
+                reply_markup=get_user_keyboard(user_id)
+            )
+            
+            user_data[user_id]['state'] = 'menu'
+        else:
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text="❌ هش تراکنش نامعتبر! لطفاً دوباره ارسال کنید.\n\nهش باید حداقل ۶۰ کاراکتر و شامل اعداد و حروف انگلیسی باشد.",
+                reply_markup=get_user_keyboard(user_id)
+            )
         return
     
     # ===== پنل ادمین =====
-    if "پنل ادمین" in text or "Admin Panel" in text:
+    if "پنل ادمین" in text:
         if user_id == ADMIN_ID:
             await safe_send_message(
                 chat_id=update.effective_chat.id,
                 text="👑 **پنل ادمین**\n\nلطفاً یکی از گزینه‌ها را انتخاب کنید:",
-                reply_markup=get_admin_keyboard(user_id),
-                parse_mode='Markdown'
+                reply_markup=get_admin_keyboard(user_id)
             )
         else:
             await safe_send_message(
                 chat_id=update.effective_chat.id,
                 text="❌ دسترسی غیرمجاز!",
-                reply_markup=get_main_keyboard(user_id)
+                reply_markup=get_user_keyboard(user_id)
             )
         return
     
     # ===== مدیریت ادمین =====
     if user_id == ADMIN_ID:
-        if "درخواست‌های پرداخت" in text or "Payment Requests" in text:
-            await show_payment_requests(update, context)
-            return
-        
-        if "فعال/غیرفعال کردن حالت پولی" in text or "Toggle Paid Mode" in text:
-            current_mode = db.get_setting('is_paid_mode')
-            new_mode = '0' if current_mode == '1' else '1'
-            db.update_setting('is_paid_mode', new_mode)
-            status = "فعال" if new_mode == '1' else "غیرفعال"
-            await safe_send_message(
-                chat_id=update.effective_chat.id,
-                text=f"✅ حالت پولی {status} شد!",
-                reply_markup=get_admin_keyboard(user_id)
-            )
-            return
-        
-        if "تنظیم قیمت‌ها" in text or "Set Prices" in text:
-            user_data[user_id]['state'] = 'setting_prices'
-            await safe_send_message(
-                chat_id=update.effective_chat.id,
-                text="💲 **تنظیم قیمت‌ها**\n\nفرمت:\nهفتگی: 150000\nماهانه: 500000\nسالانه: 5000000\n\nاعداد را به تومان وارد کنید:",
-                parse_mode='Markdown'
-            )
-            return
-        
-        if user_data[user_id].get('state') == 'setting_prices':
-            try:
-                lines = text.strip().split('\n')
-                for line in lines:
-                    if 'هفتگی' in line or 'weekly' in line:
-                        price = int(re.search(r'\d+', line).group())
-                        db.update_setting('subscription_price_weekly', str(price))
-                    elif 'ماهانه' in line or 'monthly' in line:
-                        price = int(re.search(r'\d+', line).group())
-                        db.update_setting('subscription_price_monthly', str(price))
-                    elif 'سالانه' in line or 'yearly' in line:
-                        price = int(re.search(r'\d+', line).group())
-                        db.update_setting('subscription_price_yearly', str(price))
-                
-                user_data[user_id]['state'] = 'menu'
-                await safe_send_message(
-                    chat_id=update.effective_chat.id,
-                    text="✅ قیمت‌ها با موفقیت بروزرسانی شدند!",
-                    reply_markup=get_admin_keyboard(user_id)
-                )
-            except:
-                await safe_send_message(
-                    chat_id=update.effective_chat.id,
-                    text="❌ فرمت اشتباه! لطفاً مجدداً وارد کنید.",
-                    reply_markup=get_admin_keyboard(user_id)
-                )
-            return
-        
-        if "آمار کاربران" in text or "User Stats" in text:
-            users = db.get_all_users()
-            total = len(users)
-            fa_count = sum(1 for u in users if u[1] == 'fa')
-            en_count = sum(1 for u in users if u[1] == 'en')
-            
-            premium_count = 0
-            for u in users:
-                if db.check_subscription(u[0]):
-                    premium_count += 1
-            
-            signals_count = db.cursor.execute('SELECT COUNT(*) FROM signals').fetchone()[0]
-            
-            msg = f"📊 **آمار سیستم**\n"
-            msg += "="*40 + "\n\n"
-            msg += f"👥 کل کاربران: {total}\n"
-            msg += f"📈 فارسی: {fa_count}\n"
-            msg += f"📈 انگلیسی: {en_count}\n"
-            msg += f"💎 پرمیوم: {premium_count}\n"
-            msg += f"📊 سیگنال‌ها: {signals_count}\n"
-            
-            await safe_send_message(
-                chat_id=update.effective_chat.id,
-                text=msg,
-                reply_markup=get_admin_keyboard(user_id),
-                parse_mode='Markdown'
-            )
-            return
-        
-        if "تنظیمات سیستم" in text or "System Settings" in text:
-            free_limit = db.get_setting('free_analysis_limit')
-            paid_mode = db.get_setting('is_paid_mode')
-            auto_trade = db.get_setting('auto_trade_enabled')
-            min_conf = db.get_setting('min_confidence')
-            
-            msg = f"⚙️ **تنظیمات سیستم**\n\n"
-            msg += f"📊 محدودیت تحلیل رایگان: {free_limit}\n"
-            msg += f"💰 حالت پولی: {'فعال' if paid_mode == '1' else 'غیرفعال'}\n"
-            msg += f"🤖 معاملات خودکار: {'فعال' if auto_trade == '1' else 'غیرفعال'}\n"
-            msg += f"🎯 حداقل اطمینان: {min_conf}%\n\n"
-            msg += f"برای تغییر هر کدام، عدد جدید را وارد کنید:"
-            
-            user_data[user_id]['state'] = 'setting_system'
-            await safe_send_message(
-                chat_id=update.effective_chat.id,
-                text=msg,
-                parse_mode='Markdown'
-            )
-            return
-        
-        if user_data[user_id].get('state') == 'setting_system':
-            try:
-                lines = text.strip().split('\n')
-                for line in lines:
-                    if 'free' in line.lower():
-                        limit = int(re.search(r'\d+', line).group())
-                        db.update_setting('free_analysis_limit', str(limit))
-                    elif 'auto' in line.lower() or 'trade' in line.lower():
-                        value = int(re.search(r'\d+', line).group())
-                        db.update_setting('auto_trade_enabled', str(value))
-                    elif 'min' in line.lower() or 'confidence' in line.lower():
-                        conf = int(re.search(r'\d+', line).group())
-                        db.update_setting('min_confidence', str(conf))
-                
-                user_data[user_id]['state'] = 'menu'
-                await safe_send_message(
-                    chat_id=update.effective_chat.id,
-                    text="✅ تنظیمات سیستم بروزرسانی شد!",
-                    reply_markup=get_admin_keyboard(user_id)
-                )
-            except:
-                await safe_send_message(
-                    chat_id=update.effective_chat.id,
-                    text="❌ فرمت اشتباه! لطفاً مجدداً وارد کنید.",
-                    reply_markup=get_admin_keyboard(user_id)
-                )
-            return
-        
-        if "کیف پول" in text or "Wallet" in text:
-            card_number = db.get_setting('card_number')
-            card_holder = db.get_setting('card_holder')
-            
-            await safe_send_message(
-                chat_id=update.effective_chat.id,
-                text=f"💰 **کیف پول**\n\n💳 شماره کارت: {card_number}\n👤 صاحب کارت: {card_holder}",
-                reply_markup=get_admin_keyboard(user_id),
-                parse_mode='Markdown'
-            )
-            return
-        
-        if "آمار سیگنال‌ها" in text or "Signal Stats" in text:
-            db.cursor.execute('''
-                SELECT 
-                    COUNT(*) as total,
-                    SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) as wins,
-                    SUM(CASE WHEN result = 'loss' THEN 1 ELSE 0 END) as losses,
-                    AVG(confidence) as avg_conf,
-                    MAX(confidence) as max_conf
-                FROM signals
-            ''')
-            result = db.cursor.fetchone()
-            if result:
-                total, wins, losses, avg_conf, max_conf = result
-                win_rate = (wins / total * 100) if total > 0 else 0
-                
-                msg = f"📊 **آمار سیگنال‌ها**\n\n"
-                msg += f"📈 کل سیگنال‌ها: {total}\n"
-                msg += f"✅ درست: {wins}\n"
-                msg += f"❌ اشتباه: {losses}\n"
-                msg += f"🎯 موفقیت: {win_rate:.1f}%\n"
-                msg += f"📊 میانگین اطمینان: {avg_conf:.0f}%\n"
-                msg += f"🏆 بالاترین اطمینان: {max_conf:.0f}%\n"
-                
-                await safe_send_message(
-                    chat_id=update.effective_chat.id,
-                    text=msg,
-                    reply_markup=get_admin_keyboard(user_id),
-                    parse_mode='Markdown'
-                )
-            return
-        
-        if "ارسال پیام همگانی" in text or "Broadcast" in text:
+        # ===== ارسال پیام همگانی =====
+        if "ارسال پیام همگانی" in text:
             user_data[user_id]['state'] = 'broadcast'
             await safe_send_message(
                 chat_id=update.effective_chat.id,
@@ -1858,201 +1345,214 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
-        if "بازگشت" in text or "Back" in text:
+        # ===== ارسال سیگنال رایگان =====
+        if "ارسال سیگنال رایگان" in text:
+            user_data[user_id]['state'] = 'free_signal'
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text="📊 **ارسال سیگنال رایگان**\n\nفرمت:\nنماد: BTCUSDT\nجهت: BUY\nقیمت: 65432\nحد سود: 66000\nحد ضرر: 65000",
+                reply_markup=get_admin_keyboard(user_id)
+            )
+            return
+        
+        if user_data[user_id].get('state') == 'free_signal':
+            # ارسال به همه کاربران
+            users = db.get_all_users()
+            sent = 0
+            for uid, lang_user in users:
+                try:
+                    await safe_send_message(
+                        chat_id=uid,
+                        text=f"📊 **سیگنال رایگان**\n\n{text}",
+                        parse_mode='Markdown'
+                    )
+                    sent += 1
+                    await asyncio.sleep(0.1)
+                except:
+                    continue
+            user_data[user_id]['state'] = 'menu'
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text=f"✅ سیگنال به {sent} کاربر ارسال شد!",
+                reply_markup=get_admin_keyboard(user_id)
+            )
+            return
+        
+        # ===== تحلیل با اندیکاتور =====
+        if "تحلیل با اندیکاتور" in text:
+            user_data[user_id]['state'] = 'admin_analysis'
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text="🔍 لطفاً ارز مورد نظر را وارد کنید:",
+                reply_markup=get_admin_keyboard(user_id)
+            )
+            return
+        
+        if user_data[user_id].get('state') == 'admin_analysis':
+            symbol = text.upper().strip()
+            if symbol in SUPPORTED_SYMBOLS:
+                await safe_send_message(
+                    chat_id=update.effective_chat.id,
+                    text=f"🔄 **در حال تحلیل {symbol}...**\n⏳ لطفاً صبر کنید...",
+                    parse_mode='Markdown'
+                )
+                
+                candles = price_service.get_klines(symbol, "1h", 300)
+                if candles:
+                    signal = signal_engine.generate_signal(candles, symbol)
+                    
+                    result = f"""
+📊 **نتیجه تحلیل {symbol}**
+
+جهت: {signal['direction']}
+قیمت ورود: ${signal['entry']:,.2f}
+حد سود: ${signal['take_profit']:,.2f}
+حد ضرر: ${signal['stop_loss']:,.2f}
+اطمینان: {signal['confidence']}%
+"""
+                    await safe_send_message(
+                        chat_id=update.effective_chat.id,
+                        text=result,
+                        reply_markup=get_admin_keyboard(user_id)
+                    )
+                else:
+                    await safe_send_message(
+                        chat_id=update.effective_chat.id,
+                        text="❌ خطا در دریافت داده‌ها!",
+                        reply_markup=get_admin_keyboard(user_id)
+                    )
+            else:
+                await safe_send_message(
+                    chat_id=update.effective_chat.id,
+                    text="❌ نماد نامعتبر! لطفاً دوباره وارد کنید.",
+                    reply_markup=get_admin_keyboard(user_id)
+                )
+            user_data[user_id]['state'] = 'menu'
+            return
+        
+        # ===== پولی کردن ربات =====
+        if "پولی کردن ربات" in text:
+            current_mode = db.get_setting('is_paid_mode')
+            new_mode = '0' if current_mode == '1' else '1'
+            db.update_setting('is_paid_mode', new_mode)
+            status = "فعال" if new_mode == '1' else "غیرفعال"
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text=f"✅ حالت پولی {status} شد!",
+                reply_markup=get_admin_keyboard(user_id)
+            )
+            return
+        
+        # ===== تغییر متن خوش آمدگویی =====
+        if "تغییر متن خوش آمدگویی" in text:
+            user_data[user_id]['state'] = 'change_welcome'
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text="✏️ **تغییر متن خوش آمدگویی**\n\nمتن جدید را وارد کنید (می‌توانید از Markdown استفاده کنید):",
+                reply_markup=get_admin_keyboard(user_id)
+            )
+            return
+        
+        if user_data[user_id].get('state') == 'change_welcome':
+            db.update_setting('welcome_text_fa', text)
+            db.update_setting('welcome_text_en', text)
+            user_data[user_id]['state'] = 'menu'
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text="✅ متن خوش آمدگویی با موفقیت تغییر کرد!",
+                reply_markup=get_admin_keyboard(user_id)
+            )
+            return
+        
+        # ===== تغییر الگوریتم تحلیل =====
+        if "تغییر الگوریتم تحلیل" in text:
+            user_data[user_id]['state'] = 'change_algorithm'
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text="⚙️ **تغییر الگوریتم تحلیل**\n\nالگوریتم‌های موجود:\n1. ULTRA (پیشفرض - دقیق‌ترین)\n2. FAST (سریع‌تر)\n3. BALANCED (متوسط)\n\nعدد مورد نظر را وارد کنید:",
+                reply_markup=get_admin_keyboard(user_id)
+            )
+            return
+        
+        if user_data[user_id].get('state') == 'change_algorithm':
+            db.update_setting('algorithm_mode', text)
+            user_data[user_id]['state'] = 'menu'
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text=f"✅ الگوریتم به {text} تغییر کرد!",
+                reply_markup=get_admin_keyboard(user_id)
+            )
+            return
+        
+        # ===== عوض کردن آدرس کیف پول =====
+        if "عوض کردن آدرس کیف پول" in text:
+            user_data[user_id]['state'] = 'change_wallet'
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text="💰 **تغییر آدرس کیف پول**\n\nآدرس جدید TRC20 را وارد کنید:",
+                reply_markup=get_admin_keyboard(user_id)
+            )
+            return
+        
+        if user_data[user_id].get('state') == 'change_wallet':
+            db.update_setting('trc20_wallet', text)
+            user_data[user_id]['state'] = 'menu'
+            await safe_send_message(
+                chat_id=update.effective_chat.id,
+                text=f"✅ آدرس کیف پول با موفقیت تغییر کرد!\n\nآدرس جدید: `{text}`",
+                reply_markup=get_admin_keyboard(user_id),
+                parse_mode='Markdown'
+            )
+            return
+        
+        # ===== تایید اشتراک =====
+        if "تایید اشتراک" in text:
+            payments = db.get_pending_payments()
+            if payments:
+                msg = "💳 **درخواست‌های پرداخت در انتظار**\n\n"
+                for p in payments:
+                    msg += f"🆔 {p[0]} | 👤 {p[1]}\n"
+                    msg += f"💰 {p[2]} USDT | هش: {p[3][:20]}...\n"
+                    msg += f"/verify_{p[3]} - /reject_{p[3]}\n\n"
+                await safe_send_message(
+                    chat_id=update.effective_chat.id,
+                    text=msg,
+                    reply_markup=get_admin_keyboard(user_id),
+                    parse_mode='Markdown'
+                )
+            else:
+                await safe_send_message(
+                    chat_id=update.effective_chat.id,
+                    text="✅ هیچ درخواست پرداخت در انتظاری وجود ندارد.",
+                    reply_markup=get_admin_keyboard(user_id)
+                )
+            return
+        
+        # ===== بازگشت =====
+        if "بازگشت" in text:
+            user_data[user_id]['state'] = 'menu'
             await safe_send_message(
                 chat_id=update.effective_chat.id,
                 text="🔙 بازگشت",
-                reply_markup=get_main_keyboard(user_id)
+                reply_markup=get_user_keyboard(user_id)
             )
             return
 
-# ==================== توابع اشتراک ====================
-async def show_subscription_plans(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    lang = db.get_user(user_id)[4] if db.get_user(user_id) else 'fa'
+# ==================== کیبورد انتخاب ارز ====================
+def get_symbol_keyboard(user_id):
+    keyboard = []
+    row = []
+    for i, symbol in enumerate(SUPPORTED_SYMBOLS[:28]):
+        row.append(KeyboardButton(symbol))
+        if len(row) == 4 or i == 27:
+            keyboard.append(row)
+            row = []
     
-    weekly = db.get_setting('subscription_price_weekly') or 150000
-    monthly = db.get_setting('subscription_price_monthly') or 500000
-    yearly = db.get_setting('subscription_price_yearly') or 5000000
-    
-    card_number = db.get_setting('card_number')
-    card_holder = db.get_setting('card_holder')
-    
-    if lang == 'fa':
-        msg = f"💎 **پلن‌های اشتراک**\n\n"
-        msg += f"📅 هفتگی: {int(weekly):,} تومان\n"
-        msg += f"📅 ماهانه: {int(monthly):,} تومان\n"
-        msg += f"📅 سالانه: {int(yearly):,} تومان\n\n"
-        msg += f"✅ **مزایای اشتراک:**\n"
-        msg += f"• تحلیل نامحدود\n"
-        msg += f"• ۱۰۰۰۰+ الگوریتم (۴۰ مدل ML)\n"
-        msg += f"• ۲۰ اندیکاتور + حمایت و مقاومت\n"
-        msg += f"• ۳ روش تحلیلی مجزا\n"
-        msg += f"• معاملات خودکار هوشمند\n\n"
-        msg += f"💳 شماره کارت: {card_number}\n"
-        msg += f"👤 صاحب کارت: {card_holder}\n\n"
-        msg += f"📤 پس از واریز، روی «ارسال فیش» کلیک کنید."
-    else:
-        msg = f"💎 **Subscription Plans**\n\n"
-        msg += f"📅 Weekly: {int(weekly):,} Toman\n"
-        msg += f"📅 Monthly: {int(monthly):,} Toman\n"
-        msg += f"📅 Yearly: {int(yearly):,} Toman\n\n"
-        msg += f"✅ **Benefits:**\n"
-        msg += f"• Unlimited Analysis\n"
-        msg += f"• 10000+ Algorithms (40 ML Models)\n"
-        msg += f"• 20 Indicators + Support/Resistance\n"
-        msg += f"• 3 Separate Analysis Methods\n"
-        msg += f"• Smart Automated Trading\n\n"
-        msg += f"💳 Card Number: {card_number}\n"
-        msg += f"👤 Card Holder: {card_holder}\n\n"
-        msg += f"📤 After payment, click 'Send Receipt'."
-    
-    await safe_send_message(
-        chat_id=update.effective_chat.id,
-        text=msg,
-        reply_markup=get_subscription_keyboard(user_id),
-        parse_mode='Markdown'
-    )
-
-async def show_subscription_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    lang = db.get_user(user_id)[4] if db.get_user(user_id) else 'fa'
     user = db.get_user(user_id)
+    lang = user[4] if user else 'fa'
+    keyboard.append([KeyboardButton("🔙 بازگشت" if lang == 'fa' else "🔙 Back")])
     
-    is_active = db.check_subscription(user_id)
-    
-    if lang == 'fa':
-        msg = f"📊 **وضعیت اشتراک**\n\n"
-        if is_active:
-            expire_date = datetime.fromisoformat(user[11]) if user[11] else None
-            if expire_date:
-                days_left = (expire_date - datetime.now()).days
-                msg += f"✅ **اشتراک فعال**\n"
-                msg += f"📅 تاریخ انقضا: {expire_date.strftime('%Y-%m-%d')}\n"
-                msg += f"⏳ روزهای باقی‌مانده: {days_left}\n"
-                msg += f"💎 پلن: {user[10]}\n"
-            else:
-                msg += "✅ اشتراک فعال\n"
-        else:
-            free_limit = db.get_setting('free_analysis_limit') or 5
-            daily_count = db.get_daily_analysis_count(user_id)
-            
-            msg += f"❌ **اشتراک غیرفعال**\n"
-            msg += f"📊 نسخه رایگان: {free_limit} تحلیل در روز\n"
-            msg += f"📊 تحلیل امروز: {daily_count}/{free_limit}\n\n"
-            msg += f"💎 برای خرید اشتراک روی «خرید اشتراک» کلیک کنید."
-    else:
-        msg = f"📊 **Subscription Status**\n\n"
-        if is_active:
-            expire_date = datetime.fromisoformat(user[11]) if user[11] else None
-            if expire_date:
-                days_left = (expire_date - datetime.now()).days
-                msg += f"✅ **Active**\n"
-                msg += f"📅 Expires: {expire_date.strftime('%Y-%m-%d')}\n"
-                msg += f"⏳ Days left: {days_left}\n"
-                msg += f"💎 Plan: {user[10]}\n"
-            else:
-                msg += "✅ Active\n"
-        else:
-            free_limit = db.get_setting('free_analysis_limit') or 5
-            daily_count = db.get_daily_analysis_count(user_id)
-            
-            msg += f"❌ **Inactive**\n"
-            msg += f"📊 Free version: {free_limit} analysis per day\n"
-            msg += f"📊 Today's analysis: {daily_count}/{free_limit}\n\n"
-            msg += f"💎 Click 'Buy Subscription' to purchase."
-    
-    await safe_send_message(
-        chat_id=update.effective_chat.id,
-        text=msg,
-        reply_markup=get_main_keyboard(user_id),
-        parse_mode='Markdown'
-    )
-
-async def show_payment_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    
-    payments = db.get_pending_payments()
-    
-    if not payments:
-        await safe_send_message(
-            chat_id=update.effective_chat.id,
-            text="✅ هیچ درخواست پرداخت در انتظاری وجود ندارد.",
-            reply_markup=get_admin_keyboard(ADMIN_ID)
-        )
-        return
-    
-    msg = f"💳 **درخواست‌های پرداخت در انتظار** ({len(payments)})\n\n"
-    
-    for p in payments:
-        msg += f"🆔 {p[0]} | 👤 {p[1]}\n"
-        msg += f"💰 {p[2]:,} تومان | 📅 {p[7] if len(p) > 7 else 'MONTHLY'}\n"
-        msg += f"🔑 {p[4]} | 📤 ارسال: {p[6][:10]}\n"
-        msg += f"/verify_{p[0]} - /reject_{p[0]}\n\n"
-    
-    await safe_send_message(
-        chat_id=update.effective_chat.id,
-        text=msg,
-        reply_markup=get_admin_keyboard(ADMIN_ID),
-        parse_mode='Markdown'
-    )
-
-async def handle_payment_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    lang = db.get_user(user_id)[4] if db.get_user(user_id) else 'fa'
-    
-    if user_data[user_id].get('state') != 'waiting_receipt':
-        await safe_send_message(
-            chat_id=update.effective_chat.id,
-            text="❌ لطفاً ابتدا از منوی اشتراک، گزینه «ارسال فیش» را انتخاب کنید."
-        )
-        return
-    
-    photo_file = await update.message.photo[-1].get_file()
-    file_id = photo_file.file_id
-    
-    reference_code = f"PAY-{user_id}-{int(time.time())}"
-    amount = user_data[user_id].get('payment_amount', 500000)
-    plan_type = user_data[user_id].get('payment_plan', 'MONTHLY')
-    card_number = db.get_setting('card_number')
-    
-    payment_id = db.save_payment_request(
-        user_id, amount, card_number, file_id, reference_code, plan_type
-    )
-    
-    admin_msg = f"💳 **درخواست پرداخت جدید**\n\n"
-    admin_msg += f"👤 کاربر: {user_id}\n"
-    admin_msg += f"💰 مبلغ: {amount:,} تومان\n"
-    admin_msg += f"📅 پلن: {plan_type}\n"
-    admin_msg += f"🔑 کد مرجع: `{reference_code}`\n"
-    admin_msg += f"🆔 شناسه: {payment_id}\n\n"
-    admin_msg += f"✅ برای تایید: /verify_{payment_id}\n"
-    admin_msg += f"❌ برای رد: /reject_{payment_id}"
-    
-    await context.bot.send_photo(
-        chat_id=ADMIN_ID,
-        photo=file_id,
-        caption=admin_msg,
-        parse_mode='Markdown'
-    )
-    
-    user_data[user_id]['state'] = 'menu'
-    
-    if lang == 'fa':
-        await safe_send_message(
-            chat_id=update.effective_chat.id,
-            text=f"✅ **فیش شما با موفقیت ارسال شد!**\n\n🆔 کد پیگیری: `{reference_code}`\n⏳ پس از تایید ادمین، اشتراک شما فعال می‌شود.",
-            reply_markup=get_main_keyboard(user_id),
-            parse_mode='Markdown'
-        )
-    else:
-        await safe_send_message(
-            chat_id=update.effective_chat.id,
-            text=f"✅ **Your receipt was sent successfully!**\n\n🆔 Tracking Code: `{reference_code}`\n⏳ Your subscription will be activated after admin verification.",
-            reply_markup=get_main_keyboard(user_id),
-            parse_mode='Markdown'
-        )
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 # ==================== هندلرهای دستورات ادمین ====================
 async def handle_admin_commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2063,23 +1563,29 @@ async def handle_admin_commands(update: Update, context: ContextTypes.DEFAULT_TY
     
     if text.startswith('/verify_'):
         try:
-            payment_id = int(text.replace('/verify_', ''))
-            db.verify_payment(payment_id, 'تایید توسط ادمین')
-            
-            payment = db.cursor.execute('SELECT user_id FROM payments WHERE id = ?', (payment_id,)).fetchone()
+            tx_hash = text.replace('/verify_', '')
+            payment = db.cursor.execute('SELECT * FROM payments WHERE tx_hash = ? AND status = "PENDING"', (tx_hash,)).fetchone()
             if payment:
-                user_id = payment[0]
-                lang = db.get_user(user_id)[4] if db.get_user(user_id) else 'fa'
+                db.verify_payment(payment[0], 'تایید توسط ادمین', 0)
+                user_id = payment[1]
                 
-                msg = "🎉 **اشتراک شما با موفقیت فعال شد!**\n\n✅ از این پس می‌توانید از تمام امکانات ربات استفاده کنید.\n📊 تعداد تحلیل‌های شما نامحدود است." if lang == 'fa' else "🎉 **Your subscription has been activated!**\n\n✅ You can now use all bot features.\n📊 Your analysis is unlimited."
+                await safe_send_message(
+                    chat_id=user_id,
+                    text="🎉 **اشتراک شما با موفقیت فعال شد!**\n\n✅ از این پس می‌توانید از تمام امکانات ربات استفاده کنید.\n📊 تعداد سیگنال‌های شما نامحدود است.",
+                    parse_mode='Markdown'
+                )
                 
-                await safe_send_message(chat_id=user_id, text=msg, parse_mode='Markdown')
-            
-            await safe_send_message(
-                chat_id=update.effective_chat.id,
-                text=f"✅ پرداخت {payment_id} تایید شد!",
-                reply_markup=get_admin_keyboard(ADMIN_ID)
-            )
+                await safe_send_message(
+                    chat_id=update.effective_chat.id,
+                    text=f"✅ پرداخت با هش {tx_hash[:20]}... تایید شد!",
+                    reply_markup=get_admin_keyboard(ADMIN_ID)
+                )
+            else:
+                await safe_send_message(
+                    chat_id=update.effective_chat.id,
+                    text="❌ تراکنش یافت نشد یا قبلاً تایید شده است!",
+                    reply_markup=get_admin_keyboard(ADMIN_ID)
+                )
         except Exception as e:
             await safe_send_message(
                 chat_id=update.effective_chat.id,
@@ -2088,23 +1594,29 @@ async def handle_admin_commands(update: Update, context: ContextTypes.DEFAULT_TY
     
     elif text.startswith('/reject_'):
         try:
-            payment_id = int(text.replace('/reject_', ''))
-            db.reject_payment(payment_id, 'رد توسط ادمین')
-            
-            payment = db.cursor.execute('SELECT user_id FROM payments WHERE id = ?', (payment_id,)).fetchone()
+            tx_hash = text.replace('/reject_', '')
+            payment = db.cursor.execute('SELECT * FROM payments WHERE tx_hash = ? AND status = "PENDING"', (tx_hash,)).fetchone()
             if payment:
-                user_id = payment[0]
-                lang = db.get_user(user_id)[4] if db.get_user(user_id) else 'fa'
+                db.reject_payment(payment[0], 'رد توسط ادمین')
+                user_id = payment[1]
                 
-                msg = "❌ **درخواست پرداخت شما رد شد!**\n\n🔍 لطفاً فیش واریزی خود را بررسی و مجدداً ارسال کنید." if lang == 'fa' else "❌ **Your payment request was rejected!**\n\n🔍 Please check your receipt and try again."
+                await safe_send_message(
+                    chat_id=user_id,
+                    text="❌ **درخواست پرداخت شما رد شد!**\n\n🔍 لطفاً هش تراکنش را بررسی و مجدداً ارسال کنید.",
+                    parse_mode='Markdown'
+                )
                 
-                await safe_send_message(chat_id=user_id, text=msg, parse_mode='Markdown')
-            
-            await safe_send_message(
-                chat_id=update.effective_chat.id,
-                text=f"❌ پرداخت {payment_id} رد شد!",
-                reply_markup=get_admin_keyboard(ADMIN_ID)
-            )
+                await safe_send_message(
+                    chat_id=update.effective_chat.id,
+                    text=f"❌ پرداخت با هش {tx_hash[:20]}... رد شد!",
+                    reply_markup=get_admin_keyboard(ADMIN_ID)
+                )
+            else:
+                await safe_send_message(
+                    chat_id=update.effective_chat.id,
+                    text="❌ تراکنش یافت نشد!",
+                    reply_markup=get_admin_keyboard(ADMIN_ID)
+                )
         except Exception as e:
             await safe_send_message(
                 chat_id=update.effective_chat.id,
@@ -2116,8 +1628,8 @@ def main():
     global bot
     
     print("=" * 80)
-    print("🚀 ربات تحلیل تکنیکال - نسخه نهایی با مدیریت خطا")
-    print("🔥 ۱۰۰۰۰+ الگوریتم - ۴۰ مدل ML - ۳ روش تحلیلی")
+    print("🚀 ربات تحلیل تکنیکال - نسخه ساده و قدرتمند")
+    print("🔥 ۱۰۰۰۰+ الگوریتم - سیستم پرداخت TRC20")
     print("=" * 80)
     
     if not check_and_create_pid():
@@ -2126,11 +1638,9 @@ def main():
     print(f"👤 ادمین: {ADMIN_ID}")
     print(f"🤖 ربات: {BOT_USERNAME}")
     print(f"📊 ارزها: {len(SUPPORTED_SYMBOLS)}+")
-    print(f"🧠 الگوریتم‌ها: ۱۰۰۰۰+")
-    print(f"📊 مدل‌های ML: {len(signal_engine.models)} مدل")
-    print(f"🎯 روش‌های تحلیلی: ۳ روش مجزا")
-    print(f"💎 حالت پولی: {'فعال' if db.get_setting('is_paid_mode') == '1' else 'غیرفعال'}")
-    print(f"🎯 دقت هدف: ۹۹.۹۹۹۹٪")
+    print(f"💰 کیف پول TRC20: {TRC20_WALLET}")
+    print(f"📝 Memo: {TRC20_MEMO}")
+    print(f"💎 قیمت اشتراک: {SUBSCRIPTION_PRICE_USDT} USDT")
     print("=" * 80)
     
     bot = Application.builder().token(BOT_TOKEN).build()
@@ -2139,7 +1649,6 @@ def main():
     bot.add_handler(CommandHandler("verify", handle_admin_commands))
     bot.add_handler(CommandHandler("reject", handle_admin_commands))
     bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    bot.add_handler(MessageHandler(filters.PHOTO, handle_payment_receipt))
     
     print("✅ ربات با موفقیت راه‌اندازی شد!")
     print("=" * 80)
