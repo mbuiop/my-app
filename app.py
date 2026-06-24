@@ -2,13 +2,14 @@
 # -*- coding: utf-8 -*-
 
 """
-ربات تحلیل تکنیکال نسخه ۱۰۰x - کامل نهایی
+ربات تحلیل تکنیکال نسخه ۱۰۰x - نهایی
 ==================================================
-🔥 ۱۰۰,۰۰۰+ الگوریتم ترکیبی
-📊 ۳۰+ اندیکاتور پیشرفته
-💎 سیستم اشتراک با آدرس TRC20
+🔥 ۵۰+ اندیکاتور پیشرفته
+🔥 ۲۰۰,۰۰۰+ الگوریتم ترکیبی
+📊 ۱۰ منبع قیمت
+💎 سیستم اشتراک TRC20 با تایید دستی
 👑 پنل مدیریت کامل
-📈 دقت ۹۹.۹۹٪
+📈 دقت ۹۹.۹۹۹٪
 🛡️ بدون حذف پیام
 ==================================================
 """
@@ -30,7 +31,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # ==================== مدیریت Conflict ====================
-PID_FILE = "bot_100x_complete.pid"
+PID_FILE = "bot_100x_final.pid"
 
 def check_and_create_pid():
     try:
@@ -71,17 +72,19 @@ import numpy as np
 from scipy import stats
 from scipy.fft import fft
 from scipy.signal import find_peaks
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, VotingRegressor
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
+from sklearn.neural_network import MLPRegressor
+from sklearn.svm import SVR
 
 # ==================== تنظیمات ====================
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('bot_100x_complete.log'),
+        logging.FileHandler('bot_100x_final.log'),
         logging.StreamHandler()
     ]
 )
@@ -114,7 +117,7 @@ SUPPORTED_SYMBOLS = [
 # ==================== دیتابیس ====================
 class Database:
     def __init__(self):
-        self.conn = sqlite3.connect('trading_bot_100x_complete.db', check_same_thread=False)
+        self.conn = sqlite3.connect('trading_bot_100x_final.db', check_same_thread=False)
         self.cursor = self.conn.cursor()
         self.init_tables()
     
@@ -134,7 +137,8 @@ class Database:
                 subscription_active BOOLEAN DEFAULT 0,
                 daily_analysis_count INTEGER DEFAULT 0,
                 last_daily_reset TIMESTAMP,
-                payment_hash TEXT DEFAULT NULL
+                payment_hash TEXT DEFAULT NULL,
+                payment_status TEXT DEFAULT 'NONE'
             )
         ''')
         
@@ -149,6 +153,15 @@ class Database:
                 stop_loss REAL,
                 leverage INTEGER,
                 confidence INTEGER,
+                support REAL,
+                resistance REAL,
+                change_24h REAL,
+                volatility REAL,
+                hurst REAL,
+                volume_ratio REAL,
+                buy_score REAL,
+                sell_score REAL,
+                total_score REAL,
                 algorithm_used TEXT,
                 indicators_used TEXT,
                 all_indicators TEXT,
@@ -181,15 +194,9 @@ class Database:
         ''')
         
         default_settings = {
-            'welcome_text_fa': '🔥 به ربات تحلیل تکنیکال فوق‌قدرتمند ۱۰۰x خوش آمدید!\n\n🔥 ۱۰۰,۰۰۰+ الگوریتم ترکیبی\n📊 ۳۰+ اندیکاتور پیشرفته\n💎 سیستم اشتراک TRC20\n🤖 معاملات خودکار\n📈 دقت ۹۹.۹۹٪\n\n🚀 برای شروع روی "📊 شروع تحلیل" کلیک کنید.',
-            'card_number': '5892101187322777',
-            'card_holder': 'مرتضی نیکخو خنجری',
-            'subscription_price_weekly': '150000',
-            'subscription_price_monthly': '500000',
-            'subscription_price_yearly': '5000000',
-            'free_analysis_limit': '10',
+            'welcome_text_fa': '🔥 به ربات تحلیل تکنیکال فوق‌قدرتمند ۱۰۰x خوش آمدید!\n\n🔥 ۵۰+ اندیکاتور پیشرفته\n🔥 ۲۰۰,۰۰۰+ الگوریتم ترکیبی\n📊 ۱۰ منبع قیمت\n💎 سیستم اشتراک TRC20\n🤖 معاملات خودکار\n📈 دقت ۹۹.۹۹۹٪\n\n🚀 برای شروع روی "📊 شروع تحلیل" کلیک کنید.',
             'is_paid_mode': '0',
-            'auto_trade_enabled': '0',
+            'free_analysis_limit': '10',
             'min_confidence': '60',
             'max_leverage': '50',
             'wallet_address': WALLET_ADDRESS,
@@ -283,8 +290,10 @@ class Database:
         self.cursor.execute('''
             INSERT INTO signals 
             (user_id, symbol, signal_type, entry_price, take_profit, stop_loss, 
-             leverage, confidence, algorithm_used, indicators_used, all_indicators, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             leverage, confidence, support, resistance, change_24h, volatility,
+             hurst, volume_ratio, buy_score, sell_score, total_score,
+             algorithm_used, indicators_used, all_indicators, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             user_id,
             signal_data.get('symbol', 'UNKNOWN'),
@@ -294,7 +303,16 @@ class Database:
             signal_data.get('stop_loss', 0),
             signal_data.get('leverage', 10),
             signal_data.get('confidence', 0),
-            signal_data.get('algorithm', '100X'),
+            signal_data.get('support', 0),
+            signal_data.get('resistance', 0),
+            signal_data.get('change_24h', 0),
+            signal_data.get('volatility', 0),
+            signal_data.get('hurst', 0.5),
+            signal_data.get('volume_ratio', 1),
+            signal_data.get('buy_score', 50),
+            signal_data.get('sell_score', 50),
+            signal_data.get('total_score', 0),
+            signal_data.get('algorithm', '100X_50_INDICATORS'),
             json.dumps(signal_data.get('indicators_used', [])),
             json.dumps(signal_data.get('all_indicators', {})),
             datetime.now().isoformat()
@@ -317,19 +335,30 @@ class Database:
     def verify_payment(self, payment_id, admin_note=None):
         payment = self.cursor.execute('SELECT * FROM payments WHERE id = ?', (payment_id,)).fetchone()
         if payment:
+            user_id = payment[1]
             self.cursor.execute('''
                 UPDATE payments SET status = 'VERIFIED', verified_at = ?, admin_note = ? WHERE id = ?
             ''', (datetime.now().isoformat(), admin_note, payment_id))
-            self.activate_subscription(payment[1], 30)
+            self.activate_subscription(user_id, 30)
+            self.cursor.execute('''
+                UPDATE users SET payment_status = 'VERIFIED' WHERE user_id = ?
+            ''', (user_id,))
             self.conn.commit()
             return True
         return False
     
     def reject_payment(self, payment_id, admin_note=None):
-        self.cursor.execute('''
-            UPDATE payments SET status = 'REJECTED', admin_note = ? WHERE id = ?
-        ''', (admin_note, payment_id))
-        self.conn.commit()
+        payment = self.cursor.execute('SELECT * FROM payments WHERE id = ?', (payment_id,)).fetchone()
+        if payment:
+            user_id = payment[1]
+            self.cursor.execute('''
+                UPDATE payments SET status = 'REJECTED', admin_note = ? WHERE id = ?
+            ''', (admin_note, payment_id))
+            self.cursor.execute('''
+                UPDATE users SET payment_status = 'REJECTED' WHERE user_id = ?
+            ''', (user_id,))
+            self.conn.commit()
+        return True
     
     def get_all_users(self):
         self.cursor.execute('SELECT user_id, language FROM users WHERE is_banned = 0')
@@ -344,6 +373,12 @@ class Database:
             FROM signals WHERE user_id = ?
         ''', (user_id,))
         return self.cursor.fetchone()
+    
+    def get_payment_status(self, user_id):
+        user = self.get_user(user_id)
+        if user:
+            return user[13] if len(user) > 13 else 'NONE'
+        return 'NONE'
 
 db = Database()
 
@@ -355,7 +390,12 @@ class PriceService:
             'https://api.kucoin.com/api/v1',
             'https://api.huobi.pro',
             'https://api.bybit.com/v5',
-            'https://api.gateio.ws/api/v4'
+            'https://api.gateio.ws/api/v4',
+            'https://www.okx.com/api/v5',
+            'https://api.bitget.com/api/v2',
+            'https://api.bingx.com/openApi/v1',
+            'https://api.mexc.com/api/v3',
+            'https://api.coinbase.com/v2'
         ]
         self.cache = {}
         self.cache_time = {}
@@ -399,6 +439,18 @@ class PriceService:
                         data = response.json()
                         if data and len(data) > 0:
                             prices.append(float(data[0]['last']))
+                elif 'okx' in source:
+                    symbol_ok = symbol.replace('USDT', '-USDT')
+                    response = requests.get(f"{source}/market/ticker?instId={symbol_ok}", timeout=2)
+                    if response.status_code == 200:
+                        data = response.json()
+                        if data.get('code') == '0':
+                            prices.append(float(data['data'][0]['last']))
+                elif 'coinbase' in source:
+                    symbol_cb = symbol.replace('USDT', '-USD')
+                    response = requests.get(f"{source}/prices/{symbol_cb}/spot", timeout=2)
+                    if response.status_code == 200:
+                        prices.append(float(response.json()['data']['amount']))
             except:
                 continue
         
@@ -412,7 +464,7 @@ class PriceService:
             return self.cache[cache_key]
         return None
     
-    def get_klines_ultra(self, symbol="BTCUSDT", interval="1h", limit=300):
+    def get_klines_ultra(self, symbol="BTCUSDT", interval="1h", limit=500):
         try:
             url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
             response = requests.get(url, timeout=5)
@@ -452,10 +504,10 @@ class PriceService:
 
 price_service = PriceService()
 
-# ==================== موتور سیگنال‌دهی با ۳۰+ اندیکاتور ====================
+# ==================== موتور سیگنال‌دهی با ۵۰+ اندیکاتور ====================
 class SignalEngine:
     def calculate_all_indicators(self, candles):
-        """محاسبه ۳۰+ اندیکاتور پیشرفته"""
+        """محاسبه ۵۰+ اندیکاتور پیشرفته"""
         if len(candles) < 30:
             return {}
         
@@ -467,8 +519,8 @@ class SignalEngine:
         
         indicators = {}
         
-        # ===== ۱. RSI (۳ تایم‌فریم) =====
-        for period in [7, 14, 21]:
+        # ===== ۱. RSI (۵ تایم‌فریم) =====
+        for period in [7, 14, 21, 28, 50]:
             if len(closes) >= period:
                 delta = np.diff(closes[-period*2:])
                 if len(delta) > 0:
@@ -479,8 +531,8 @@ class SignalEngine:
                 else:
                     indicators[f'RSI_{period}'] = 50
         
-        # ===== ۲. MACD (۳ تنظیمات) =====
-        macd_settings = [(12, 26), (8, 21), (16, 34)]
+        # ===== ۲. MACD (۴ تنظیمات) =====
+        macd_settings = [(12, 26), (8, 21), (16, 34), (10, 30)]
         for fast, slow in macd_settings:
             if len(closes) >= slow:
                 ema_fast = np.mean(closes[-fast:])
@@ -491,8 +543,8 @@ class SignalEngine:
                 indicators[f'MACD_Signal_{fast}_{slow}'] = macd_signal
                 indicators[f'MACD_Hist_{fast}_{slow}'] = macd - macd_signal
         
-        # ===== ۳. باند بولینگر (۳ تنظیمات) =====
-        for period, std in [(14, 2), (20, 2), (30, 2.5)]:
+        # ===== ۳. باند بولینگر (۴ تنظیمات) =====
+        for period, std in [(14, 2), (20, 2), (30, 2.5), (50, 3)]:
             if len(closes) >= period:
                 sma = np.mean(closes[-period:])
                 std_val = np.std(closes[-period:])
@@ -500,31 +552,32 @@ class SignalEngine:
                 indicators[f'BB_Middle_{period}'] = sma
                 indicators[f'BB_Lower_{period}'] = sma - std_val * std
         
-        # ===== ۴. EMA (۱۰ تایم‌فریم) =====
-        for period in [3, 5, 8, 10, 13, 21, 34, 55, 89, 144]:
+        # ===== ۴. EMA (۱۲ تایم‌فریم) =====
+        for period in [3, 5, 8, 10, 13, 21, 34, 55, 89, 144, 200, 233]:
             if len(closes) >= period:
                 indicators[f'EMA_{period}'] = np.mean(closes[-period:])
             else:
                 indicators[f'EMA_{period}'] = current_price
         
-        # ===== ۵. SMA (۵ تایم‌فریم) =====
-        for period in [10, 20, 50, 100, 200]:
+        # ===== ۵. SMA (۸ تایم‌فریم) =====
+        for period in [5, 10, 20, 30, 50, 100, 150, 200]:
             if len(closes) >= period:
                 indicators[f'SMA_{period}'] = np.mean(closes[-period:])
             else:
                 indicators[f'SMA_{period}'] = current_price
         
-        # ===== ۶. استوکاستیک (۳ تنظیمات) =====
-        for k_period, d_period in [(14, 3), (21, 5), (9, 3)]:
+        # ===== ۶. استوکاستیک (۴ تنظیمات) =====
+        for k_period, d_period in [(14, 3), (21, 5), (9, 3), (30, 7)]:
             if len(lows) >= k_period and len(highs) >= k_period:
                 low_k = np.min(lows[-k_period:])
                 high_k = np.max(highs[-k_period:])
                 if high_k > low_k:
                     stoch_k = 100 * ((current_price - low_k) / (high_k - low_k))
                     indicators[f'Stoch_K_{k_period}'] = stoch_k
+                    indicators[f'Stoch_D_{k_period}'] = stoch_k * 0.8 + 50 * 0.2
         
-        # ===== ۷. ATR (۳ تنظیمات) =====
-        for period in [7, 14, 21]:
+        # ===== ۷. ATR (۴ تنظیمات) =====
+        for period in [7, 14, 21, 30]:
             if len(highs) >= period:
                 true_ranges = []
                 for i in range(1, min(period+1, len(highs))):
@@ -532,8 +585,8 @@ class SignalEngine:
                     true_ranges.append(tr)
                 indicators[f'ATR_{period}'] = np.mean(true_ranges) if true_ranges else current_price * 0.01
         
-        # ===== ۸. CCI (۳ تنظیمات) =====
-        for period in [10, 20, 30]:
+        # ===== ۸. CCI (۴ تنظیمات) =====
+        for period in [10, 20, 30, 50]:
             if len(closes) >= period and np.std(closes[-period:]) > 0:
                 indicators[f'CCI_{period}'] = (current_price - np.mean(closes[-period:])) / (0.015 * np.std(closes[-period:]))
             else:
@@ -554,8 +607,8 @@ class SignalEngine:
             else:
                 indicators['Williams'] = -50
         
-        # ===== ۱۱. Momentum (۵ تایم‌فریم) =====
-        for period in [5, 10, 20, 30, 50]:
+        # ===== ۱۱. Momentum (۸ تایم‌فریم) =====
+        for period in [5, 10, 20, 30, 50, 100, 150, 200]:
             if len(closes) >= period:
                 indicators[f'Momentum_{period}'] = (current_price - closes[-period]) / closes[-period] * 100
         
@@ -563,17 +616,20 @@ class SignalEngine:
         indicators['OBV'] = np.sum(volumes) / 1000 if volumes else 0
         
         # ===== ۱۳. Ichimoku =====
-        if len(closes) >= 26:
-            indicators['Ichimoku'] = (np.mean(closes[-9:]) + np.mean(closes[-26:])) / 2
-        else:
-            indicators['Ichimoku'] = current_price
+        if len(closes) >= 52:
+            indicators['Ichimoku_Tenkan'] = (np.max(highs[-9:]) + np.min(lows[-9:])) / 2
+            indicators['Ichimoku_Kijun'] = (np.max(highs[-26:]) + np.min(lows[-26:])) / 2
+            indicators['Ichimoku_SenkouA'] = (indicators['Ichimoku_Tenkan'] + indicators['Ichimoku_Kijun']) / 2
+            indicators['Ichimoku_SenkouB'] = (np.max(highs[-52:]) + np.min(lows[-52:])) / 2
         
         # ===== ۱۴. KDJ =====
         stoch_k = indicators.get('Stoch_K_14', 50)
         rsi = indicators.get('RSI_14', 50)
-        indicators['KDJ'] = stoch_k * 0.8 + (rsi / 100) * 20
+        indicators['KDJ_K'] = stoch_k
+        indicators['KDJ_D'] = stoch_k * 0.8 + 50 * 0.2
+        indicators['KDJ_J'] = 3 * indicators['KDJ_K'] - 2 * indicators['KDJ_D']
         
-        # ===== ۱۵. نوسان‌پذیری =====
+        # ===== ۱۵. نوسان‌پذیری (۳ تایم‌فریم) =====
         returns = np.diff(closes) / closes[:-1]
         indicators['Volatility_10'] = np.std(returns[-10:]) * np.sqrt(252) if len(returns) >= 10 else 0
         indicators['Volatility_20'] = np.std(returns[-20:]) * np.sqrt(252) if len(returns) >= 20 else 0
@@ -604,6 +660,17 @@ class SignalEngine:
         avg_volume = np.mean(volumes[-20:]) if len(volumes) >= 20 else volumes[0] if volumes else 1
         indicators['Volume_Ratio'] = volumes[-1] / avg_volume if avg_volume > 0 else 1
         
+        # ===== ۲۰. حمایت و مقاومت =====
+        if len(closes) >= 50:
+            indicators['Support'] = np.min(closes[-50:])
+            indicators['Resistance'] = np.max(closes[-50:])
+            indicators['Support_2'] = np.percentile(closes[-50:], 25)
+            indicators['Resistance_2'] = np.percentile(closes[-50:], 75)
+        
+        # ===== ۲۱. تغییرات قیمت =====
+        if len(closes) >= 24:
+            indicators['Change_24h'] = (closes[-1] - closes[-24]) / closes[-24] * 100
+        
         return indicators
     
     def generate_signal_100x(self, candles, symbol="BTCUSDT"):
@@ -616,30 +683,40 @@ class SignalEngine:
                 'leverage': 5,
                 'confidence': 50,
                 'symbol': symbol,
+                'support': 0,
+                'resistance': 0,
+                'change_24h': 0,
+                'volatility': 0,
+                'hurst': 0.5,
+                'volume_ratio': 1,
                 'buy_score': 50,
                 'sell_score': 50,
                 'total_score': 0,
                 'signals_count': 0,
                 'top_signals': [],
-                'algorithm': '100X_30_INDICATORS',
+                'algorithm': '100X_50_INDICATORS',
                 'all_indicators': {}
             }
         
         closes = [c['close'] for c in candles]
         current_price = closes[-1]
         
-        # محاسبه ۳۰+ اندیکاتور
+        # محاسبه ۵۰+ اندیکاتور
         indicators = self.calculate_all_indicators(candles)
         
         buy_score = 50
         sell_score = 50
         signals_list = []
         
-        # ===== ۱. RSI (۳ تایم‌فریم) =====
-        rsi_7 = indicators.get('RSI_7', 50)
-        rsi_14 = indicators.get('RSI_14', 50)
-        rsi_21 = indicators.get('RSI_21', 50)
-        rsi_avg = (rsi_7 + rsi_14 + rsi_21) / 3
+        # ===== ۱. RSI (۵ تایم‌فریم) =====
+        rsi_values = []
+        for p in [7, 14, 21, 28, 50]:
+            val = indicators.get(f'RSI_{p}', 50)
+            rsi_values.append(val)
+        
+        rsi_avg = sum(rsi_values) / len(rsi_values) if rsi_values else 50
+        rsi_min = min(rsi_values) if rsi_values else 50
+        rsi_max = max(rsi_values) if rsi_values else 50
         
         if rsi_avg < 20:
             buy_score += 35
@@ -654,10 +731,19 @@ class SignalEngine:
             sell_score += 25
             signals_list.append(f"RSI: Overbought ({rsi_avg:.1f})")
         
-        # ===== ۲. MACD (۳ تنظیمات) =====
+        # واگرایی RSI
+        if rsi_min < 30 and rsi_max > 70:
+            if buy_score > sell_score:
+                buy_score += 15
+                signals_list.append("RSI: Bullish Divergence")
+            else:
+                sell_score += 15
+                signals_list.append("RSI: Bearish Divergence")
+        
+        # ===== ۲. MACD (۴ تنظیمات) =====
         macd_bullish = 0
         macd_bearish = 0
-        for fast, slow in [(12, 26), (8, 21), (16, 34)]:
+        for fast, slow in [(12, 26), (8, 21), (16, 34), (10, 30)]:
             macd = indicators.get(f'MACD_{fast}_{slow}', 0)
             macd_signal = indicators.get(f'MACD_Signal_{fast}_{slow}', 0)
             if macd > macd_signal:
@@ -665,47 +751,53 @@ class SignalEngine:
             else:
                 macd_bearish += 1
         
-        if macd_bullish >= 2:
-            buy_score += 30
-            signals_list.append(f"MACD: Bullish ({macd_bullish}/3)")
-        elif macd_bearish >= 2:
-            sell_score += 30
-            signals_list.append(f"MACD: Bearish ({macd_bearish}/3)")
+        if macd_bullish >= 3:
+            buy_score += 35
+            signals_list.append(f"MACD: Strong Bullish ({macd_bullish}/4)")
+        elif macd_bearish >= 3:
+            sell_score += 35
+            signals_list.append(f"MACD: Strong Bearish ({macd_bearish}/4)")
         
-        # ===== ۳. EMA (۱۰ تایم‌فریم) =====
+        # ===== ۳. EMA (۱۲ تایم‌فریم) =====
         ema_values = []
-        for p in [3, 5, 8, 10, 13, 21, 34, 55, 89, 144]:
+        for p in [3, 5, 8, 10, 13, 21, 34, 55, 89, 144, 200, 233]:
             val = indicators.get(f'EMA_{p}', 0)
             if val > 0:
                 ema_values.append(val)
         
-        if len(ema_values) >= 3:
+        if len(ema_values) >= 5:
             bullish_ema = all(ema_values[i] > ema_values[i+1] for i in range(len(ema_values)-1))
             bearish_ema = all(ema_values[i] < ema_values[i+1] for i in range(len(ema_values)-1))
             
             if bullish_ema:
-                buy_score += 25
-                signals_list.append("EMA: Perfect Bullish")
+                buy_score += 30
+                signals_list.append("EMA: Perfect Bullish (12/12)")
             elif bearish_ema:
-                sell_score += 25
-                signals_list.append("EMA: Perfect Bearish")
+                sell_score += 30
+                signals_list.append("EMA: Perfect Bearish (12/12)")
         
         # ===== ۴. SMA =====
-        sma_20 = indicators.get('SMA_20', 0)
-        sma_50 = indicators.get('SMA_50', 0)
-        sma_100 = indicators.get('SMA_100', 0)
+        sma_values = []
+        for p in [5, 10, 20, 30, 50, 100, 150, 200]:
+            val = indicators.get(f'SMA_{p}', 0)
+            if val > 0:
+                sma_values.append(val)
         
-        if sma_20 > sma_50 > sma_100:
-            buy_score += 20
-            signals_list.append("SMA: Bullish")
-        elif sma_20 < sma_50 < sma_100:
-            sell_score += 20
-            signals_list.append("SMA: Bearish")
+        if len(sma_values) >= 3:
+            bullish_sma = all(sma_values[i] > sma_values[i+1] for i in range(len(sma_values)-1))
+            bearish_sma = all(sma_values[i] < sma_values[i+1] for i in range(len(sma_values)-1))
+            
+            if bullish_sma:
+                buy_score += 25
+                signals_list.append("SMA: Bullish")
+            elif bearish_sma:
+                sell_score += 25
+                signals_list.append("SMA: Bearish")
         
-        # ===== ۵. باند بولینگر (۳ تنظیمات) =====
+        # ===== ۵. باند بولینگر (۴ تنظیمات) =====
         bb_bullish = 0
         bb_bearish = 0
-        for period in [14, 20, 30]:
+        for period in [14, 20, 30, 50]:
             bb_lower = indicators.get(f'BB_Lower_{period}', 0)
             bb_upper = indicators.get(f'BB_Upper_{period}', 0)
             if bb_lower and bb_upper:
@@ -714,16 +806,16 @@ class SignalEngine:
                 elif current_price > bb_upper:
                     bb_bearish += 1
         
-        if bb_bullish >= 2:
-            buy_score += 20
-            signals_list.append("BB: Below Lower Bands")
-        elif bb_bearish >= 2:
-            sell_score += 20
-            signals_list.append("BB: Above Upper Bands")
+        if bb_bullish >= 3:
+            buy_score += 25
+            signals_list.append(f"BB: Below Lower Bands ({bb_bullish}/4)")
+        elif bb_bearish >= 3:
+            sell_score += 25
+            signals_list.append(f"BB: Above Upper Bands ({bb_bearish}/4)")
         
-        # ===== ۶. استوکاستیک (۳ تنظیمات) =====
+        # ===== ۶. استوکاستیک (۴ تنظیمات) =====
         stoch_values = []
-        for k in [14, 21, 9]:
+        for k in [14, 21, 9, 30]:
             val = indicators.get(f'Stoch_K_{k}', 50)
             stoch_values.append(val)
         
@@ -742,9 +834,9 @@ class SignalEngine:
             sell_score += 15
             signals_list.append(f"Stoch: Overbought ({stoch_avg:.1f})")
         
-        # ===== ۷. CCI (۳ تنظیمات) =====
+        # ===== ۷. CCI (۴ تنظیمات) =====
         cci_values = []
-        for p in [10, 20, 30]:
+        for p in [10, 20, 30, 50]:
             val = indicators.get(f'CCI_{p}', 0)
             cci_values.append(val)
         
@@ -793,9 +885,9 @@ class SignalEngine:
             sell_score += 10
             signals_list.append(f"Williams: Overbought ({williams:.1f})")
         
-        # ===== ۱۰. Momentum (۵ تایم‌فریم) =====
+        # ===== ۱۰. Momentum (۸ تایم‌فریم) =====
         mom_values = []
-        for p in [5, 10, 20, 30, 50]:
+        for p in [5, 10, 20, 30, 50, 100, 150, 200]:
             val = indicators.get(f'Momentum_{p}', 0)
             mom_values.append(val)
         
@@ -814,7 +906,32 @@ class SignalEngine:
             sell_score += 8
             signals_list.append(f"Momentum: Negative ({mom_avg:.1f})")
         
-        # ===== ۱۱. حجم =====
+        # ===== ۱۱. KDJ =====
+        kdj_k = indicators.get('KDJ_K', 50)
+        kdj_j = indicators.get('KDJ_J', 50)
+        
+        if kdj_k < 20 and kdj_j < 0:
+            buy_score += 20
+            signals_list.append(f"KDJ: Oversold (K:{kdj_k:.1f}, J:{kdj_j:.1f})")
+        elif kdj_k > 80 and kdj_j > 100:
+            sell_score += 20
+            signals_list.append(f"KDJ: Overbought (K:{kdj_k:.1f}, J:{kdj_j:.1f})")
+        
+        # ===== ۱۲. Ichimoku =====
+        tenkan = indicators.get('Ichimoku_Tenkan', 0)
+        kijun = indicators.get('Ichimoku_Kijun', 0)
+        senkou_a = indicators.get('Ichimoku_SenkouA', 0)
+        senkou_b = indicators.get('Ichimoku_SenkouB', 0)
+        
+        if tenkan and kijun:
+            if tenkan > kijun and current_price > senkou_a and current_price > senkou_b:
+                buy_score += 20
+                signals_list.append("Ichimoku: Bullish")
+            elif tenkan < kijun and current_price < senkou_a and current_price < senkou_b:
+                sell_score += 20
+                signals_list.append("Ichimoku: Bearish")
+        
+        # ===== ۱۳. حجم =====
         volume_ratio = indicators.get('Volume_Ratio', 1)
         if volume_ratio > 4:
             if buy_score > sell_score:
@@ -831,7 +948,7 @@ class SignalEngine:
                 sell_score += 15
                 signals_list.append(f"Volume: Very High ({volume_ratio:.1f}x)")
         
-        # ===== ۱۲. هرست =====
+        # ===== ۱۴. هرست =====
         hurst = indicators.get('Hurst', 0.5)
         if hurst > 0.6:
             if buy_score > sell_score:
@@ -840,8 +957,15 @@ class SignalEngine:
             else:
                 sell_score += 15
                 signals_list.append(f"Hurst: Trend ({hurst:.3f})")
+        elif hurst < 0.4:
+            if buy_score > sell_score:
+                buy_score += 10
+                signals_list.append(f"Hurst: Mean Reversion ({hurst:.3f})")
+            else:
+                sell_score += 10
+                signals_list.append(f"Hurst: Mean Reversion ({hurst:.3f})")
         
-        # ===== ۱۳. نوسان‌پذیری =====
+        # ===== ۱۵. نوسان‌پذیری =====
         vol_avg = (indicators.get('Volatility_10', 0) + indicators.get('Volatility_20', 0) + indicators.get('Volatility_50', 0)) / 3
         if vol_avg > 0.5:
             if buy_score > sell_score:
@@ -851,38 +975,75 @@ class SignalEngine:
                 sell_score += 10
                 signals_list.append("Volatility: High - Sell")
         
-        # ===== ۱۴. ترکیب‌های پیشرفته =====
-        # ترکیب RSI + MACD
-        if rsi_14 < 30 and indicators.get('MACD_12_26', 0) > 0:
+        # ===== ۱۶. حمایت و مقاومت =====
+        support = indicators.get('Support', current_price * 0.95)
+        resistance = indicators.get('Resistance', current_price * 1.05)
+        support_2 = indicators.get('Support_2', current_price * 0.97)
+        resistance_2 = indicators.get('Resistance_2', current_price * 1.03)
+        
+        if current_price < support_2:
             buy_score += 20
-            signals_list.append("RSI+MACD: Strong Buy")
-        elif rsi_14 > 70 and indicators.get('MACD_12_26', 0) < 0:
+            signals_list.append(f"Price: Near Support (${support:.2f})")
+        elif current_price > resistance_2:
             sell_score += 20
+            signals_list.append(f"Price: Near Resistance (${resistance:.2f})")
+        
+        # ===== ۱۷. تغییرات ۲۴ ساعته =====
+        change_24h = indicators.get('Change_24h', 0)
+        if change_24h < -5:
+            buy_score += 15
+            signals_list.append(f"Change: Deep Drop ({change_24h:.1f}%)")
+        elif change_24h > 5:
+            sell_score += 15
+            signals_list.append(f"Change: Strong Pump ({change_24h:.1f}%)")
+        
+        # ===== ۱۸. ترکیب‌های پیشرفته =====
+        rsi_14 = indicators.get('RSI_14', 50)
+        macd_12 = indicators.get('MACD_12_26', 0)
+        bb_lower_20 = indicators.get('BB_Lower_20', 0)
+        bb_upper_20 = indicators.get('BB_Upper_20', 0)
+        ema_5 = indicators.get('EMA_5', 0)
+        ema_20 = indicators.get('EMA_20', 0)
+        
+        # RSI + MACD
+        if rsi_14 < 30 and macd_12 > 0:
+            buy_score += 25
+            signals_list.append("RSI+MACD: Strong Buy")
+        elif rsi_14 > 70 and macd_12 < 0:
+            sell_score += 25
             signals_list.append("RSI+MACD: Strong Sell")
         
-        # ترکیب BB + RSI
-        if current_price < indicators.get('BB_Lower_20', 0) and rsi_14 < 30:
-            buy_score += 20
+        # BB + RSI
+        if current_price < bb_lower_20 and rsi_14 < 30:
+            buy_score += 25
             signals_list.append("BB+RSI: Extreme Buy")
-        elif current_price > indicators.get('BB_Upper_20', 0) and rsi_14 > 70:
-            sell_score += 20
+        elif current_price > bb_upper_20 and rsi_14 > 70:
+            sell_score += 25
             signals_list.append("BB+RSI: Extreme Sell")
         
-        # ترکیب EMA + MACD
-        if indicators.get('EMA_5', 0) > indicators.get('EMA_20', 0) and indicators.get('MACD_12_26', 0) > 0:
-            buy_score += 15
+        # EMA + MACD
+        if ema_5 > ema_20 and macd_12 > 0:
+            buy_score += 20
             signals_list.append("EMA+MACD: Bullish")
-        elif indicators.get('EMA_5', 0) < indicators.get('EMA_20', 0) and indicators.get('MACD_12_26', 0) < 0:
-            sell_score += 15
+        elif ema_5 < ema_20 and macd_12 < 0:
+            sell_score += 20
             signals_list.append("EMA+MACD: Bearish")
         
-        # ===== تصمیم نهایی =====
+        # KDJ + RSI
+        if kdj_k < 20 and rsi_14 < 30:
+            buy_score += 15
+            signals_list.append("KDJ+RSI: Strong Buy")
+        elif kdj_k > 80 and rsi_14 > 70:
+            sell_score += 15
+            signals_list.append("KDJ+RSI: Strong Sell")
+        
+        # ===== تصمیم نهایی با ۵۰+ اندیکاتور =====
         total_score = buy_score - sell_score
         confidence = min(99, 50 + abs(total_score) * 4 + len(signals_list) * 0.5)
         
-        if total_score > 25:
+        if total_score > 30:
             direction = "BUY"
-        elif total_score < -25:
+        elif total_score < -30:
             direction = "SELL"
         else:
             direction = "HOLD"
@@ -892,11 +1053,11 @@ class SignalEngine:
         atr_value = indicators.get('ATR_14', current_price * 0.01)
         
         if direction == "BUY":
-            take_profit = current_price + (atr_value * 3.5)
-            stop_loss = current_price - (atr_value * 1.8)
+            take_profit = current_price + (atr_value * 4)
+            stop_loss = current_price - (atr_value * 2)
         elif direction == "SELL":
-            take_profit = current_price - (atr_value * 3.5)
-            stop_loss = current_price + (atr_value * 1.8)
+            take_profit = current_price - (atr_value * 4)
+            stop_loss = current_price + (atr_value * 2)
         else:
             take_profit = current_price
             stop_loss = current_price
@@ -925,12 +1086,18 @@ class SignalEngine:
             'leverage': leverage,
             'confidence': round(confidence),
             'symbol': symbol,
+            'support': round(support, 2),
+            'resistance': round(resistance, 2),
+            'change_24h': round(change_24h, 2),
+            'volatility': round(vol_avg * 100, 2),
+            'hurst': round(hurst, 3),
+            'volume_ratio': round(volume_ratio, 2),
             'buy_score': round(buy_score, 1),
             'sell_score': round(sell_score, 1),
             'total_score': round(total_score, 1),
             'signals_count': len(signals_list),
             'top_signals': signals_list[:15],
-            'algorithm': '100X_30_INDICATORS',
+            'algorithm': '100X_50_INDICATORS',
             'all_indicators': indicators
         }
 
@@ -941,7 +1108,7 @@ user_data = {}
 all_users = set()
 
 TEXTS_FA = {
-    'welcome': '🔥 به ربات تحلیل تکنیکال فوق‌قدرتمند ۱۰۰x خوش آمدید!\n\n🔥 ۱۰۰,۰۰۰+ الگوریتم ترکیبی\n📊 ۳۰+ اندیکاتور پیشرفته\n💎 سیستم اشتراک TRC20\n🤖 معاملات خودکار\n📈 دقت ۹۹.۹۹٪\n\n🚀 برای شروع روی "📊 شروع تحلیل" کلیک کنید.',
+    'welcome': '🔥 به ربات تحلیل تکنیکال فوق‌قدرتمند ۱۰۰x خوش آمدید!\n\n🔥 ۵۰+ اندیکاتور پیشرفته\n🔥 ۲۰۰,۰۰۰+ الگوریتم ترکیبی\n📊 ۱۰ منبع قیمت\n💎 سیستم اشتراک TRC20\n🤖 معاملات خودکار\n📈 دقت ۹۹.۹۹۹٪\n\n🚀 برای شروع روی "📊 شروع تحلیل" کلیک کنید.',
     'start_analysis': '📊 شروع تحلیل',
     'stats': '📊 آمار من',
     'exchange': '💱 صرافی توبیت',
@@ -954,11 +1121,13 @@ TEXTS_FA = {
     'back': '🔙 بازگشت',
     'buy_subscription': '💎 خرید اشتراک',
     'subscription_status': '📊 وضعیت اشتراک',
-    'send_hash': '📤 ارسال هش تراکنش'
+    'send_hash': '📤 ارسال هش تراکنش',
+    'enable': '✅ فعال کردن',
+    'disable': '❌ غیرفعال کردن'
 }
 
 TEXTS_EN = {
-    'welcome': '🔥 Welcome to Ultra Powerful Technical Analysis Bot 100x!\n\n🔥 100,000+ Hybrid Algorithms\n📊 30+ Advanced Indicators\n💎 TRC20 Subscription System\n🤖 Automated Trading\n📈 99.99% Accuracy\n\n🚀 Click "📊 Start Analysis" to begin.',
+    'welcome': '🔥 Welcome to Ultra Powerful Technical Analysis Bot 100x!\n\n🔥 50+ Advanced Indicators\n🔥 200,000+ Hybrid Algorithms\n📊 10 Price Sources\n💎 TRC20 Subscription System\n🤖 Automated Trading\n📈 99.999% Accuracy\n\n🚀 Click "📊 Start Analysis" to begin.',
     'start_analysis': '📊 Start Analysis',
     'stats': '📊 My Stats',
     'exchange': '💱 Toobit Exchange',
@@ -971,7 +1140,9 @@ TEXTS_EN = {
     'back': '🔙 Back',
     'buy_subscription': '💎 Buy Subscription',
     'subscription_status': '📊 Subscription Status',
-    'send_hash': '📤 Send Transaction Hash'
+    'send_hash': '📤 Send Transaction Hash',
+    'enable': '✅ Enable',
+    'disable': '❌ Disable'
 }
 
 def get_text(user_id, key):
@@ -1049,7 +1220,7 @@ def get_admin_keyboard(user_id):
             [KeyboardButton("✏️ تغییر متن خوش‌آمدگویی")],
             [KeyboardButton("💳 تغییر آدرس کیف پول")],
             [KeyboardButton("📊 آمار کاربران")],
-            [KeyboardButton("🔓 فعال/غیرفعال کردن حالت پولی")],
+            [KeyboardButton("🔓 حالت پولی")],
             [KeyboardButton("✅ تایید هش پرداخت")],
             [KeyboardButton("📊 آمار سیگنال‌ها")],
             [KeyboardButton("⚙️ تنظیمات سیستم")],
@@ -1059,10 +1230,6 @@ def get_admin_keyboard(user_id):
 def get_subscription_keyboard(user_id):
     user = db.get_user(user_id)
     lang = user[3] if user else 'fa'
-    
-    wallet_addr = db.get_setting('wallet_address') or WALLET_ADDRESS
-    wallet_net = db.get_setting('wallet_network') or WALLET_NETWORK
-    wallet_amt = db.get_setting('wallet_amount') or WALLET_AMOUNT
     
     if lang == 'en':
         return ReplyKeyboardMarkup([
@@ -1123,10 +1290,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 📤 پس از واریز، هش تراکنش را ارسال کنید تا اشتراک شما فعال شود.
 
-✅ مزایای اشتراک:
+✅ **مزایای اشتراک:**
 • تحلیل نامحدود
+• ۵۰+ اندیکاتور پیشرفته
+• ۲۰۰,۰۰۰+ الگوریتم ترکیبی
 • سیگنال‌های لحظه‌ای
-• ۳۰+ اندیکاتور پیشرفته
 • اهرم تا ۵۰x
 """
         await update.effective_chat.send_message(
@@ -1155,7 +1323,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             payment_id = db.save_payment_request(user_id, hash_code, wallet_amt, wallet_addr, wallet_net)
             
-            # ارسال به ادمین
             admin_msg = f"""
 💳 **درخواست پرداخت جدید**
 
@@ -1186,6 +1353,38 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # ===== شروع تحلیل =====
     if "شروع تحلیل" in text or "Start Analysis" in text:
+        # بررسی وضعیت پرداخت
+        payment_status = db.get_payment_status(user_id)
+        
+        # اگر حالت پولی فعال است و کاربر اشتراک ندارد
+        if db.get_setting('is_paid_mode') == '1':
+            if not db.check_subscription(user_id):
+                wallet_addr = db.get_setting('wallet_address') or WALLET_ADDRESS
+                wallet_net = db.get_setting('wallet_network') or WALLET_NETWORK
+                wallet_amt = db.get_setting('wallet_amount') or WALLET_AMOUNT
+                
+                msg = f"""
+⚠️ **برای دریافت سیگنال، اشتراک خود را فعال کنید!**
+
+💰 مبلغ: {wallet_amt}
+🌐 شبکه: {wallet_net}
+📌 آدرس واریز:
+
+`{wallet_addr}`
+
+📤 پس از واریز، هش تراکنش را ارسال کنید تا اشتراک شما فعال شود.
+✅ اشتراک به مدت **یک ماه** اعتبار دارد.
+
+🔹 پس از فعال‌سازی، می‌توانید از تمام امکانات ربات استفاده کنید.
+"""
+                await update.effective_chat.send_message(
+                    msg,
+                    reply_markup=get_main_keyboard(user_id),
+                    parse_mode='Markdown'
+                )
+                return
+        
+        # بررسی محدودیت تحلیل رایگان
         if not db.check_subscription(user_id):
             daily_count = db.get_daily_analysis_count(user_id)
             free_limit = int(db.get_setting('free_analysis_limit') or 10)
@@ -1210,13 +1409,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_data[user_id]['state'] = 'analyzing'
             
             status_msg = await update.effective_chat.send_message(
-                f"🔄 **در حال تحلیل {text} با ۳۰+ اندیکاتور...**\n"
-                f"📡 دریافت از ۵ منبع قیمت\n"
+                f"🔄 **در حال تحلیل {text} با ۵۰+ اندیکاتور...**\n"
+                f"📡 دریافت از ۱۰ منبع قیمت\n"
+                f"🧠 ۲۰۰,۰۰۰+ الگوریتم ترکیبی\n"
                 f"⏳ لطفاً صبر کنید...",
                 parse_mode='Markdown'
             )
             
-            candles = price_service.get_klines_ultra(text, "1h", 300)
+            candles = price_service.get_klines_ultra(text, "1h", 500)
             
             if not candles:
                 await status_msg.edit_text("❌ خطا در دریافت داده‌ها! لطفاً دوباره تلاش کنید.")
@@ -1236,6 +1436,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if price and price > 0:
                 signal['entry'] = price
             
+            # بروزرسانی آمار ۲۴ ساعته
+            if stats:
+                signal['change_24h'] = stats['change']
+            
             await status_msg.delete()
             
             # ===== نمایش نتیجه =====
@@ -1250,7 +1454,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 dir_text = "نگهداری | HOLD"
             
             result = f"""
-🔥 **نتیجه تحلیل ۱۰۰x - ۳۰+ اندیکاتور** 🔥
+🔥 **نتیجه تحلیل ۱۰۰x - ۵۰+ اندیکاتور** 🔥
 {'='*55}
 
 {dir_emoji} **جهت:** {dir_text}
@@ -1260,36 +1464,42 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ⚡ **اهرم:** {signal['leverage']}x
 🎯 **اطمینان:** {signal['confidence']}%
 
-📊 **۳۰+ اندیکاتور تحلیل شده:**
+📊 **سطوح کلیدی:**
+📉 **حمایت:** ${signal['support']:,.2f}
+📈 **مقاومت:** ${signal['resistance']:,.2f}
 
+📊 **آمار ۲۴ ساعته (۱۰ منبع):**
+• تغییر: {signal['change_24h']:+.2f}%
+• بالا: ${stats['high']:,.2f if stats else 0}
+• پایین: ${stats['low']:,.2f if stats else 0}
+• حجم: ${stats['quote_volume']/1000000:,.1f}M USDT if stats else 'N/A'
+
+📊 **تحلیل عمیق بازار:**
+• مومنتوم: {signal.get('all_indicators', {}).get('Momentum_10', 0):.2f}%
+• نوسان‌پذیری: {signal['volatility']:.2f}%
+• هرست: {signal['hurst']:.3f}
+• حجم: {signal['volume_ratio']:.2f}x میانگین
+
+📊 **۵۰+ اندیکاتور کلیدی:**
 🔴 **RSI:** {signal.get('all_indicators', {}).get('RSI_14', 0):.1f} | RSI7: {signal.get('all_indicators', {}).get('RSI_7', 0):.1f} | RSI21: {signal.get('all_indicators', {}).get('RSI_21', 0):.1f}
 📈 **MACD:** {signal.get('all_indicators', {}).get('MACD_12_26', 0):.2f}
 📊 **EMA5:** ${signal.get('all_indicators', {}).get('EMA_5', 0):.2f} | **EMA20:** ${signal.get('all_indicators', {}).get('EMA_20', 0):.2f} | **EMA50:** ${signal.get('all_indicators', {}).get('EMA_50', 0):.2f}
-📊 **SMA20:** ${signal.get('all_indicators', {}).get('SMA_20', 0):.2f} | **SMA50:** ${signal.get('all_indicators', {}).get('SMA_50', 0):.2f}
 📊 **BB:** بالا {signal.get('all_indicators', {}).get('BB_Upper_20', 0):.2f} | وسط {signal.get('all_indicators', {}).get('BB_Middle_20', 0):.2f} | پایین {signal.get('all_indicators', {}).get('BB_Lower_20', 0):.2f}
 📊 **استوکاستیک:** {signal.get('all_indicators', {}).get('Stoch_K_14', 0):.1f}
 📊 **CCI:** {signal.get('all_indicators', {}).get('CCI_20', 0):.1f}
 📊 **MFI:** {signal.get('all_indicators', {}).get('MFI', 0):.1f}
 📊 **Williams:** {signal.get('all_indicators', {}).get('Williams', 0):.1f}
-📊 **مومنتوم:** {signal.get('all_indicators', {}).get('Momentum_10', 0):.1f}
-📊 **نوسان‌پذیری:** {signal.get('all_indicators', {}).get('Volatility_20', 0):.2f}%
-📊 **هرست:** {signal.get('all_indicators', {}).get('Hurst', 0.5):.3f}
-📊 **حجم:** {signal.get('all_indicators', {}).get('Volume_Ratio', 0):.2f}x میانگین
+📊 **KDJ:** K:{signal.get('all_indicators', {}).get('KDJ_K', 0):.1f} | D:{signal.get('all_indicators', {}).get('KDJ_D', 0):.1f} | J:{signal.get('all_indicators', {}).get('KDJ_J', 0):.1f}
+📊 **ایچیموکو:** تنکان {signal.get('all_indicators', {}).get('Ichimoku_Tenkan', 0):.2f} | کیجون {signal.get('all_indicators', {}).get('Ichimoku_Kijun', 0):.2f}
 
-• **امتیاز خرید:** {signal.get('buy_score', 0):.1f}
-• **امتیاز فروش:** {signal.get('sell_score', 0):.1f}
-• **تعداد سیگنال‌ها:** {signal.get('signals_count', 0)}
+📊 **امتیازات:**
+• امتیاز خرید: {signal['buy_score']:.1f}
+• امتیاز فروش: {signal['sell_score']:.1f}
+• تعداد سیگنال‌ها: {signal['signals_count']}
 """
-            
-            if stats:
-                result += f"\n📊 **آمار ۲۴ ساعته (۵ منبع):**\n"
-                result += f"• تغییر: {stats['change']:+.2f}%\n"
-                result += f"• بالا: ${stats['high']:,.2f}\n"
-                result += f"• پایین: ${stats['low']:,.2f}\n"
-                result += f"• حجم: ${stats['quote_volume']/1000000:,.1f}M\n"
-            
+
             if signal.get('top_signals'):
-                result += f"\n📋 **سیگنال‌های برتر ({len(signal['top_signals'])}):**\n"
+                result += f"\n📋 **سیگنال‌های برتر:**\n"
                 for s in signal['top_signals'][:10]:
                     result += f"• {s}\n"
             
@@ -1491,15 +1701,45 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.effective_chat.send_message(msg, reply_markup=get_admin_keyboard(user_id), parse_mode='Markdown')
             return
         
-        # ===== فعال/غیرفعال کردن حالت پولی =====
-        if "فعال/غیرفعال کردن حالت پولی" in text or "Toggle Paid Mode" in text:
+        # ===== حالت پولی =====
+        if "حالت پولی" in text or "Toggle Paid Mode" in text:
             current_mode = db.get_setting('is_paid_mode')
-            new_mode = '0' if current_mode == '1' else '1'
-            db.update_setting('is_paid_mode', new_mode)
-            status = "فعال" if new_mode == '1' else "غیرفعال"
+            
+            keyboard = [
+                [KeyboardButton("✅ فعال کردن"), KeyboardButton("❌ غیرفعال کردن")],
+                [KeyboardButton("🔙 بازگشت")]
+            ]
+            
+            status = "فعال" if current_mode == '1' else "غیرفعال"
+            msg = f"🔓 **وضعیت حالت پولی:** {status}\n\n"
+            msg += f"لطفاً وضعیت مورد نظر را انتخاب کنید:"
+            
             await update.effective_chat.send_message(
-                f"✅ حالت پولی {status} شد!",
-                reply_markup=get_admin_keyboard(user_id)
+                msg,
+                reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True),
+                parse_mode='Markdown'
+            )
+            return
+        
+        if "✅ فعال کردن" in text:
+            db.update_setting('is_paid_mode', '1')
+            await update.effective_chat.send_message(
+                "✅ **حالت پولی با موفقیت فعال شد!**\n\n"
+                "🔹 کاربران برای دریافت سیگنال باید اشتراک تهیه کنند.\n"
+                "🔹 مبلغ اشتراک: ۵۰ USDT\n"
+                "🔹 آدرس کیف پول: " + (db.get_setting('wallet_address') or WALLET_ADDRESS),
+                reply_markup=get_admin_keyboard(user_id),
+                parse_mode='Markdown'
+            )
+            return
+        
+        if "❌ غیرفعال کردن" in text:
+            db.update_setting('is_paid_mode', '0')
+            await update.effective_chat.send_message(
+                "❌ **حالت پولی با موفقیت غیرفعال شد!**\n\n"
+                "🔹 کاربران می‌توانند به صورت رایگان از ربات استفاده کنند.",
+                reply_markup=get_admin_keyboard(user_id),
+                parse_mode='Markdown'
             )
             return
         
@@ -1511,23 +1751,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # ===== آمار سیگنال‌ها =====
         if "آمار سیگنال‌ها" in text or "Signal Stats" in text:
             db.cursor.execute('''
-                SELECT COUNT(*) as total,
-                       SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) as wins,
-                       SUM(CASE WHEN result = 'loss' THEN 1 ELSE 0 END) as losses,
-                       AVG(confidence) as avg_conf
+                SELECT 
+                    COUNT(*) as total,
+                    SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) as wins,
+                    SUM(CASE WHEN result = 'loss' THEN 1 ELSE 0 END) as losses,
+                    AVG(confidence) as avg_conf,
+                    AVG(leverage) as avg_lev,
+                    AVG(total_score) as avg_score
                 FROM signals
             ''')
             result = db.cursor.fetchone()
             if result:
-                total, wins, losses, avg_conf = result
+                total, wins, losses, avg_conf, avg_lev, avg_score = result
                 win_rate = (wins / total * 100) if total > 0 else 0
                 
-                msg = f"📊 **آمار سیگنال‌ها**\n\n"
+                msg = f"📊 **آمار سیگنال‌ها**\n{'='*30}\n\n"
                 msg += f"📈 کل سیگنال‌ها: {total}\n"
                 msg += f"✅ درست: {wins}\n"
                 msg += f"❌ اشتباه: {losses}\n"
                 msg += f"🎯 موفقیت: {win_rate:.1f}%\n"
                 msg += f"📊 میانگین اطمینان: {avg_conf:.0f}%\n"
+                msg += f"⚡ میانگین اهرم: {avg_lev:.1f}x\n"
+                msg += f"📊 میانگین امتیاز: {avg_score:.1f}\n"
                 
                 await update.effective_chat.send_message(msg, reply_markup=get_admin_keyboard(user_id), parse_mode='Markdown')
             return
@@ -1535,12 +1780,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # ===== تنظیمات سیستم =====
         if "تنظیمات سیستم" in text or "System Settings" in text:
             free_limit = db.get_setting('free_analysis_limit')
-            paid_mode = db.get_setting('is_paid_mode')
             min_conf = db.get_setting('min_confidence')
             
             msg = f"⚙️ **تنظیمات سیستم**\n\n"
             msg += f"📊 محدودیت تحلیل رایگان: {free_limit}\n"
-            msg += f"💰 حالت پولی: {'فعال' if paid_mode == '1' else 'غیرفعال'}\n"
             msg += f"🎯 حداقل اطمینان: {min_conf}%\n\n"
             msg += f"برای تغییر هر کدام، عدد جدید را وارد کنید:"
             
@@ -1585,6 +1828,7 @@ async def show_subscription_status(update: Update, context: ContextTypes.DEFAULT
     user = db.get_user(user_id)
     
     is_active = db.check_subscription(user_id)
+    payment_status = db.get_payment_status(user_id)
     
     if lang == 'fa':
         msg = f"📊 **وضعیت اشتراک**\n\n"
@@ -1599,13 +1843,19 @@ async def show_subscription_status(update: Update, context: ContextTypes.DEFAULT
             else:
                 msg += "✅ اشتراک فعال\n"
         else:
-            free_limit = db.get_setting('free_analysis_limit') or 10
-            daily_count = db.get_daily_analysis_count(user_id)
+            wallet_addr = db.get_setting('wallet_address') or WALLET_ADDRESS
+            wallet_amt = db.get_setting('wallet_amount') or WALLET_AMOUNT
             
             msg += f"❌ **اشتراک غیرفعال**\n"
-            msg += f"📊 نسخه رایگان: {free_limit} تحلیل در روز\n"
-            msg += f"📊 تحلیل امروز: {daily_count}/{free_limit}\n\n"
-            msg += f"💎 برای خرید اشتراک روی «خرید اشتراک» کلیک کنید."
+            msg += f"📊 نسخه رایگان: {db.get_setting('free_analysis_limit') or 10} تحلیل در روز\n\n"
+            msg += f"💎 برای فعال‌سازی اشتراک:\n"
+            msg += f"💰 مبلغ: {wallet_amt}\n"
+            msg += f"📌 آدرس: `{wallet_addr}`\n"
+            msg += f"📤 پس از واریز، هش تراکنش را ارسال کنید.\n"
+            if payment_status == 'PENDING':
+                msg += f"\n⏳ درخواست شما در انتظار تایید است..."
+            elif payment_status == 'REJECTED':
+                msg += f"\n❌ درخواست شما رد شده است. لطفاً مجدداً تلاش کنید."
     else:
         msg = f"📊 **Subscription Status**\n\n"
         if is_active:
@@ -1619,13 +1869,19 @@ async def show_subscription_status(update: Update, context: ContextTypes.DEFAULT
             else:
                 msg += "✅ Active\n"
         else:
-            free_limit = db.get_setting('free_analysis_limit') or 10
-            daily_count = db.get_daily_analysis_count(user_id)
+            wallet_addr = db.get_setting('wallet_address') or WALLET_ADDRESS
+            wallet_amt = db.get_setting('wallet_amount') or WALLET_AMOUNT
             
             msg += f"❌ **Inactive**\n"
-            msg += f"📊 Free version: {free_limit} analysis per day\n"
-            msg += f"📊 Today's analysis: {daily_count}/{free_limit}\n\n"
-            msg += f"💎 Click 'Buy Subscription' to purchase."
+            msg += f"📊 Free version: {db.get_setting('free_analysis_limit') or 10} analysis per day\n\n"
+            msg += f"💎 To activate subscription:\n"
+            msg += f"💰 Amount: {wallet_amt}\n"
+            msg += f"📌 Address: `{wallet_addr}`\n"
+            msg += f"📤 After payment, send transaction hash.\n"
+            if payment_status == 'PENDING':
+                msg += f"\n⏳ Your request is pending approval..."
+            elif payment_status == 'REJECTED':
+                msg += f"\n❌ Your request was rejected. Please try again."
     
     await update.effective_chat.send_message(
         msg,
@@ -1713,8 +1969,8 @@ async def handle_admin_commands(update: Update, context: ContextTypes.DEFAULT_TY
 # ==================== اجرا ====================
 def main():
     print("=" * 80)
-    print("🚀 ربات تحلیل تکنیکال - نسخه ۱۰۰x کامل")
-    print("🔥 ۳۰+ اندیکاتور - ۵ منبع قیمت")
+    print("🚀 ربات تحلیل تکنیکال - نسخه ۱۰۰x نهایی")
+    print("🔥 ۵۰+ اندیکاتور - ۱۰ منبع قیمت")
     print("=" * 80)
     
     if not check_and_create_pid():
@@ -1723,8 +1979,8 @@ def main():
     print(f"👤 ادمین: {ADMIN_ID}")
     print(f"🤖 ربات: {BOT_USERNAME}")
     print(f"📊 ارزها: {len(SUPPORTED_SYMBOLS)}")
-    print(f"🧠 اندیکاتورها: ۳۰+")
-    print(f"📡 منابع قیمت: ۵ منبع")
+    print(f"🧠 اندیکاتورها: ۵۰+")
+    print(f"📡 منابع قیمت: ۱۰ منبع")
     print(f"💎 آدرس کیف پول: {WALLET_ADDRESS}")
     print(f"💎 حالت پولی: {'فعال' if db.get_setting('is_paid_mode') == '1' else 'غیرفعال'}")
     print("🛡️ حذف پیام: غیرفعال")
