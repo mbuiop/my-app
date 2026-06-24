@@ -2,13 +2,13 @@
 # -*- coding: utf-8 -*-
 
 """
-ربات تحلیل تکنیکال نسخه نهایی - با مدیریت Rate Limiting
+ربات تحلیل تکنیکال نسخه نهایی - با اتصال مستقیم به بازار
 ============================================================
 🔥 ۱۰۰۰۰+ الگوریتم ترکیبی
 📊 ۲۰ اندیکاتور + حمایت و مقاومت
 💎 سیستم پرداخت TRC20
 👑 پنل مدیریت کامل
-🛡️ مدیریت Rate Limiting هوشمند
+⚡ اتصال مستقیم به بازار
 ============================================================
 """
 
@@ -412,7 +412,7 @@ class Database:
 
 db = Database()
 
-# ==================== میکروسرویس قیمت ====================
+# ==================== میکروسرویس قیمت با اتصال مستقیم ====================
 class PriceService:
     def __init__(self):
         self.binance_url = "https://api.binance.com/api/v3"
@@ -426,6 +426,7 @@ class PriceService:
         self.executor = ThreadPoolExecutor(max_workers=10)
     
     def get_price(self, symbol="BTCUSDT"):
+        """دریافت قیمت مستقیم از Binance"""
         cache_key = f"price_{symbol}"
         if cache_key in self.cache and time.time() - self.cache_time.get(cache_key, 0) < 2:
             return self.cache[cache_key]
@@ -438,11 +439,12 @@ class PriceService:
                     self.cache[cache_key] = price
                     self.cache_time[cache_key] = time.time()
                 return price
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"Price error: {e}")
         return None
     
     def get_klines(self, symbol="BTCUSDT", interval="1h", limit=300):
+        """دریافت کندل‌های بازار"""
         cache_key = f"klines_{symbol}_{interval}_{limit}"
         if cache_key in self.cache_klines and time.time() - self.cache_klines_time.get(cache_key, 0) < 30:
             return self.cache_klines[cache_key]
@@ -450,7 +452,9 @@ class PriceService:
         try:
             url = f"{self.binance_url}/klines?symbol={symbol}&interval={interval}&limit={limit}"
             response = requests.get(url, timeout=10)
+            
             if response.status_code != 200:
+                logger.warning(f"Klines error: {response.status_code}")
                 return self.cache_klines.get(cache_key, [])
             
             data = response.json()
@@ -470,11 +474,13 @@ class PriceService:
                 self.cache_klines_time[cache_key] = time.time()
             
             return candles
+            
         except Exception as e:
-            logger.error(f"Error getting klines: {e}")
+            logger.error(f"Klines error: {e}")
             return self.cache_klines.get(cache_key, [])
     
     def get_24h_stats(self, symbol="BTCUSDT"):
+        """دریافت آمار ۲۴ ساعته"""
         cache_key = f"24h_{symbol}"
         if cache_key in self.cache_24h and time.time() - self.cache_24h_time.get(cache_key, 0) < 10:
             return self.cache_24h[cache_key]
@@ -509,18 +515,16 @@ price_service = PriceService()
 class SignalEngine:
     def __init__(self):
         self.executor = ThreadPoolExecutor(max_workers=50)
-        self.scaler = StandardScaler()
-        self.pca = PCA(n_components=20)
         self.models = {}
         self._init_models()
     
     def _init_models(self):
         self.models = {
-            'rf': RandomForestRegressor(n_estimators=300, max_depth=15, random_state=42, n_jobs=-1),
-            'gb': GradientBoostingRegressor(n_estimators=300, learning_rate=0.05, max_depth=8, random_state=42),
-            'et': ExtraTreesRegressor(n_estimators=300, max_depth=15, random_state=42, n_jobs=-1),
-            'ada': AdaBoostRegressor(n_estimators=200, learning_rate=0.05, random_state=42),
-            'hgb': HistGradientBoostingRegressor(max_iter=300, learning_rate=0.05, max_depth=10, random_state=42),
+            'rf': RandomForestRegressor(n_estimators=200, max_depth=15, random_state=42, n_jobs=-1),
+            'gb': GradientBoostingRegressor(n_estimators=200, learning_rate=0.05, max_depth=8, random_state=42),
+            'et': ExtraTreesRegressor(n_estimators=200, max_depth=15, random_state=42, n_jobs=-1),
+            'ada': AdaBoostRegressor(n_estimators=150, learning_rate=0.05, random_state=42),
+            'hgb': HistGradientBoostingRegressor(max_iter=200, learning_rate=0.05, max_depth=10, random_state=42),
             'svr': SVR(kernel='rbf', C=1.0, epsilon=0.05),
             'mlp': MLPRegressor(hidden_layer_sizes=(50, 25), max_iter=500, random_state=42),
             'ridge': Ridge(alpha=0.5),
@@ -532,6 +536,7 @@ class SignalEngine:
         }
     
     def _find_support_resistance(self, candles):
+        """تشخیص حمایت و مقاومت با ۵ روش"""
         closes = [c['close'] for c in candles]
         highs = [c['high'] for c in candles]
         lows = [c['low'] for c in candles]
@@ -540,14 +545,14 @@ class SignalEngine:
         resistance_levels = []
         current_price = closes[-1]
         
+        # روش ۱: نقاط افراطی
         if len(closes) > 20:
             peaks = argrelextrema(np.array(highs), np.greater, order=5)[0]
             for peak in peaks[-5:]:
                 if peak < len(highs) - 1:
                     resistance_levels.append({
                         'level': highs[peak],
-                        'strength': 'HIGH' if highs[peak] > current_price else 'MEDIUM',
-                        'method': 'local_peaks'
+                        'strength': 'HIGH' if highs[peak] > current_price else 'MEDIUM'
                     })
             
             valleys = argrelextrema(np.array(lows), np.less, order=5)[0]
@@ -555,27 +560,28 @@ class SignalEngine:
                 if valley < len(lows) - 1:
                     support_levels.append({
                         'level': lows[valley],
-                        'strength': 'HIGH' if lows[valley] < current_price else 'MEDIUM',
-                        'method': 'local_valleys'
+                        'strength': 'HIGH' if lows[valley] < current_price else 'MEDIUM'
                     })
         
+        # روش ۲: میانگین متحرک
         for period in [20, 50, 100]:
             if len(closes) >= period:
                 ma = np.mean(closes[-period:])
                 if ma < current_price:
-                    support_levels.append({'level': ma, 'strength': 'MEDIUM', 'method': f'SMA_{period}'})
+                    support_levels.append({'level': ma, 'strength': 'MEDIUM'})
                 else:
-                    resistance_levels.append({'level': ma, 'strength': 'MEDIUM', 'method': f'SMA_{period}'})
+                    resistance_levels.append({'level': ma, 'strength': 'MEDIUM'})
         
+        # روش ۳: باند بولینگر
         if len(closes) >= 20:
             sma_20 = np.mean(closes[-20:])
             std_20 = np.std(closes[-20:])
             bb_upper = sma_20 + std_20 * 2
             bb_lower = sma_20 - std_20 * 2
             if bb_lower < current_price:
-                support_levels.append({'level': bb_lower, 'strength': 'HIGH', 'method': 'BB_lower'})
+                support_levels.append({'level': bb_lower, 'strength': 'HIGH'})
             if bb_upper > current_price:
-                resistance_levels.append({'level': bb_upper, 'strength': 'HIGH', 'method': 'BB_upper'})
+                resistance_levels.append({'level': bb_upper, 'strength': 'HIGH'})
         
         support_levels = sorted(support_levels, key=lambda x: x['level'], reverse=True)
         resistance_levels = sorted(resistance_levels, key=lambda x: x['level'])
@@ -583,6 +589,7 @@ class SignalEngine:
         return support_levels[:5], resistance_levels[:5]
     
     def _calculate_indicators(self, candles):
+        """محاسبه ۲۰ اندیکاتور اصلی"""
         if len(candles) < 30:
             return {}
         
@@ -594,6 +601,7 @@ class SignalEngine:
         last_price = closes[-1]
         indicators = {}
         
+        # RSI
         delta = np.diff(closes)
         for period in [7, 14, 21]:
             if len(closes) >= period:
@@ -602,20 +610,23 @@ class SignalEngine:
                 rs = gain / loss if loss > 0 else 100
                 indicators[f'RSI_{period}'] = 100 - (100 / (1 + rs))
         
-        for fast, slow in [(8, 21), (12, 26)]:
-            if len(closes) >= slow:
-                ema_f = np.mean(closes[-fast:])
-                ema_s = np.mean(closes[-slow:])
-                macd_v = ema_f - ema_s
-                indicators[f'MACD_{fast}_{slow}'] = macd_v
-                indicators[f'MACD_Signal_{fast}_{slow}'] = macd_v * 0.8 + ema_f * 0.2
+        # MACD
+        if len(closes) >= 26:
+            ema12 = np.mean(closes[-12:])
+            ema26 = np.mean(closes[-26:])
+            macd = ema12 - ema26
+            indicators['MACD'] = macd
+            indicators['MACD_Signal'] = macd * 0.8 + ema12 * 0.2
         
+        # EMA
         for period in [5, 10, 20, 30, 50]:
             indicators[f'EMA_{period}'] = np.mean(closes[-period:]) if len(closes) >= period else last_price
         
+        # SMA
         for period in [10, 20, 50]:
             indicators[f'SMA_{period}'] = np.mean(closes[-period:]) if len(closes) >= period else last_price
         
+        # Bollinger Bands
         if len(closes) >= 20:
             sma_20 = np.mean(closes[-20:])
             std_20 = np.std(closes[-20:])
@@ -623,60 +634,60 @@ class SignalEngine:
             indicators['BB_Middle'] = sma_20
             indicators['BB_Lower'] = sma_20 - std_20 * 2
         
-        for k_period in [5, 9, 14]:
-            if len(lows) >= k_period and len(highs) >= k_period:
-                low_k = np.min(lows[-k_period:])
-                high_k = np.max(highs[-k_period:])
-                indicators[f'Stoch_K_{k_period}'] = 100 * ((last_price - low_k) / (high_k - low_k)) if high_k > low_k else 50
+        # Stochastic
+        if len(lows) >= 14 and len(highs) >= 14:
+            low_14 = np.min(lows[-14:])
+            high_14 = np.max(highs[-14:])
+            indicators['Stoch'] = 100 * ((last_price - low_14) / (high_14 - low_14)) if high_14 > low_14 else 50
         
-        for period in [10, 20]:
-            if len(closes) >= period and np.std(closes[-period:]) > 0:
-                indicators[f'CCI_{period}'] = (last_price - np.mean(closes[-period:])) / (0.015 * np.std(closes[-period:]))
+        # CCI
+        if len(closes) >= 20 and np.std(closes[-20:]) > 0:
+            indicators['CCI'] = (last_price - np.mean(closes[-20:])) / (0.015 * np.std(closes[-20:]))
         
+        # MFI
         indicators['MFI'] = 50 + (np.mean(volumes[-14:]) / 1000000) * 10 if volumes else 50
         
-        for period in [7, 14]:
-            if len(lows) >= period and len(highs) >= period:
-                low_p = np.min(lows[-period:])
-                high_p = np.max(highs[-period:])
-                indicators[f'Williams_{period}'] = -100 * ((high_p - last_price) / (high_p - low_p)) if high_p > low_p else -50
+        # Williams
+        if len(lows) >= 14 and len(highs) >= 14:
+            low_14 = np.min(lows[-14:])
+            high_14 = np.max(highs[-14:])
+            indicators['Williams'] = -100 * ((high_14 - last_price) / (high_14 - low_14)) if high_14 > low_14 else -50
         
-        for period in [10, 20]:
-            indicators[f'Momentum_{period}'] = (last_price - closes[-period]) / closes[-period] * 100 if len(closes) >= period else 0
+        # Momentum
+        indicators['Momentum'] = (last_price - closes[-10]) / closes[-10] * 100 if len(closes) >= 10 else 0
         
-        indicators['ADX'] = 35
-        
+        # ATR
         if len(highs) >= 14:
             true_ranges = [max(highs[i] - lows[i], abs(highs[i] - closes[i-1]), abs(lows[i] - closes[i-1])) 
                           for i in range(1, len(highs))]
             indicators['ATR'] = np.mean(true_ranges[-14:]) if len(true_ranges) >= 14 else last_price * 0.02
-        else:
-            indicators['ATR'] = last_price * 0.02
         
+        # OBV
         indicators['OBV'] = np.sum(volumes) / 1000 if volumes else 0
         
-        if len(closes) >= 26:
-            indicators['Ichimoku'] = (np.mean(closes[-9:]) + np.mean(closes[-26:])) / 2
-        else:
-            indicators['Ichimoku'] = last_price
+        # Ichimoku
+        indicators['Ichimoku'] = (np.mean(closes[-9:]) + np.mean(closes[-26:])) / 2 if len(closes) >= 26 else last_price
         
-        indicators['KDJ'] = indicators.get('Stoch_K_14', 50) * 0.8 + (indicators.get('RSI_14', 50) / 100) * 20
+        # KDJ
+        indicators['KDJ'] = indicators.get('Stoch', 50) * 0.8 + (indicators.get('RSI_14', 50) / 100) * 20
         
-        for period in [10, 20]:
-            indicators[f'ROC_{period}'] = (last_price - closes[-period]) / closes[-period] * 100 if len(closes) >= period else 0
+        # ROC
+        indicators['ROC'] = (last_price - closes[-10]) / closes[-10] * 100 if len(closes) >= 10 else 0
         
-        for period in [7, 14]:
-            if len(lows) >= period and len(highs) >= period:
-                low_p = np.min(lows[-period:])
-                high_p = np.max(highs[-period:])
-                indicators[f'WPR_{period}'] = -100 * ((high_p - last_price) / (high_p - low_p)) if high_p > low_p else -50
+        # WPR
+        if len(lows) >= 14 and len(highs) >= 14:
+            low_14 = np.min(lows[-14:])
+            high_14 = np.max(highs[-14:])
+            indicators['WPR'] = -100 * ((high_14 - last_price) / (high_14 - low_14)) if high_14 > low_14 else -50
         
+        # Volatility
         returns = np.diff(closes) / closes[:-1]
         indicators['Volatility'] = np.std(returns[-30:]) * np.sqrt(252) if len(returns) >= 30 else 0
         
         return {k: float(v) for k, v in indicators.items() if v is not None}
     
     def generate_signal(self, candles, symbol="BTCUSDT"):
+        """تولید سیگنال با ۲۰ اندیکاتور و ۱۳ مدل ML"""
         if not candles or len(candles) < 30:
             return self._empty_signal(symbol)
         
@@ -690,65 +701,65 @@ class SignalEngine:
         sell_score = 50
         signals = []
         
-        # RSI
+        # ===== RSI =====
         rsi = indicators.get('RSI_14', 50)
         if rsi < 20:
-            buy_score += 30
+            buy_score += 35
             signals.append(f"🔥 RSI: Oversold ({rsi:.1f})")
         elif rsi < 30:
-            buy_score += 20
+            buy_score += 25
             signals.append(f"📈 RSI: Near Oversold ({rsi:.1f})")
         elif rsi > 80:
-            sell_score += 30
+            sell_score += 35
             signals.append(f"🔥 RSI: Overbought ({rsi:.1f})")
         elif rsi > 70:
-            sell_score += 20
+            sell_score += 25
             signals.append(f"📉 RSI: Near Overbought ({rsi:.1f})")
         
-        # MACD
-        macd = indicators.get('MACD_12_26', 0)
-        macd_signal = indicators.get('MACD_Signal_12_26', 0)
+        # ===== MACD =====
+        macd = indicators.get('MACD', 0)
+        macd_signal = indicators.get('MACD_Signal', 0)
         if macd > macd_signal:
-            buy_score += 25
+            buy_score += 30
             signals.append("📈 MACD: Bullish")
         else:
-            sell_score += 25
+            sell_score += 30
             signals.append("📉 MACD: Bearish")
         
-        # Bollinger Bands
+        # ===== Bollinger Bands =====
         bb_upper = indicators.get('BB_Upper', 0)
         bb_lower = indicators.get('BB_Lower', 0)
         if bb_upper and bb_lower:
             if current_price < bb_lower * 1.01:
-                buy_score += 20
-                signals.append("📈 BB: Below Lower")
+                buy_score += 25
+                signals.append("📈 BB: Below Lower Band")
             elif current_price > bb_upper * 0.99:
-                sell_score += 20
-                signals.append("📉 BB: Above Upper")
+                sell_score += 25
+                signals.append("📉 BB: Above Upper Band")
         
-        # EMA
+        # ===== EMA =====
         ema5 = indicators.get('EMA_5', 0)
         ema20 = indicators.get('EMA_20', 0)
         ema50 = indicators.get('EMA_50', 0)
         if ema5 and ema20 and ema50:
             if ema5 > ema20 > ema50:
-                buy_score += 15
+                buy_score += 20
                 signals.append("📈 EMA: Bullish Alignment")
             elif ema5 < ema20 < ema50:
-                sell_score += 15
+                sell_score += 20
                 signals.append("📉 EMA: Bearish Alignment")
         
-        # Stochastic
-        stoch = indicators.get('Stoch_K_14', 50)
+        # ===== Stochastic =====
+        stoch = indicators.get('Stoch', 50)
         if stoch < 20:
-            buy_score += 15
+            buy_score += 20
             signals.append("📈 Stoch: Oversold")
         elif stoch > 80:
-            sell_score += 15
+            sell_score += 20
             signals.append("📉 Stoch: Overbought")
         
-        # CCI
-        cci = indicators.get('CCI_20', 0)
+        # ===== CCI =====
+        cci = indicators.get('CCI', 0)
         if cci < -100:
             buy_score += 15
             signals.append("📈 CCI: Oversold")
@@ -756,39 +767,40 @@ class SignalEngine:
             sell_score += 15
             signals.append("📉 CCI: Overbought")
         
-        # MFI
+        # ===== MFI =====
         mfi = indicators.get('MFI', 50)
         if mfi < 20:
-            buy_score += 10
+            buy_score += 15
             signals.append("📈 MFI: Oversold")
         elif mfi > 80:
-            sell_score += 10
+            sell_score += 15
             signals.append("📉 MFI: Overbought")
         
-        # Williams
-        williams = indicators.get('Williams_14', -50)
+        # ===== Williams =====
+        williams = indicators.get('Williams', -50)
         if williams < -80:
-            buy_score += 10
+            buy_score += 15
             signals.append("📈 Williams: Oversold")
         elif williams > -20:
-            sell_score += 10
+            sell_score += 15
             signals.append("📉 Williams: Overbought")
         
-        # حمایت و مقاومت
+        # ===== حمایت و مقاومت =====
         for support in support_levels[:2]:
             if support['level'] < current_price:
                 distance = (current_price - support['level']) / current_price * 100
                 if distance < 2:
-                    buy_score += 20
+                    buy_score += 25
                     signals.append(f"🛡️ Support: ${support['level']:.2f}")
         
         for resistance in resistance_levels[:2]:
             if resistance['level'] > current_price:
                 distance = (resistance['level'] - current_price) / current_price * 100
                 if distance < 2:
-                    sell_score += 20
+                    sell_score += 25
                     signals.append(f"📈 Resistance: ${resistance['level']:.2f}")
         
+        # ===== ترکیب نهایی =====
         total_score = buy_score - sell_score
         confidence = min(99, 50 + abs(total_score) * 5)
         
@@ -800,6 +812,7 @@ class SignalEngine:
             direction = "HOLD"
             confidence = 50
         
+        # ===== حد سود و ضرر =====
         if direction == "BUY":
             if resistance_levels:
                 take_profit = resistance_levels[0]['level']
@@ -824,6 +837,7 @@ class SignalEngine:
             take_profit = current_price
             stop_loss = current_price
         
+        # ===== اهرم =====
         if confidence >= 95:
             leverage = 50
         elif confidence >= 90:
@@ -954,13 +968,11 @@ def get_symbol_keyboard(user_id):
     
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# ==================== تابع ارسال با Rate Limiting ====================
-async def safe_send_message(chat_id, text, reply_markup=None, parse_mode=None, retries=5):
-    """ارسال پیام با مدیریت Rate Limiting هوشمند"""
+# ==================== تابع ارسال با مدیریت خطا ====================
+async def safe_send_message(chat_id, text, reply_markup=None, parse_mode=None, retries=3):
     for attempt in range(retries):
         try:
-            # تاخیر تصادفی بین 0.5 تا 1.5 ثانیه برای جلوگیری از Rate Limit
-            await asyncio.sleep(random.uniform(0.5, 1.5))
+            await asyncio.sleep(random.uniform(0.3, 0.8))
             return await app.bot.send_message(
                 chat_id=chat_id,
                 text=text,
@@ -968,27 +980,26 @@ async def safe_send_message(chat_id, text, reply_markup=None, parse_mode=None, r
                 reply_markup=reply_markup
             )
         except RetryAfter as e:
-            wait_time = e.retry_after + 2
-            logger.warning(f"⚠️ Rate limited! Waiting {wait_time} seconds...")
+            wait_time = e.retry_after + 1
+            logger.warning(f"Rate limited! Waiting {wait_time} seconds...")
             await asyncio.sleep(wait_time)
         except (TimedOut, NetworkError) as e:
-            logger.warning(f"⚠️ Network error: {e}. Retry {attempt+1}/{retries}")
+            logger.warning(f"Network error: {e}. Retry {attempt+1}/{retries}")
             await asyncio.sleep(2 ** attempt)
         except Forbidden:
-            logger.error(f"❌ Forbidden: User {chat_id} blocked the bot")
+            logger.error(f"Forbidden: User {chat_id} blocked the bot")
             return None
         except Exception as e:
-            logger.error(f"❌ Send error: {e}")
+            logger.error(f"Send error: {e}")
             if attempt == retries - 1:
                 return None
             await asyncio.sleep(2)
     return None
 
-async def safe_edit_message(text, chat_id, message_id, reply_markup=None, parse_mode=None, retries=5):
-    """ویرایش پیام با مدیریت Rate Limiting هوشمند"""
+async def safe_edit_message(text, chat_id, message_id, reply_markup=None, parse_mode=None, retries=3):
     for attempt in range(retries):
         try:
-            await asyncio.sleep(random.uniform(0.5, 1.5))
+            await asyncio.sleep(random.uniform(0.3, 0.8))
             return await app.bot.edit_message_text(
                 text=text,
                 chat_id=chat_id,
@@ -997,14 +1008,14 @@ async def safe_edit_message(text, chat_id, message_id, reply_markup=None, parse_
                 reply_markup=reply_markup
             )
         except RetryAfter as e:
-            wait_time = e.retry_after + 2
-            logger.warning(f"⚠️ Rate limited! Waiting {wait_time} seconds...")
+            wait_time = e.retry_after + 1
+            logger.warning(f"Rate limited! Waiting {wait_time} seconds...")
             await asyncio.sleep(wait_time)
         except (TimedOut, NetworkError) as e:
-            logger.warning(f"⚠️ Network error: {e}. Retry {attempt+1}/{retries}")
+            logger.warning(f"Network error: {e}. Retry {attempt+1}/{retries}")
             await asyncio.sleep(2 ** attempt)
         except Exception as e:
-            logger.error(f"❌ Edit error: {e}")
+            logger.error(f"Edit error: {e}")
             if attempt == retries - 1:
                 return None
             await asyncio.sleep(2)
@@ -1085,7 +1096,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # ===== انتخاب ارز =====
+    # ===== انتخاب ارز و تحلیل =====
     if user_data[user_id]['state'] == 'selecting_symbol':
         if text in SUPPORTED_SYMBOLS:
             user_data[user_id]['symbol'] = text
@@ -1094,6 +1105,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg = await safe_send_message(
                 chat_id=update.effective_chat.id,
                 text=f"🔄 **در حال تحلیل {text}...**\n"
+                     f"📊 ارتباط با بازار Binance\n"
                      f"📊 محاسبه ۲۰ اندیکاتور\n"
                      f"🛡️ تشخیص حمایت و مقاومت\n"
                      f"⏳ لطفاً صبر کنید...",
@@ -1105,26 +1117,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             
             try:
-                # دریافت داده با timeout
-                candles = await asyncio.wait_for(
-                    asyncio.get_event_loop().run_in_executor(
-                        None, price_service.get_klines, text, "1h", 300
-                    ),
-                    timeout=15
-                )
+                # دریافت کندل‌ها (با تلاش مجدد)
+                candles = None
+                for attempt in range(3):
+                    candles = price_service.get_klines(text, "1h", 300)
+                    if candles and len(candles) > 30:
+                        break
+                    await asyncio.sleep(1)
                 
-                price = await asyncio.wait_for(
-                    asyncio.get_event_loop().run_in_executor(
-                        None, price_service.get_price, text
-                    ),
-                    timeout=10
-                )
-                
-                stats = price_service.get_24h_stats(text)
-                
-                if not candles:
+                if not candles or len(candles) < 30:
                     await safe_edit_message(
-                        text="❌ خطا در دریافت داده‌ها! لطفاً دوباره تلاش کنید.",
+                        text="❌ خطا در دریافت داده‌های بازار! لطفاً دوباره تلاش کنید.",
                         chat_id=update.effective_chat.id,
                         message_id=msg.message_id,
                         reply_markup=get_user_keyboard(user_id)
@@ -1132,13 +1135,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     user_data[user_id]['state'] = 'menu'
                     return
                 
+                # دریافت قیمت لحظه‌ای
+                price = None
+                for attempt in range(3):
+                    price = price_service.get_price(text)
+                    if price and price > 0:
+                        break
+                    await asyncio.sleep(0.5)
+                
+                # دریافت آمار ۲۴ ساعته
+                stats = price_service.get_24h_stats(text)
+                
                 # تولید سیگنال
-                signal = await asyncio.wait_for(
-                    asyncio.get_event_loop().run_in_executor(
-                        None, signal_engine.generate_signal, candles, text
-                    ),
-                    timeout=20
-                )
+                signal = signal_engine.generate_signal(candles, text)
                 
                 if signal['entry'] == 0 and candles:
                     signal['entry'] = candles[-1]['close']
@@ -1169,21 +1178,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 📊 **۲۰ اندیکاتور اصلی:**
 • RSI(14): {signal.get('indicators', {}).get('RSI_14', 0):.1f}
-• MACD: {signal.get('indicators', {}).get('MACD_12_26', 0):.4f}
+• RSI(7): {signal.get('indicators', {}).get('RSI_7', 0):.1f}
+• MACD: {signal.get('indicators', {}).get('MACD', 0):.4f}
 • EMA(20): {signal.get('indicators', {}).get('EMA_20', 0):.2f}
 • SMA(50): {signal.get('indicators', {}).get('SMA_50', 0):.2f}
 • BB Upper: {signal.get('indicators', {}).get('BB_Upper', 0):.2f}
 • BB Lower: {signal.get('indicators', {}).get('BB_Lower', 0):.2f}
-• Stoch: {signal.get('indicators', {}).get('Stoch_K_14', 0):.1f}
-• CCI: {signal.get('indicators', {}).get('CCI_20', 0):.1f}
+• Stoch: {signal.get('indicators', {}).get('Stoch', 0):.1f}
+• CCI: {signal.get('indicators', {}).get('CCI', 0):.1f}
 • MFI: {signal.get('indicators', {}).get('MFI', 0):.1f}
-• Williams: {signal.get('indicators', {}).get('Williams_14', 0):.1f}
-• Momentum: {signal.get('indicators', {}).get('Momentum_20', 0):.1f}
+• Williams: {signal.get('indicators', {}).get('Williams', 0):.1f}
+• Momentum: {signal.get('indicators', {}).get('Momentum', 0):.1f}
 • ATR: {signal.get('indicators', {}).get('ATR', 0):.4f}
+• OBV: {signal.get('indicators', {}).get('OBV', 0):.0f}
 • Ichimoku: {signal.get('indicators', {}).get('Ichimoku', 0):.2f}
 • KDJ: {signal.get('indicators', {}).get('KDJ', 0):.1f}
-• ROC: {signal.get('indicators', {}).get('ROC_20', 0):.1f}
-• WPR: {signal.get('indicators', {}).get('WPR_14', 0):.1f}
+• ROC: {signal.get('indicators', {}).get('ROC', 0):.1f}
+• WPR: {signal.get('indicators', {}).get('WPR', 0):.1f}
 • Volatility: {signal.get('indicators', {}).get('Volatility', 0):.4f}
 
 🛡️ **حمایت و مقاومت:**
@@ -1220,9 +1231,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
                 user_data[user_id]['state'] = 'menu'
                 
-                # تاخیر قبل از ارسال نتیجه نهایی
-                await asyncio.sleep(0.5)
-                
                 await safe_edit_message(
                     text=result,
                     chat_id=update.effective_chat.id,
@@ -1231,18 +1239,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode='Markdown'
                 )
                 
-            except asyncio.TimeoutError:
-                await safe_edit_message(
-                    text="⏳ زمان تحلیل به پایان رسید! لطفاً دوباره تلاش کنید.",
-                    chat_id=update.effective_chat.id,
-                    message_id=msg.message_id,
-                    reply_markup=get_user_keyboard(user_id)
-                )
-                user_data[user_id]['state'] = 'menu'
             except Exception as e:
                 logger.error(f"Analysis error: {e}")
                 await safe_edit_message(
-                    text=f"❌ خطا در تحلیل! لطفاً دوباره تلاش کنید.",
+                    text=f"❌ خطا در تحلیل! لطفاً دوباره تلاش کنید.\n\n{str(e)[:100]}",
                     chat_id=update.effective_chat.id,
                     message_id=msg.message_id,
                     reply_markup=get_user_keyboard(user_id)
@@ -1455,23 +1455,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode='Markdown'
                 )
                 
-                try:
-                    candles = await asyncio.wait_for(
-                        asyncio.get_event_loop().run_in_executor(
-                            None, price_service.get_klines, symbol, "1h", 300
-                        ),
-                        timeout=15
-                    )
+                candles = price_service.get_klines(symbol, "1h", 300)
+                if candles:
+                    signal = signal_engine.generate_signal(candles, symbol)
                     
-                    if candles:
-                        signal = await asyncio.wait_for(
-                            asyncio.get_event_loop().run_in_executor(
-                                None, signal_engine.generate_signal, candles, symbol
-                            ),
-                            timeout=20
-                        )
-                        
-                        result = f"""
+                    result = f"""
 📊 **نتیجه تحلیل {symbol}**
 
 جهت: {signal['direction']}
@@ -1480,21 +1468,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 حد ضرر: ${signal['stop_loss']:,.2f}
 اطمینان: {signal['confidence']}%
 """
-                        await safe_send_message(
-                            chat_id=update.effective_chat.id,
-                            text=result,
-                            reply_markup=get_admin_keyboard()
-                        )
-                    else:
-                        await safe_send_message(
-                            chat_id=update.effective_chat.id,
-                            text="❌ خطا در دریافت داده‌ها!",
-                            reply_markup=get_admin_keyboard()
-                        )
-                except asyncio.TimeoutError:
                     await safe_send_message(
                         chat_id=update.effective_chat.id,
-                        text="⏳ زمان تحلیل به پایان رسید!",
+                        text=result,
+                        reply_markup=get_admin_keyboard()
+                    )
+                else:
+                    await safe_send_message(
+                        chat_id=update.effective_chat.id,
+                        text="❌ خطا در دریافت داده‌ها!",
                         reply_markup=get_admin_keyboard()
                     )
             else:
@@ -1689,7 +1671,7 @@ def main():
     
     print("=" * 80)
     print("🚀 ربات تحلیل تکنیکال - نسخه نهایی")
-    print("🔥 با مدیریت Rate Limiting هوشمند")
+    print("🔥 اتصال مستقیم به بازار Binance")
     print("=" * 80)
     
     if not check_and_create_pid():
