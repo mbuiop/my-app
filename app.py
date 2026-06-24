@@ -1,39 +1,39 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+# -*- کدگذاری: utf-8 -*-
 
-"""
-ربات تحلیل تکنیکال فوق‌پیشرفته نسخه ۱۷.۰ - کامل یکجا
-==================================================
+«»»
+ربات تکنیکال فوق‌پیشرفته نسخه ۱۷.۰ - کامل یکجا
+=========================================================
 ✅ حل کامل تشخیص چارت (استخراج کامل کندل‌ها، قیمت، حمایت، مقاومت، اندیکاتورها)
 ✅ نمایش ۲۰۰+ ارز با ۱۰ اندیکاتور در ۴ اینتر
-✅ رفع مشکل دکمه‌ها در زمان تحلیل چارت
+✅ رفع مشکل‌ها در زمان تحلیل چارت
 ✅ ۵۰ ماشین تشخیص چارت با ۱۰۰ روش پردازش
 ✅ ۲۰ روش تشخیص نهنگ HyperDash
 ✅ ۱۰۰۰+ الگوریتم ترکیبی
 ✅ ۱۵,۰۰۰+ خط کد کامل یکجا
-==================================================
-"""
+=========================================================
+«»»
 
-import logging
-import os
-import sys
-time
-import json
-import re
-import io
-import sqlite3
-import threading
-import asyncio
-import hashlib
-import random
-import base64
-import hmac
-import urllib.parse
-import math
-import itertools
-from collections import defaultdict, deque, Counter
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple, Any, Union
+ورود به سیستم واردات
+وارد کردن سیستم عامل
+سیستم واردات
+زمان
+وارد کردن json
+واردات مجدد
+وارد کردن io
+وارد کردن sqlite3
+وارد کردن نخ
+وارد کردن آسینچو
+وارد کردن هش‌لیب
+وارد کردن تصادفی
+واردات پایه64
+واردات hmac
+وارد کردن urllib.parse
+وارد کردن ریاضی
+ایمپورت کردن ایترتولز
+از مجموعه‌ها ، defaultdict، deque و Counter را وارد کنید
+از datetime ، datetime و timedelta را وارد کنید
+از تایپ کردن import Dict، List، Optional، Tuple، Any، Union
 from dataclasses import dataclass, field
 from enum import Enum
 import warnings
@@ -109,9 +109,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = "8195783182:AAH408rNKlNZYnnB_E65xA0dG6I_dGpUS7I"
+BOT_TOKEN = "8787172986:AAHtlVXWZTTFUrvWc0OcVI-CehKxkPmF7nA"
 ADMIN_ID = 327855654
-BOT_USERNAME = "@Maynir_Bot"
+BOT_USERNAME = "@ROBTTSAZE_bot"
 EXCHANGE_URL = "https://www.toobit.com/fa/r?i=5EQpCT"
 
 # ==================== لیست ۲۰۰+ ارز ====================
