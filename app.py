@@ -199,9 +199,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = "8710979491:AAF3YwifUyipir7TkOnYOcsWpbB0QFojkw0"
+BOT_TOKEN = "8991812542:AAHtoXClDy_CHFqRCVmALJVpXWgT7bG1cdY"
 ADMIN_ID = 327855654
-BOT_USERNAME = "@TASTtt_bot"
+BOT_USERNAME = "@SEGNALF_bot"
 EXCHANGE_URL = "https://www.toobit.com/fa/r?i=5EQpCT"
 PAYMENT_WALLET = "TV61aTh98MGqmteYzda5AaBzdXgGqreG6A"
 PAYMENT_NETWORK = "TRC20"
