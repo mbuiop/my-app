@@ -7,25 +7,23 @@ import secrets
 import aiohttp
 import time
 import re
+import os
+import shutil
 from datetime import datetime, timedelta
 from typing import Dict, Optional, List, Tuple, Set, Any
 from dataclasses import dataclass
 from contextlib import asynccontextmanager
 from collections import OrderedDict
-from heapq import heappush, heappop
-import base58
 import random
-from threading import Lock
 import zlib
-import pickle
-import os
 import gc
 import psutil
-import resource
-import math
+from threading import Lock
+import base58
 
 # ==================== تنظیمات سیستم ====================
 try:
+    import resource
     resource.setrlimit(resource.RLIMIT_NOFILE, (65536, 65536))
 except:
     pass
@@ -41,7 +39,6 @@ from telegram.ext import (
     filters,
     ContextTypes
 )
-# =========================================================
 
 # ==================== تنظیمات لاگینگ ====================
 logging.basicConfig(
@@ -51,485 +48,110 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ==================== تنظیمات اصلی ====================
-BOT_TOKEN = "8991812542:AAHtoXClDy_CHFqRCVmALJVpXWgT7bG1cdY"
+BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
 ADMIN_ID = 327855654
-OWNER_WALLET = "TV61aTh98MGqmteYzda5AaBzdXgGqreG6A"
+
+# ==================== تنظیمات کیف پول و پرداخت ====================
+OWNER_WALLET = "TV61aTh98MGqmteYzda5AaBzdXgGqreG6A"  # آدرس کیف پول اصلی ربات
+SUBSCRIPTION_PRICE_USD = 10  # قیمت اشتراک ماهانه
+TRON_API_URL = "https://api.trongrid.io"
+PAYMENT_TIMEOUT_MINUTES = 30
 
 TRON_API_KEYS = [
-    "7ae83b63-fdf3-47e4-ac69-56f960a34f5b",
+    "YOUR_TRON_API_KEY_HERE",
 ]
 
-TRON_API_URL = "https://api.trongrid.io"
-SUBSCRIPTION_PRICE_USD = 50
-MAX_YOUTUBE_LINKS_PER_DAY = 10
-REQUIRED_REFERRALS = 0
-DAILY_INTERACTIONS_REQUIRED = 5
-PAYMENT_TIMEOUT_MINUTES = 10
-REFERRAL_CHALLENGE_REWARD = 100
-REFERRAL_CHALLENGE_TOP_USERS = 10
-MAX_CONCURRENT_TASKS = 10000
-CACHE_TTL = 300
-CACHE_MAX_SIZE = 10_000_000
-REFERRAL_BOOST_THRESHOLD = 100
-REFERRAL_BOOST_MULTIPLIER = 2
-
-# ==================== ۵ زبان پشتیبانی شده ====================
+# ==================== ۲ زبان پشتیبانی شده ====================
 SUPPORTED_LANGUAGES = {
     'fa': 'فارسی',
-    'en': 'English',
-    'ar': 'العربية',
-    'ru': 'Русский',
-    'tr': 'Türkçe'
+    'en': 'English'
 }
 
-# ==================== متون ====================
+# ==================== متون کامل ۲ زبان ====================
 TEXTS = {
     'fa': {
-        'welcome': "👋 خوش آمدید <b>{first_name}</b>!\n\n🎯 ربات تبادل بازدید و لایک یوتیوب",
-        'register_link': "📝 ثبت لینک یوتیوب",
-        'my_stats': "📊 آمار من",
-        'referral': "👥 سیستم رفرال",
-        'change_language': "🌐 تغییر زبان",
-        'view_links': "👀 مشاهده لینک‌های بازدید",
-        'register_link_prompt': "📤 لطفا لینک ویدیو یوتیوب خود را ارسال کنید:\n\n⚠️ روزانه فقط <b>{required_ref}</b> لینک می‌توانید ثبت کنید",
-        'link_registered': "✅ لینک شما با موفقیت ثبت شد!\n\n📌 برای مشاهده لینک‌های بازدید روی دکمه زیر کلیک کنید:",
-        'interaction_prompt': "👀 لینک‌های امروز برای بازدید:\n\n{links}",
-        'link_viewed': "✅ لینک بازدید و لایک شد!\n🎉 بازدید شما ثبت شد",
-        'referral_info': "👥 **سیستم رفرال شما**\n\n🔗 **کد رفرال شما:**\n<code>{ref_code}</code>\n\n👤 **تعداد رفرال‌ها:** {ref_count} کاربر\n\n📋 **لینک دعوت:**\n<code>{ref_link}</code>",
-        'referral_link': "https://t.me/SEGNALF_bot?start={ref_code}",
-        'referral_copied': "✅ کد رفرال کپی شد!\n\n📋 کد: <code>{ref_code}</code>",
-        'referral_success': "🎉 **تبریک!**\nشما توسط <b>{ref_name}</b> دعوت شدید!",
-        'referral_not_found': "❌ کد رفرال نامعتبر است",
-        'subscribed': "✅ اشتراک شما تا {expiry} فعال است",
-        'not_subscribed': "❌ اشتراک فعالی ندارید\n💳 لطفا مبلغ ۵۰ دلار را پرداخت کنید",
-        'payment_info': "💳 لطفا <b>۵۰ دلار</b> USDT (TRC20) ارسال کنید:\n\n<code>{wallet}</code>",
-        'enter_source_address': "📤 لطفا آدرس کیف پول خود را وارد کنید:",
-        'source_address_saved': "✅ آدرس شما ثبت شد!\n💳 لطفا <b>۵۰ دلار</b> USDT ارسال کنید:",
-        'payment_confirmed': "✅ تایید پرداخت دریافت شد!\n⏳ در حال بررسی...",
-        'payment_success': "✅ پرداخت تایید شد!\n🎉 اشتراک شما فعال شد",
-        'payment_failed': "❌ تایید پرداخت ناموفق!",
-        'payment_timeout': "⏰ زمان تایید به پایان رسید",
-        'send_hash_button': "📤 ارسال هش تراکنش",
-        'enter_tx_hash': "📤 لطفا هش تراکنش خود را ارسال کنید:",
-        'hash_received': "✅ هش شما دریافت شد!\n⏳ تایید تا ۲۴ ساعت",
+        'welcome': "👋 خوش آمدید <b>{first_name}</b>!\n\n🎯 ربات خدمات هوشمند\n📌 دانلود از اینستاگرام، یوتیوب، تیک تاک و خدمات ویژه",
+        'download_instagram': "📥 دانلود از اینستاگرام",
+        'download_youtube': "📥 دانلود از یوتیوب",
+        'download_tiktok': "📥 دانلود از تیک تاک",
+        'job_seeker': "👨‍💼 جویای کار",
+        'employer': "👔 کارفرما",
+        'language': "🌐 زبان",
         'admin_panel': "🛠 پنل مدیریت",
-        'make_paid': "💰 پولی کردن ربات",
-        'make_free': "🆓 رایگان کردن ربات",
-        'broadcast': "📢 ارسال پیام همگانی",
-        'verify_payments': "✅ تایید پرداخت‌ها",
-        'manage_keys': "🔑 مدیریت کلیدهای API",
-        'db_stats': "📊 آمار دیتابیس",
-        'paid_mode': "💰 ربات پولی شد\nکاربران برای ثبت لینک باید اشتراک خریداری کنند",
-        'free_mode': "🆓 ربات رایگان شد\nهمه کاربران می‌توانند لینک ثبت کنند",
-        'stats_info': "📊 **آمار شما:**\n📝 لینک‌های امروز: {links}/{max_links}\n👀 بازدیدهای امروز: {views}/{required}\n👥 رفرال‌ها: {referrals}\n📌 لینک‌های فعال: {active_links}",
-        'no_links_to_view': "✅ شما امروز {count} لینک را بازدید کردید!\n\n📌 لینک‌های جدید هر روز صبح جایگزین می‌شوند.",
-        'interaction_complete': "✅ شما {count} لینک را بازدید کردید!\n🎉 لینک‌های شما در تبادل ثبت شدند",
-        'free_register': "✅ در حالت رایگان، می‌توانید بدون اشتراک لینک ثبت کنید",
-        'payment_manual_review': "📤 هش شما برای بررسی ارسال شد\n⏳ تا ۲۴ ساعت",
-        'key_added': "✅ کلید جدید ثبت شد!",
-        'key_add_failed': "❌ ثبت کلید ناموفق!",
-        'key_list': "📋 **لیست کلیدهای API**",
-        'no_keys': "❌ هیچ کلیدی ثبت نشده است",
-        'copy_code': "📋 کپی کد",
-        'copy_link': "📋 کپی لینک",
-        'referral_challenge': "🏆 **چالش رفرال**\n🎁 جایزه: {reward} USDT\n👥 برندگان: {top_users}\n⏳ زمان باقی‌مانده: {time_left}",
-        'referral_rank': "📊 **رتبه شما**\n👤 شما: {user_ref} رفرال\n🏅 رتبه: #{rank}",
-        'you_won': "🎉 **تبریک! شما برنده شدید!**\n🎁 جایزه: {reward} USDT\n📤 آدرس کیف پول TRC20 خود را ارسال کنید:",
-        'address_received': "✅ آدرس شما دریافت شد!\n💰 مبلغ: {reward} USDT",
-        'reward_sent': "✅ **جایزه واریز شد!**\n💰 مبلغ: {reward} USDT",
-        'challenge_ended': "⏰ **چالش به پایان رسید!**\n🏆 برندگان:\n{winners}",
-        'no_challenge': "❌ چالش فعال نیست",
-        'challenge_started': "🏆 **چالش شروع شد!**\n⏳ مدت: {duration} روز\n🎁 جایزه: {reward} USDT",
-        'challenge_stopped': "⏹️ چالش متوقف شد",
-        'manage_challenge': "🏆 مدیریت چالش",
-        'start_challenge': "▶️ شروع چالش",
-        'stop_challenge': "⏹️ توقف چالش",
-        'challenge_status': "📊 وضعیت چالش",
-        'reward_winners': "💰 اعلام برندگان",
-        'enter_duration': "⏱️ مدت زمان چالش را به روز وارد کنید:",
-        'invalid_duration': "❌ عدد نامعتبر!",
-        'challenge_already_active': "⚠️ چالش در حال حاضر فعال است!",
-        'challenge_not_active': "⚠️ چالش فعال نیست!",
-        'winners_announced': "🏆 **برندگان:**\n{winners}\n🎁 هر کدام {reward} USDT",
-        'no_winners': "❌ هیچ برنده‌ای وجود ندارد!",
-        'reward_paid': "✅ **جایزه به {count} نفر پرداخت شد!**",
-        'challenge_reward_set': "💰 مبلغ جایزه به {amount} USDT تنظیم شد",
-        'challenge_top_users_set': "👥 تعداد برندگان به {count} نفر تنظیم شد",
-        'new_referral_notification': "🎉 رفرال جدید!\n👤 {name}\n📊 تعداد رفرال‌ها: {count}",
-        'boost_info': "🚀 **ضریب بازدید:** {boost}x\n👥 رفرال‌ها: {ref_count}\n💡 از {threshold} رفرال، ضریب افزایش می‌یابد!",
-        'my_links': "📋 لینک‌های من",
-        'delete_link': "🗑️ حذف لینک",
-        'link_deleted': "✅ لینک با موفقیت حذف شد!",
-        'no_links': "❌ شما هیچ لینکی ثبت نکرده‌اید",
-        'admin_links': "📋 مدیریت لینک‌های کاربران",
-        'admin_delete_link': "🗑️ حذف لینک کاربر",
-        'enter_user_id': "🆔 لطفا آیدی کاربر را ارسال کنید:",
-        'enter_link_id': "🔗 لطفا آیدی لینک را ارسال کنید:",
-        'link_admin_deleted': "✅ لینک کاربر با موفقیت حذف شد!",
-        'all_links_viewed': "✅ شما تمام {count} لینک امروز را بازدید کردید!\n🎉 لینک‌های شما در تبادل ثبت شدند",
-        'daily_links_title': "👀 **لینک‌های امروز برای بازدید**\n\n",
-        'view_count': "👀 {views} بازدید",
-        'like_count': "❤️ {likes} لایک",
-        'no_links_available': "❌ در حال حاضر هیچ لینکی برای بازدید وجود ندارد!\n\n📌 لطفا ابتدا لینک خود را ثبت کنید تا لینک‌های دیگران را ببینید."
+        'download_limit': "⚠️ روزانه فقط ۲ دانلود رایگان دارید!\nبرای دانلود بیشتر اشتراک بخرید.",
+        'subscription_required': "❌ برای دانلود بیشتر نیاز به اشتراک دارید.\n💰 اشتراک VIP: ۱۰ دلار در ماه",
+        'subscription_active': "✅ اشتراک شما فعال است!\n📅 تاریخ انقضا: {expiry}",
+        'buy_subscription': "💳 خرید اشتراک VIP",
+        'subscription_price': "💰 قیمت اشتراک: ۱۰ دلار در ماه",
+        'payment_info': "💳 لطفا مبلغ <b>{price} دلار</b> USDT (TRC20) را به آدرس زیر ارسال کنید:\n\n<code>{wallet}</code>\n\n📌 پس از واریز، دکمه زیر را بزنید تا تراکنش به صورت خودکار تایید شود.",
+        'payment_confirmed': "✅ تایید پرداخت دریافت شد!\n⏳ در حال بررسی بلاکچین... (حداکثر ۳۰ دقیقه)",
+        'payment_success': "✅ پرداخت با موفقیت تایید شد!\n🎉 اشتراک شما فعال شد.\n📅 تاریخ انقضا: {expiry}",
+        'payment_failed': "❌ تایید پرداخت ناموفق!\nلطفا دوباره تلاش کنید.",
+        'payment_timeout': "⏰ زمان تایید پرداخت به پایان رسید\nلطفا دوباره تلاش کنید.",
+        'job_list': "📋 **لیست مشاغل موجود:**\n\n{jobs}\n\nلطفاً شماره یا نام شغل مورد نظر را انتخاب کنید.",
+        'job_detail': "📌 **{job_title}**\n\n📝 توضیحات: {description}\n💰 حقوق: {salary}\n📞 تماس: {contact}\n📍 آدرس: {address}\n\n✅ برای ارسال درخواست، دکمه زیر را بزنید.",
+        'apply_job': "📤 ارسال درخواست",
+        'employer_panel': "👔 **پنل کارفرما**\n\n📌 ثبت آگهی استخدام جدید\n📋 لیست آگهی‌های من\n📊 آمار آگهی‌ها",
+        'new_job': "📝 ثبت آگهی جدید",
+        'job_categories': "📂 **دسته‌بندی مشاغل:**\n\n1️⃣ برنامه‌نویسی و فناوری\n2️⃣ طراحی و گرافیک\n3️⃣ بازاریابی و فروش\n4️⃣ مدیریت و کسب‌وکار\n5️⃣ آموزش و تدریس\n6️⃣ خدمات مشتریان\n7️⃣ پزشکی و سلامت\n8️⃣ مهندسی و ساخت\n9️⃣ رستوران و آشپزی\n🔟 خیاطی و نساجی\n1️⃣1️⃣ آرایشگری و زیبایی\n1️⃣2️⃣ تعمیرات و نگهداری\n1️⃣3️⃣ حمل و نقل\n1️⃣4️⃣ کشاورزی و دامپروری\n1️⃣5️⃣ ساختمان و معماری\n1️⃣6️⃣ حقوق و وکالت\n1️⃣7️⃣ حسابداری و مالی\n1️⃣8️⃣ گردشگری و هتلداری\n1️⃣9️⃣ ورزش و تناسب اندام\n2️⃣0️⃣ هنر و سرگرمی",
+        'admin_broadcast': "📢 ارسال پیام همگانی",
+        'admin_delete_user': "🗑️ حذف کاربر",
+        'admin_paid_mode': "💰 پولی کردن ربات",
+        'admin_free_mode': "🆓 رایگان کردن ربات",
+        'admin_verify_hash': "✅ تایید هش کاربران",
+        'admin_add_api': "🔑 اضافه کردن API ترون",
+        'admin_wallet': "💰 تنظیمات کیف پول",
+        'admin_stats': "📊 آمار دیتابیس",
+        'payment_success': "✅ پرداخت با موفقیت تایید شد!",
+        'payment_failed': "❌ تایید پرداخت ناموفق!",
+        'wallet_updated': "✅ آدرس کیف پول با موفقیت به‌روزرسانی شد:\n<code>{wallet}</code>",
+        'price_updated': "✅ قیمت اشتراک با موفقیت به‌روزرسانی شد:\n💰 {price} دلار",
+        'no_active_payments': "❌ هیچ پرداخت فعالی یافت نشد.",
     },
     'en': {
-        'welcome': "👋 Welcome <b>{first_name}</b>!\n\n🎯 YouTube Views & Likes Exchange Bot",
-        'register_link': "📝 Register YouTube Link",
-        'my_stats': "📊 My Stats",
-        'referral': "👥 Referral System",
-        'change_language': "🌐 Change Language",
-        'view_links': "👀 View Links",
-        'register_link_prompt': "📤 Please send your YouTube video link:\n\n⚠️ You can register up to <b>{required_ref}</b> links per day",
-        'link_registered': "✅ Your link has been registered!\n\n📌 Click the button below to view links:",
-        'interaction_prompt': "👀 Today's links to view:\n\n{links}",
-        'link_viewed': "✅ Link viewed and liked!\n🎉 Your view has been recorded",
-        'referral_info': "👥 **Your Referral System**\n\n🔗 **Your Referral Code:**\n<code>{ref_code}</code>\n\n👤 **Referrals:** {ref_count} users\n\n📋 **Invite Link:**\n<code>{ref_link}</code>",
-        'referral_link': "https://t.me/SEGNALF_bot?start={ref_code}",
-        'referral_copied': "✅ Referral code copied!\n\n📋 Code: <code>{ref_code}</code>",
-        'referral_success': "🎉 **Congratulations!**\nYou were invited by <b>{ref_name}</b>!",
-        'referral_not_found': "❌ Invalid referral code",
-        'subscribed': "✅ Your subscription is active until {expiry}",
-        'not_subscribed': "❌ You don't have an active subscription\n💳 Please pay $50 to activate",
-        'payment_info': "💳 Please send <b>$50</b> USDT (TRC20) to:\n\n<code>{wallet}</code>",
-        'enter_source_address': "📤 Please enter your wallet address:",
-        'source_address_saved': "✅ Address saved!\n💳 Please send <b>$50</b> USDT:",
-        'payment_confirmed': "✅ Payment received!\n⏳ Checking...",
-        'payment_success': "✅ Payment verified!\n🎉 Your subscription is active",
-        'payment_failed': "❌ Payment verification failed!",
-        'payment_timeout': "⏰ Payment timeout",
-        'send_hash_button': "📤 Send Transaction Hash",
-        'enter_tx_hash': "📤 Please send your transaction hash:",
-        'hash_received': "✅ Hash received!\n⏳ Verification up to 24h",
+        'welcome': "👋 Welcome <b>{first_name}</b>!\n\n🎯 Smart Services Bot\n📌 Download from Instagram, YouTube, TikTok & Special Services",
+        'download_instagram': "📥 Download from Instagram",
+        'download_youtube': "📥 Download from YouTube",
+        'download_tiktok': "📥 Download from TikTok",
+        'job_seeker': "👨‍💼 Job Seeker",
+        'employer': "👔 Employer",
+        'language': "🌐 Language",
         'admin_panel': "🛠 Admin Panel",
-        'make_paid': "💰 Make Paid",
-        'make_free': "🆓 Make Free",
-        'broadcast': "📢 Broadcast",
-        'verify_payments': "✅ Verify Payments",
-        'manage_keys': "🔑 Manage API Keys",
-        'db_stats': "📊 Database Stats",
-        'paid_mode': "💰 Bot is now paid mode\nUsers need subscription to register links",
-        'free_mode': "🆓 Bot is now free mode\nAll users can register links",
-        'stats_info': "📊 **Your Statistics:**\n📝 Today's links: {links}/{max_links}\n👀 Today's views: {views}/{required}\n👥 Referrals: {referrals}\n📌 Active links: {active_links}",
-        'no_links_to_view': "✅ You have viewed {count} links today!\n\n📌 New links will be available tomorrow.",
-        'interaction_complete': "✅ You viewed {count} links!\n🎉 Your links are registered",
-        'free_register': "✅ In free mode, you can register links without subscription",
-        'payment_manual_review': "📤 Hash sent for review\n⏳ Up to 24 hours",
-        'key_added': "✅ New key added!",
-        'key_add_failed': "❌ Key addition failed!",
-        'key_list': "📋 **API Keys List**",
-        'no_keys': "❌ No keys registered",
-        'copy_code': "📋 Copy Code",
-        'copy_link': "📋 Copy Link",
-        'referral_challenge': "🏆 **Referral Challenge**\n🎁 Prize: {reward} USDT\n👥 Winners: {top_users}\n⏳ Time left: {time_left}",
-        'referral_rank': "📊 **Your Rank**\n👤 You: {user_ref} referrals\n🏅 Rank: #{rank}",
-        'you_won': "🎉 **Congratulations! You won!**\n🎁 Prize: {reward} USDT\n📤 Send your TRC20 wallet address:",
-        'address_received': "✅ Address received!\n💰 Amount: {reward} USDT",
-        'reward_sent': "✅ **Reward sent!**\n💰 Amount: {reward} USDT",
-        'challenge_ended': "⏰ **Challenge ended!**\n🏆 Winners:\n{winners}",
-        'no_challenge': "❌ No active challenge",
-        'challenge_started': "🏆 **Challenge started!**\n⏳ Duration: {duration} days\n🎁 Prize: {reward} USDT",
-        'challenge_stopped': "⏹️ Challenge stopped",
-        'manage_challenge': "🏆 Manage Challenge",
-        'start_challenge': "▶️ Start Challenge",
-        'stop_challenge': "⏹️ Stop Challenge",
-        'challenge_status': "📊 Challenge Status",
-        'reward_winners': "💰 Announce Winners",
-        'enter_duration': "⏱️ Enter challenge duration in days:",
-        'invalid_duration': "❌ Invalid number!",
-        'challenge_already_active': "⚠️ Challenge is already active!",
-        'challenge_not_active': "⚠️ Challenge is not active!",
-        'winners_announced': "🏆 **Winners:**\n{winners}\n🎁 Each gets {reward} USDT",
-        'no_winners': "❌ No winners found!",
-        'reward_paid': "✅ **Reward paid to {count} users!**",
-        'challenge_reward_set': "💰 Prize amount set to {amount} USDT",
-        'challenge_top_users_set': "👥 Winners count set to {count}",
-        'new_referral_notification': "🎉 New referral!\n👤 {name}\n📊 Total referrals: {count}",
-        'boost_info': "🚀 **View Boost:** {boost}x\n👥 Referrals: {ref_count}\n💡 Get {threshold} referrals for more boost!",
-        'my_links': "📋 My Links",
-        'delete_link': "🗑️ Delete Link",
-        'link_deleted': "✅ Link deleted successfully!",
-        'no_links': "❌ You haven't registered any links",
-        'admin_links': "📋 Manage User Links",
-        'admin_delete_link': "🗑️ Delete User Link",
-        'enter_user_id': "🆔 Please enter user ID:",
-        'enter_link_id': "🔗 Please enter link ID:",
-        'link_admin_deleted': "✅ User link deleted successfully!",
-        'all_links_viewed': "✅ You viewed all {count} links today!\n🎉 Your links are registered",
-        'daily_links_title': "👀 **Today's Links to View**\n\n",
-        'view_count': "👀 {views} views",
-        'like_count': "❤️ {likes} likes",
-        'no_links_available': "❌ No links available to view!\n\n📌 Please register your link first to see others' links."
-    },
-    'ar': {
-        'welcome': "👋 مرحباً <b>{first_name}</b>!\n\n🎯 بوت تبادل مشاهدات يوتيوب",
-        'register_link': "📝 تسجيل رابط يوتيوب",
-        'my_stats': "📊 إحصائياتي",
-        'referral': "👥 نظام الإحالة",
-        'change_language': "🌐 تغيير اللغة",
-        'view_links': "👀 عرض الروابط",
-        'register_link_prompt': "📤 الرجاء إرسال رابط فيديو يوتيوب:\n\n⚠️ يمكنك تسجيل <b>{required_ref}</b> رابط في اليوم",
-        'link_registered': "✅ تم تسجيل رابطك!\n\n📌 انقر على الزر أدناه لعرض الروابط:",
-        'interaction_prompt': "👀 روابط اليوم للمشاهدة:\n\n{links}",
-        'link_viewed': "✅ تم مشاهدة الرابط والإعجاب!\n🎉 تم تسجيل مشاهدتك",
-        'referral_info': "👥 **نظام الإحالة الخاص بك**\n\n🔗 **رمز الإحالة:**\n<code>{ref_code}</code>\n\n👤 **الإحالات:** {ref_count} مستخدم\n\n📋 **رابط الدعوة:**\n<code>{ref_link}</code>",
-        'referral_link': "https://t.me/SEGNALF_bot?start={ref_code}",
-        'referral_copied': "✅ تم نسخ رمز الإحالة!\n\n📋 الرمز: <code>{ref_code}</code>",
-        'referral_success': "🎉 **تهانينا!**\nتمت دعوتك بواسطة <b>{ref_name}</b>!",
-        'referral_not_found': "❌ رمز الإحالة غير صالح",
-        'subscribed': "✅ اشتراكك نشط حتى {expiry}",
-        'not_subscribed': "❌ ليس لديك اشتراك نشط\n💳 الرجاء دفع 50 دولاراً",
-        'payment_info': "💳 الرجاء إرسال <b>50 دولار</b> USDT:\n\n<code>{wallet}</code>",
-        'enter_source_address': "📤 الرجاء إدخال عنوان محفظتك:",
-        'source_address_saved': "✅ تم حفظ عنوانك!\n💳 الرجاء إرسال <b>50 دولار</b> USDT:",
-        'payment_confirmed': "✅ تم استلام الدفع!\n⏳ جاري التحقق...",
-        'payment_success': "✅ تم التحقق!\n🎉 اشتراكك نشط",
-        'payment_failed': "❌ فشل التحقق!",
-        'payment_timeout': "⏰ انتهت المهلة",
-        'send_hash_button': "📤 إرسال تجزئة المعاملة",
-        'enter_tx_hash': "📤 الرجاء إرسال تجزئة المعاملة:",
-        'hash_received': "✅ تم استلام التجزئة!\n⏳ التحقق حتى 24 ساعة",
-        'admin_panel': "🛠 لوحة التحكم",
-        'make_paid': "💰 جعل مدفوع",
-        'make_free': "🆓 جعل مجاني",
-        'broadcast': "📢 بث",
-        'verify_payments': "✅ التحقق من المدفوعات",
-        'manage_keys': "🔑 إدارة مفاتيح API",
-        'db_stats': "📊 إحصائيات قاعدة البيانات",
-        'paid_mode': "💰 البوت مدفوع\nيجب على المستخدمين شراء اشتراك لتسجيل الروابط",
-        'free_mode': "🆓 البوت مجاني\nيمكن لجميع المستخدمين تسجيل الروابط",
-        'stats_info': "📊 **إحصائياتك:**\n📝 روابط اليوم: {links}/{max_links}\n👀 مشاهدات اليوم: {views}/{required}\n👥 الإحالات: {referrals}\n📌 الروابط النشطة: {active_links}",
-        'no_links_to_view': "✅ لقد شاهدت {count} روابط اليوم!\n\n📌 روابط جديدة متاحة غداً.",
-        'interaction_complete': "✅ شاهدت {count} روابط!\n🎉 تم تسجيل روابطك",
-        'free_register': "✅ في الوضع المجاني، يمكنك تسجيل الروابط بدون اشتراك",
-        'payment_manual_review': "📤 تم إرسال التجزئة للمراجعة\n⏳ حتى 24 ساعة",
-        'key_added': "✅ تم إضافة المفتاح!",
-        'key_add_failed': "❌ فشلت إضافة المفتاح!",
-        'key_list': "📋 **قائمة مفاتيح API**",
-        'no_keys': "❌ لا توجد مفاتيح مسجلة",
-        'copy_code': "📋 نسخ الرمز",
-        'copy_link': "📋 نسخ الرابط",
-        'referral_challenge': "🏆 **تحدي الإحالة**\n🎁 الجائزة: {reward} USDT\n👥 الفائزون: {top_users}\n⏳ الوقت المتبقي: {time_left}",
-        'referral_rank': "📊 **ترتيبك**\n👤 أنت: {user_ref} إحالات\n🏅 الترتيب: #{rank}",
-        'you_won': "🎉 **تهانينا! لقد فزت!**\n🎁 الجائزة: {reward} USDT\n📤 أرسل عنوان محفظتك TRC20:",
-        'address_received': "✅ تم استلام العنوان!\n💰 المبلغ: {reward} USDT",
-        'reward_sent': "✅ **تم إرسال الجائزة!**\n💰 المبلغ: {reward} USDT",
-        'challenge_ended': "⏰ **انتهى التحدي!**\n🏆 الفائزون:\n{winners}",
-        'no_challenge': "❌ لا يوجد تحدي نشط",
-        'challenge_started': "🏆 **بدأ التحدي!**\n⏳ المدة: {duration} أيام\n🎁 الجائزة: {reward} USDT",
-        'challenge_stopped': "⏹️ تم إيقاف التحدي",
-        'manage_challenge': "🏆 إدارة التحدي",
-        'start_challenge': "▶️ بدء التحدي",
-        'stop_challenge': "⏹️ إيقاف التحدي",
-        'challenge_status': "📊 حالة التحدي",
-        'reward_winners': "💰 الإعلان عن الفائزين",
-        'enter_duration': "⏱️ أدخل مدة التحدي بالأيام:",
-        'invalid_duration': "❌ رقم غير صالح!",
-        'challenge_already_active': "⚠️ التحدي نشط بالفعل!",
-        'challenge_not_active': "⚠️ التحدي غير نشط!",
-        'winners_announced': "🏆 **الفائزون:**\n{winners}\n🎁 كل واحد يحصل على {reward} USDT",
-        'no_winners': "❌ لا يوجد فائزون!",
-        'reward_paid': "✅ **تم دفع الجائزة لـ {count} مستخدم!**",
-        'challenge_reward_set': "💰 تم تعيين مبلغ الجائزة إلى {amount} USDT",
-        'challenge_top_users_set': "👥 تم تعيين عدد الفائزين إلى {count}",
-        'new_referral_notification': "🎉 إحالة جديدة!\n👤 {name}\n📊 إجمالي الإحالات: {count}",
-        'boost_info': "🚀 **مضاعف المشاهدات:** {boost}x\n👥 الإحالات: {ref_count}\n💡 احصل على {threshold} إحالة لمزيد من المضاعف!",
-        'my_links': "📋 روابطي",
-        'delete_link': "🗑️ حذف الرابط",
-        'link_deleted': "✅ تم حذف الرابط بنجاح!",
-        'no_links': "❌ لم تقم بتسجيل أي روابط",
-        'admin_links': "📋 إدارة روابط المستخدمين",
-        'admin_delete_link': "🗑️ حذف رابط المستخدم",
-        'enter_user_id': "🆔 الرجاء إدخال معرف المستخدم:",
-        'enter_link_id': "🔗 الرجاء إدخال معرف الرابط:",
-        'link_admin_deleted': "✅ تم حذف رابط المستخدم بنجاح!",
-        'all_links_viewed': "✅ لقد شاهدت جميع الروابط {count} اليوم!\n🎉 تم تسجيل روابطك",
-        'daily_links_title': "👀 **روابط اليوم للمشاهدة**\n\n",
-        'view_count': "👀 {views} مشاهدة",
-        'like_count': "❤️ {likes} إعجاب",
-        'no_links_available': "❌ لا توجد روابط متاحة للمشاهدة!\n\n📌 يرجى تسجيل رابطك أولاً لمشاهدة روابط الآخرين."
-    },
-    'ru': {
-        'welcome': "👋 Добро пожаловать <b>{first_name}</b>!\n\n🎯 Бот обмена просмотров YouTube",
-        'register_link': "📝 Зарегистрировать ссылку YouTube",
-        'my_stats': "📊 Моя статистика",
-        'referral': "👥 Реферальная система",
-        'change_language': "🌐 Сменить язык",
-        'view_links': "👀 Просмотреть ссылки",
-        'register_link_prompt': "📤 Отправьте ссылку на видео YouTube:\n\n⚠️ Вы можете зарегистрировать <b>{required_ref}</b> ссылки в день",
-        'link_registered': "✅ Ваша ссылка зарегистрирована!\n\n📌 Нажмите кнопку ниже для просмотра ссылок:",
-        'interaction_prompt': "👀 Ссылки на сегодня для просмотра:\n\n{links}",
-        'link_viewed': "✅ Ссылка просмотрена и отлайкана!\n🎉 Ваш просмотр зарегистрирован",
-        'referral_info': "👥 **Ваша реферальная система**\n\n🔗 **Ваш реферальный код:**\n<code>{ref_code}</code>\n\n👤 **Рефералов:** {ref_count} пользователей\n\n📋 **Ссылка для приглашения:**\n<code>{ref_link}</code>",
-        'referral_link': "https://t.me/SEGNALF_bot?start={ref_code}",
-        'referral_copied': "✅ Реферальный код скопирован!\n\n📋 Код: <code>{ref_code}</code>",
-        'referral_success': "🎉 **Поздравляем!**\nВы приглашены <b>{ref_name}</b>!",
-        'referral_not_found': "❌ Неверный реферальный код",
-        'subscribed': "✅ Ваша подписка активна до {expiry}",
-        'not_subscribed': "❌ У вас нет активной подписки\n💳 Пожалуйста, оплатите 50$",
-        'payment_info': "💳 Отправьте <b>50$</b> USDT (TRC20):\n\n<code>{wallet}</code>",
-        'enter_source_address': "📤 Введите адрес вашего кошелька:",
-        'source_address_saved': "✅ Адрес сохранен!\n💳 Отправьте <b>50$</b> USDT:",
-        'payment_confirmed': "✅ Подтверждение оплаты получено!\n⏳ Проверка...",
-        'payment_success': "✅ Платеж подтвержден!\n🎉 Ваша подписка активна",
-        'payment_failed': "❌ Проверка платежа не удалась!",
-        'payment_timeout': "⏰ Время проверки истекло",
-        'send_hash_button': "📤 Отправить хэш транзакции",
-        'enter_tx_hash': "📤 Отправьте хэш вашей транзакции:",
-        'hash_received': "✅ Хэш получен!\n⏳ Проверка до 24 часов",
-        'admin_panel': "🛠 Панель управления",
-        'make_paid': "💰 Сделать платным",
-        'make_free': "🆓 Сделать бесплатным",
-        'broadcast': "📢 Рассылка",
-        'verify_payments': "✅ Проверить платежи",
-        'manage_keys': "🔑 Управление ключами API",
-        'db_stats': "📊 Статистика базы данных",
-        'paid_mode': "💰 Бот в платном режиме\nПользователи должны купить подписку",
-        'free_mode': "🆓 Бот в бесплатном режиме\nВсе пользователи могут регистрировать ссылки",
-        'stats_info': "📊 **Ваша статистика:**\n📝 Ссылок сегодня: {links}/{max_links}\n👀 Просмотров сегодня: {views}/{required}\n👥 Рефералов: {referrals}\n📌 Активных ссылок: {active_links}",
-        'no_links_to_view': "✅ Вы просмотрели {count} ссылок сегодня!\n\n📌 Новые ссылки будут доступны завтра.",
-        'interaction_complete': "✅ Вы просмотрели {count} ссылок!\n🎉 Ваши ссылки зарегистрированы",
-        'free_register': "✅ В бесплатном режиме вы можете регистрировать ссылки без подписки",
-        'payment_manual_review': "📤 Хэш отправлен на проверку\n⏳ До 24 часов",
-        'key_added': "✅ Ключ добавлен!",
-        'key_add_failed': "❌ Ошибка добавления ключа!",
-        'key_list': "📋 **Список ключей API**",
-        'no_keys': "❌ Ключи не зарегистрированы",
-        'copy_code': "📋 Копировать код",
-        'copy_link': "📋 Копировать ссылку",
-        'referral_challenge': "🏆 **Реферальный вызов**\n🎁 Приз: {reward} USDT\n👥 Победителей: {top_users}\n⏳ Осталось: {time_left}",
-        'referral_rank': "📊 **Ваш рейтинг**\n👤 Вы: {user_ref} рефералов\n🏅 Рейтинг: #{rank}",
-        'you_won': "🎉 **Поздравляем! Вы выиграли!**\n🎁 Приз: {reward} USDT\n📤 Отправьте адрес кошелька TRC20:",
-        'address_received': "✅ Адрес получен!\n💰 Сумма: {reward} USDT",
-        'reward_sent': "✅ **Приз отправлен!**\n💰 Сумма: {reward} USDT",
-        'challenge_ended': "⏰ **Вызов завершен!**\n🏆 Победители:\n{winners}",
-        'no_challenge': "❌ Нет активного вызова",
-        'challenge_started': "🏆 **Вызов начался!**\n⏳ Длительность: {duration} дней\n🎁 Приз: {reward} USDT",
-        'challenge_stopped': "⏹️ Вызов остановлен",
-        'manage_challenge': "🏆 Управление вызовом",
-        'start_challenge': "▶️ Начать вызов",
-        'stop_challenge': "⏹️ Остановить вызов",
-        'challenge_status': "📊 Статус вызова",
-        'reward_winners': "💰 Объявить победителей",
-        'enter_duration': "⏱️ Введите длительность вызова в днях:",
-        'invalid_duration': "❌ Неверное число!",
-        'challenge_already_active': "⚠️ Вызов уже активен!",
-        'challenge_not_active': "⚠️ Вызов не активен!",
-        'winners_announced': "🏆 **Победители:**\n{winners}\n🎁 Каждый получает {reward} USDT",
-        'no_winners': "❌ Нет победителей!",
-        'reward_paid': "✅ **Приз выплачен {count} пользователям!**",
-        'challenge_reward_set': "💰 Сумма приза установлена на {amount} USDT",
-        'challenge_top_users_set': "👥 Количество победителей установлено на {count}",
-        'new_referral_notification': "🎉 Новый реферал!\n👤 {name}\n📊 Всего рефералов: {count}",
-        'boost_info': "🚀 **Множитель просмотров:** {boost}x\n👥 Рефералов: {ref_count}\n💡 Получите {threshold} рефералов для увеличения!",
-        'my_links': "📋 Мои ссылки",
-        'delete_link': "🗑️ Удалить ссылку",
-        'link_deleted': "✅ Ссылка удалена!",
-        'no_links': "❌ Вы не зарегистрировали ни одной ссылки",
-        'admin_links': "📋 Управление ссылками пользователей",
-        'admin_delete_link': "🗑️ Удалить ссылку пользователя",
-        'enter_user_id': "🆔 Введите ID пользователя:",
-        'enter_link_id': "🔗 Введите ID ссылки:",
-        'link_admin_deleted': "✅ Ссылка пользователя удалена!",
-        'all_links_viewed': "✅ Вы просмотрели все {count} ссылок сегодня!\n🎉 Ваши ссылки зарегистрированы",
-        'daily_links_title': "👀 **Ссылки на сегодня для просмотра**\n\n",
-        'view_count': "👀 {views} просмотров",
-        'like_count': "❤️ {likes} лайков",
-        'no_links_available': "❌ Нет доступных ссылок для просмотра!\n\n📌 Пожалуйста, сначала зарегистрируйте свою ссылку."
-    },
-    'tr': {
-        'welcome': "👋 Hoş geldin <b>{first_name}</b>!\n\n🎯 YouTube Görüntülenme Takas Botu",
-        'register_link': "📝 YouTube Linki Kaydet",
-        'my_stats': "📊 İstatistiklerim",
-        'referral': "👥 Referans Sistemi",
-        'change_language': "🌐 Dili Değiştir",
-        'view_links': "👀 Linkleri Görüntüle",
-        'register_link_prompt': "📤 YouTube video linkinizi gönderin:\n\n⚠️ Günde <b>{required_ref}</b> link kaydedebilirsiniz",
-        'link_registered': "✅ Linkiniz kaydedildi!\n\n📌 Linkleri görüntülemek için aşağıdaki butona tıklayın:",
-        'interaction_prompt': "👀 Bugün görüntülenecek linkler:\n\n{links}",
-        'link_viewed': "✅ Link görüntülendi ve beğenildi!\n🎉 Görüntülenmeniz kaydedildi",
-        'referral_info': "👥 **Referans Sisteminiz**\n\n🔗 **Referans Kodunuz:**\n<code>{ref_code}</code>\n\n👤 **Referans Sayısı:** {ref_count} kullanıcı\n\n📋 **Davet Linki:**\n<code>{ref_link}</code>",
-        'referral_link': "https://t.me/SEGNALF_bot?start={ref_code}",
-        'referral_copied': "✅ Referans kodu kopyalandı!\n\n📋 Kod: <code>{ref_code}</code>",
-        'referral_success': "🎉 **Tebrikler!**\n<b>{ref_name}</b> tarafından davet edildiniz!",
-        'referral_not_found': "❌ Geçersiz referans kodu",
-        'subscribed': "✅ Aboneliğiniz {expiry} tarihine kadar aktif",
-        'not_subscribed': "❌ Aktif aboneliğiniz yok\n💳 Lütfen 50$ ödeyin",
-        'payment_info': "💳 <b>50$</b> USDT (TRC20) gönderin:\n\n<code>{wallet}</code>",
-        'enter_source_address': "📤 Cüzdan adresinizi girin:",
-        'source_address_saved': "✅ Adres kaydedildi!\n💳 <b>50$</b> USDT gönderin:",
-        'payment_confirmed': "✅ Ödeme alındı!\n⏳ Kontrol ediliyor...",
-        'payment_success': "✅ Ödeme onaylandı!\n🎉 Aboneliğiniz aktif",
-        'payment_failed': "❌ Ödeme doğrulaması başarısız!",
-        'payment_timeout': "⏰ Zaman aşımı",
-        'send_hash_button': "📤 İşlem Hash'i Gönder",
-        'enter_tx_hash': "📤 İşlem hash'inizi gönderin:",
-        'hash_received': "✅ Hash alındı!\n⏳ 24 saate kadar doğrulama",
-        'admin_panel': "🛠 Yönetim Paneli",
-        'make_paid': "💰 Ücretli Yap",
-        'make_free': "🆓 Ücretsiz Yap",
-        'broadcast': "📢 Yayın",
-        'verify_payments': "✅ Ödemeleri Doğrula",
-        'manage_keys': "🔑 API Anahtarlarını Yönet",
-        'db_stats': "📊 Veritabanı İstatistikleri",
-        'paid_mode': "💰 Bot ücretli modda\nKullanıcılar link kaydetmek için abonelik satın almalı",
-        'free_mode': "🆓 Bot ücretsiz modda\nTüm kullanıcılar link kaydedebilir",
-        'stats_info': "📊 **İstatistikleriniz:**\n📝 Bugünkü linkler: {links}/{max_links}\n👀 Bugünkü görüntülenmeler: {views}/{required}\n👥 Referanslar: {referrals}\n📌 Aktif linkler: {active_links}",
-        'no_links_to_view': "✅ Bugün {count} link görüntülediniz!\n\n📌 Yarın yeni linkler gelecek.",
-        'interaction_complete': "✅ {count} link görüntülediniz!\n🎉 Linkleriniz kaydedildi",
-        'free_register': "✅ Ücretsiz modda, aboneliksiz link kaydedebilirsiniz",
-        'payment_manual_review': "📤 Hash gönderildi\n⏳ 24 saate kadar doğrulama",
-        'key_added': "✅ Anahtar eklendi!",
-        'key_add_failed': "❌ Anahtar eklenemedi!",
-        'key_list': "📋 **API Anahtarları Listesi**",
-        'no_keys': "❌ Hiç anahtar kaydedilmedi",
-        'copy_code': "📋 Kodu Kopyala",
-        'copy_link': "📋 Linki Kopyala",
-        'referral_challenge': "🏆 **Referans Yarışması**\n🎁 Ödül: {reward} USDT\n👥 Kazananlar: {top_users}\n⏳ Kalan süre: {time_left}",
-        'referral_rank': "📊 **Sıralamanız**\n👤 Siz: {user_ref} referans\n🏅 Sıra: #{rank}",
-        'you_won': "🎉 **Tebrikler! Kazandınız!**\n🎁 Ödül: {reward} USDT\n📤 TRC20 cüzdan adresinizi gönderin:",
-        'address_received': "✅ Adres alındı!\n💰 Miktar: {reward} USDT",
-        'reward_sent': "✅ **Ödül gönderildi!**\n💰 Miktar: {reward} USDT",
-        'challenge_ended': "⏰ **Yarışma sona erdi!**\n🏆 Kazananlar:\n{winners}",
-        'no_challenge': "❌ Aktif yarışma yok",
-        'challenge_started': "🏆 **Yarışma başladı!**\n⏳ Süre: {duration} gün\n🎁 Ödül: {reward} USDT",
-        'challenge_stopped': "⏹️ Yarışma durduruldu",
-        'manage_challenge': "🏆 Yarışmayı Yönet",
-        'start_challenge': "▶️ Yarışmayı Başlat",
-        'stop_challenge': "⏹️ Yarışmayı Durdur",
-        'challenge_status': "📊 Yarışma Durumu",
-        'reward_winners': "💰 Kazananları Duyur",
-        'enter_duration': "⏱️ Yarışma süresini gün olarak girin:",
-        'invalid_duration': "❌ Geçersiz sayı!",
-        'challenge_already_active': "⚠️ Yarışma zaten aktif!",
-        'challenge_not_active': "⚠️ Yarışma aktif değil!",
-        'winners_announced': "🏆 **Kazananlar:**\n{winners}\n🎁 Her biri {reward} USDT alır",
-        'no_winners': "❌ Kazanan bulunamadı!",
-        'reward_paid': "✅ **Ödül {count} kullanıcıya ödendi!**",
-        'challenge_reward_set': "💰 Ödül miktarı {amount} USDT olarak ayarlandı",
-        'challenge_top_users_set': "👥 Kazanan sayısı {count} olarak ayarlandı",
-        'new_referral_notification': "🎉 Yeni referans!\n👤 {name}\n📊 Toplam referans: {count}",
-        'boost_info': "🚀 **Görüntülenme Çarpanı:** {boost}x\n👥 Referanslar: {ref_count}\n💡 {threshold} referans için daha fazla çarpan!",
-        'my_links': "📋 Linklerim",
-        'delete_link': "🗑️ Linki Sil",
-        'link_deleted': "✅ Link başarıyla silindi!",
-        'no_links': "❌ Hiç link kaydetmediniz",
-        'admin_links': "📋 Kullanıcı Linklerini Yönet",
-        'admin_delete_link': "🗑️ Kullanıcı Linkini Sil",
-        'enter_user_id': "🆔 Kullanıcı ID'sini girin:",
-        'enter_link_id': "🔗 Link ID'sini girin:",
-        'link_admin_deleted': "✅ Kullanıcı linki silindi!",
-        'all_links_viewed': "✅ Bugün {count} linkin tamamını görüntülediniz!\n🎉 Linkleriniz kaydedildi",
-        'daily_links_title': "👀 **Bugün Görüntülenecek Linkler**\n\n",
-        'view_count': "👀 {views} görüntülenme",
-        'like_count': "❤️ {likes} beğeni",
-        'no_links_available': "❌ Görüntülenecek link yok!\n\n📌 Lütfen önce linkinizi kaydedin."
+        'download_limit': "⚠️ Only 2 free downloads per day!\nBuy subscription for more.",
+        'subscription_required': "❌ Subscription required for more downloads.\n💰 VIP Subscription: $10/month",
+        'subscription_active': "✅ Your subscription is active!\n📅 Expiry: {expiry}",
+        'buy_subscription': "💳 Buy VIP Subscription",
+        'subscription_price': "💰 Subscription Price: $10/month",
+        'payment_info': "💳 Please send <b>{price} USDT</b> (TRC20) to this address:\n\n<code>{wallet}</code>\n\n📌 After payment, click the button below for automatic verification.",
+        'payment_confirmed': "✅ Payment confirmation received!\n⏳ Checking blockchain... (max 30 minutes)",
+        'payment_success': "✅ Payment verified successfully!\n🎉 Your subscription is active.\n📅 Expiry: {expiry}",
+        'payment_failed': "❌ Payment verification failed!\nPlease try again.",
+        'payment_timeout': "⏰ Payment verification timeout.\nPlease try again.",
+        'job_list': "📋 **Available Jobs:**\n\n{jobs}\n\nPlease select job number or name.",
+        'job_detail': "📌 **{job_title}**\n\n📝 Description: {description}\n💰 Salary: {salary}\n📞 Contact: {contact}\n📍 Address: {address}\n\n✅ Click below to apply.",
+        'apply_job': "📤 Apply Now",
+        'employer_panel': "👔 **Employer Panel**\n\n📌 Post New Job\n📋 My Job Listings\n📊 Job Statistics",
+        'new_job': "📝 Post New Job",
+        'job_categories': "📂 **Job Categories:**\n\n1️⃣ Programming & Tech\n2️⃣ Design & Graphics\n3️⃣ Marketing & Sales\n4️⃣ Management & Business\n5️⃣ Education & Teaching\n6️⃣ Customer Service\n7️⃣ Medical & Health\n8️⃣ Engineering & Manufacturing\n9️⃣ Restaurant & Culinary\n🔟 Tailoring & Textile\n1️⃣1️⃣ Beauty & Hairdressing\n1️⃣2️⃣ Repair & Maintenance\n1️⃣3️⃣ Transportation\n1️⃣4️⃣ Agriculture & Farming\n1️⃣5️⃣ Construction & Architecture\n1️⃣6️⃣ Law & Legal\n1️⃣7️⃣ Accounting & Finance\n1️⃣8️⃣ Tourism & Hospitality\n1️⃣9️⃣ Sports & Fitness\n2️⃣0️⃣ Arts & Entertainment",
+        'admin_broadcast': "📢 Broadcast Message",
+        'admin_delete_user': "🗑️ Delete User",
+        'admin_paid_mode': "💰 Make Paid",
+        'admin_free_mode': "🆓 Make Free",
+        'admin_verify_hash': "✅ Verify User Hashes",
+        'admin_add_api': "🔑 Add Tron API",
+        'admin_wallet': "💰 Wallet Settings",
+        'admin_stats': "📊 Database Stats",
+        'payment_success': "✅ Payment verified successfully!",
+        'payment_failed': "❌ Payment verification failed!",
+        'wallet_updated': "✅ Wallet address updated successfully:\n<code>{wallet}</code>",
+        'price_updated': "✅ Subscription price updated successfully:\n💰 {price} USDT",
+        'no_active_payments': "❌ No active payments found.",
     }
 }
 
-# ==================== کش فوق‌مقیاس ====================
+
+# ==================== کش فوق‌مقیاس با ۱۰۰۰ شارد ====================
 class DistributedUltraCache:
-    __slots__ = ('shard_count', 'shards', 'shard_locks', 'max_size_per_shard', 'ttl', 'hits', 'misses', 'evictions')
-    
     def __init__(self, max_size=10_000_000, ttl_seconds=600, shard_count=1000):
         self.shard_count = shard_count
         self.shards = [OrderedDict() for _ in range(shard_count)]
@@ -540,7 +162,7 @@ class DistributedUltraCache:
         self.misses = 0
         self.evictions = 0
         
-        logger.info(f"🚀 کش با {shard_count} شارد راه‌اندازی شد")
+        logger.info(f"🚀 کش فوق‌مقیاس با {shard_count} شارد راه‌اندازی شد")
     
     def _get_shard(self, key: str) -> int:
         return zlib.crc32(key.encode()) % self.shard_count
@@ -596,10 +218,175 @@ class DistributedUltraCache:
             'ttl': self.ttl
         }
 
-# ==================== دیتابیس فوق‌مقیاس ====================
-class UltraScalableDatabase:
-    __slots__ = ('db_path', 'shard_count', 'cache', 'shard_paths')
+
+# ==================== مدیریت API ترون ====================
+class TronAPIManager:
+    def __init__(self, api_keys: List[str]):
+        self.api_keys = api_keys
+        self.key_stats = {}
+        self.lock = asyncio.Lock()
+        self.cache = DistributedUltraCache(max_size=100000, ttl_seconds=300, shard_count=50)
+        
+        for key in api_keys:
+            self.key_stats[key] = {
+                'requests': 0,
+                'errors': 0,
+                'success': 0,
+                'active': True,
+                'last_used': 0,
+                'cooldown_until': 0,
+                'consecutive_errors': 0
+            }
     
+    async def get_best_key(self) -> Tuple[str, Dict]:
+        async with self.lock:
+            current_time = time.time()
+            available_keys = []
+            
+            for key in self.api_keys:
+                stats = self.key_stats[key]
+                if not stats['active'] or current_time < stats['cooldown_until']:
+                    continue
+                available_keys.append((stats['requests'] - stats['success'], key, stats))
+            
+            if not available_keys:
+                return self.api_keys[0], self.key_stats[self.api_keys[0]]
+            
+            available_keys.sort(key=lambda x: x[0])
+            best_key = available_keys[0][1]
+            best_stats = available_keys[0][2]
+            best_stats['requests'] += 1
+            best_stats['last_used'] = current_time
+            
+            return best_key, best_stats
+    
+    async def report_success(self, api_key: str):
+        async with self.lock:
+            if api_key in self.key_stats:
+                self.key_stats[api_key]['success'] += 1
+                self.key_stats[api_key]['consecutive_errors'] = 0
+    
+    async def report_error(self, api_key: str):
+        async with self.lock:
+            if api_key in self.key_stats:
+                self.key_stats[api_key]['errors'] += 1
+                self.key_stats[api_key]['consecutive_errors'] += 1
+                if self.key_stats[api_key]['consecutive_errors'] > 5:
+                    self.key_stats[api_key]['cooldown_until'] = time.time() + 120
+    
+    async def add_api_key(self, new_key: str) -> bool:
+        async with self.lock:
+            if new_key in self.api_keys:
+                return False
+            self.api_keys.append(new_key)
+            self.key_stats[new_key] = {
+                'requests': 0,
+                'errors': 0,
+                'success': 0,
+                'active': True,
+                'last_used': 0,
+                'cooldown_until': 0,
+                'consecutive_errors': 0
+            }
+            return True
+    
+    async def remove_api_key(self, api_key: str) -> bool:
+        async with self.lock:
+            if api_key in self.api_keys:
+                self.api_keys.remove(api_key)
+                del self.key_stats[api_key]
+                return True
+            return False
+    
+    async def toggle_api_key(self, api_key: str) -> bool:
+        async with self.lock:
+            if api_key in self.key_stats:
+                self.key_stats[api_key]['active'] = not self.key_stats[api_key]['active']
+                return True
+            return False
+
+
+# ==================== کلاس پرداخت ترون ====================
+class TronPaymentProcessor:
+    def __init__(self, api_keys: List[str], owner_wallet: str):
+        self.api_manager = TronAPIManager(api_keys)
+        self.owner_wallet = owner_wallet
+        self.base_url = TRON_API_URL
+        self.sessions = {}
+        self.cache = DistributedUltraCache(max_size=100000, ttl_seconds=300, shard_count=50)
+    
+    async def get_session(self, api_key: str):
+        if api_key not in self.sessions:
+            self.sessions[api_key] = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=30),
+                headers={"TRON-PRO-API-KEY": api_key}
+            )
+        return self.sessions[api_key]
+    
+    async def verify_transaction(self, tx_hash: str, user_id: int, amount: float) -> bool:
+        cache_key = f"tx_{tx_hash}"
+        cached = await self.cache.get(cache_key)
+        if cached is not None:
+            return cached
+        
+        for attempt in range(5):
+            try:
+                api_key, stats = await self.api_manager.get_best_key()
+                if not api_key:
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                
+                start_time = time.time()
+                session = await self.get_session(api_key)
+                url = f"{self.base_url}/v1/transactions/{tx_hash}"
+                
+                async with session.get(url) as response:
+                    if response.status == 429:
+                        await self.api_manager.report_error(api_key)
+                        await asyncio.sleep(min(2 ** attempt * 5, 60))
+                        continue
+                    if response.status != 200:
+                        await self.api_manager.report_error(api_key)
+                        continue
+                    
+                    data = await response.json()
+                    if not data.get('data'):
+                        await self.cache.set(cache_key, False, ttl=300)
+                        return False
+                    
+                    tx_data = data['data'][0]
+                    contracts = tx_data.get('raw_data', {}).get('contract', [])
+                    
+                    for contract in contracts:
+                        value = contract.get('parameter', {}).get('value', {})
+                        to_address = value.get('to_address')
+                        
+                        if to_address and to_address == self.owner_wallet:
+                            tx_amount = value.get('amount', 0) / 1e6
+                            if tx_amount >= amount - 1:
+                                await self.api_manager.report_success(api_key)
+                                await self.cache.set(cache_key, True, ttl=3600)
+                                return True
+                    
+                    await self.cache.set(cache_key, False, ttl=300)
+                    return False
+                    
+            except Exception as e:
+                logger.error(f"خطا در بررسی تراکنش (تلاش {attempt+1}): {e}")
+                await self.api_manager.report_error(api_key if 'api_key' in locals() else None)
+                await asyncio.sleep(2 ** attempt)
+        
+        await self.cache.set(cache_key, False, ttl=60)
+        return False
+    
+    async def close(self):
+        for session in self.sessions.values():
+            await session.close()
+        self.sessions.clear()
+
+
+# ==================== دیتابیس فوق‌مقیاس با ۱۰۰۰ شارد ====================
+class UltraScalableDatabase:
     def __init__(self, db_path="bot_database.db", shard_count=1000):
         self.db_path = db_path
         self.shard_count = shard_count
@@ -613,7 +400,7 @@ class UltraScalableDatabase:
             self.shard_paths.append(shard_path)
         
         self._init_all_shards()
-        logger.info(f"🗄️ دیتابیس با {shard_count} شارد راه‌اندازی شد")
+        logger.info(f"🗄️ دیتابیس فوق‌مقیاس با {shard_count} شارد راه‌اندازی شد")
     
     def _get_shard(self, user_id: int) -> int:
         return abs(user_id) % self.shard_count
@@ -638,6 +425,7 @@ class UltraScalableDatabase:
             
             cursor = conn.cursor()
             
+            # ===== جدول کاربران =====
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     user_id INTEGER PRIMARY KEY,
@@ -645,96 +433,84 @@ class UltraScalableDatabase:
                     first_name TEXT,
                     last_name TEXT,
                     language TEXT DEFAULT 'fa',
-                    referral_code TEXT UNIQUE,
-                    referred_by INTEGER,
                     is_subscribed INTEGER DEFAULT 0,
                     subscription_expiry TEXT,
+                    daily_instagram_downloads INTEGER DEFAULT 0,
+                    daily_youtube_downloads INTEGER DEFAULT 0,
+                    daily_tiktok_downloads INTEGER DEFAULT 0,
+                    last_download_date TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    is_employer INTEGER DEFAULT 0,
+                    is_admin INTEGER DEFAULT 0,
+                    balance REAL DEFAULT 0,
                     wallet_address TEXT,
-                    daily_link_count INTEGER DEFAULT 0,
-                    last_link_date TEXT,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    payment_address TEXT,
-                    referral_reward_address TEXT,
-                    referral_reward_received INTEGER DEFAULT 0,
-                    last_active TEXT DEFAULT CURRENT_TIMESTAMP,
+                    referral_code TEXT UNIQUE,
+                    referred_by INTEGER,
                     total_referrals INTEGER DEFAULT 0,
-                    daily_views INTEGER DEFAULT 0,
-                    last_view_date TEXT
+                    last_active TEXT DEFAULT CURRENT_TIMESTAMP
                 )
             """)
             
+            # ===== جدول آگهی‌های استخدام =====
             cursor.execute("""
-                CREATE TABLE IF NOT EXISTS youtube_links (
+                CREATE TABLE IF NOT EXISTS job_posts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER,
-                    video_url TEXT UNIQUE,
-                    video_id TEXT,
-                    views_count INTEGER DEFAULT 0,
-                    likes_count INTEGER DEFAULT 0,
-                    daily_views INTEGER DEFAULT 0,
-                    daily_likes INTEGER DEFAULT 0,
-                    last_interaction_date TEXT,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    employer_id INTEGER,
+                    category TEXT,
+                    title TEXT,
+                    description TEXT,
+                    salary TEXT,
+                    contact TEXT,
+                    address TEXT,
                     is_active INTEGER DEFAULT 1,
-                    boost_multiplier INTEGER DEFAULT 1,
-                    view_priority INTEGER DEFAULT 0,
-                    today_views INTEGER DEFAULT 0,
-                    today_likes INTEGER DEFAULT 0
+                    views INTEGER DEFAULT 0,
+                    applications INTEGER DEFAULT 0,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    expires_at TEXT
                 )
             """)
             
+            # ===== جدول درخواست‌های شغلی =====
             cursor.execute("""
-                CREATE TABLE IF NOT EXISTS interactions (
+                CREATE TABLE IF NOT EXISTS job_applications (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    from_user INTEGER,
-                    to_link_id INTEGER,
-                    type TEXT CHECK(type IN ('view', 'like')),
+                    job_id INTEGER,
+                    applicant_id INTEGER,
+                    message TEXT,
+                    status TEXT DEFAULT 'pending',
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
             """)
             
+            # ===== جدول دانلودها =====
             cursor.execute("""
-                CREATE TABLE IF NOT EXISTS link_distribution (
+                CREATE TABLE IF NOT EXISTS downloads (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER,
-                    link_id INTEGER,
-                    assigned_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    viewed INTEGER DEFAULT 0,
-                    liked INTEGER DEFAULT 0,
-                    view_date TEXT DEFAULT CURRENT_DATE
+                    platform TEXT,
+                    url TEXT,
+                    file_path TEXT,
+                    file_size INTEGER,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
             """)
             
+            # ===== جدول تراکنش‌های پرداخت =====
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS transactions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER,
                     tx_hash TEXT UNIQUE,
-                    from_address TEXT,
                     amount REAL,
                     status TEXT DEFAULT 'pending',
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     verified_at TEXT,
                     payment_timeout TEXT,
-                    manual_review INTEGER DEFAULT 0,
-                    is_reward INTEGER DEFAULT 0
+                    is_subscription INTEGER DEFAULT 1
                 )
             """)
             
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS api_keys (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    key_value TEXT UNIQUE,
-                    is_active INTEGER DEFAULT 1,
-                    added_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    last_used TEXT,
-                    requests_count INTEGER DEFAULT 0,
-                    error_count INTEGER DEFAULT 0,
-                    notes TEXT
-                )
-            """)
-            
+            # ===== جدول سیستم =====
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS system_settings (
                     key TEXT PRIMARY KEY,
@@ -743,58 +519,22 @@ class UltraScalableDatabase:
                 )
             """)
             
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS referral_challenge (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    is_active INTEGER DEFAULT 0,
-                    start_date TEXT,
-                    end_date TEXT,
-                    reward_amount INTEGER DEFAULT 100,
-                    top_users INTEGER DEFAULT 10,
-                    winners_declared INTEGER DEFAULT 0,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS referral_challenge_winners (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER,
-                    referral_count INTEGER,
-                    reward_amount INTEGER,
-                    wallet_address TEXT,
-                    paid INTEGER DEFAULT 0,
-                    paid_at TEXT,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            
+            # ===== تنظیمات اولیه سیستم =====
             cursor.execute("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('is_paid', '0')")
-            cursor.execute("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('challenge_active', '0')")
-            cursor.execute("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('challenge_end_date', '')")
-            cursor.execute("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('challenge_reward', '100')")
-            cursor.execute("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('challenge_top_users', '10')")
-            cursor.execute("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('challenge_duration', '7')")
+            cursor.execute("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('download_limit', '2')")
+            cursor.execute("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('owner_wallet', ?)", (OWNER_WALLET,))
+            cursor.execute("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('subscription_price', '10')")
             
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_ref_code ON users(referral_code)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_referred_by ON users(referred_by)")
+            # ===== ایندکس‌ها برای عملکرد بالا =====
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_subscription ON users(is_subscribed, subscription_expiry)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_links_user ON youtube_links(user_id, created_at)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_links_video_id ON youtube_links(video_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_jobs_category ON job_posts(category)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_jobs_active ON job_posts(is_active)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_applications_job ON job_applications(job_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_applications_user ON job_applications(applicant_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_downloads_user ON downloads(user_id, created_at)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions(status, created_at)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_active ON users(last_active)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_winners_user ON referral_challenge_winners(user_id)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_winners_paid ON referral_challenge_winners(paid)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_distribution_user ON link_distribution(user_id)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_distribution_link ON link_distribution(link_id)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_interactions_from ON interactions(from_user)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_interactions_to ON interactions(to_link_id)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_total_ref ON users(total_referrals)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_links_priority ON youtube_links(view_priority, views_count)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_daily_views ON users(daily_views, last_view_date)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_links_today ON youtube_links(today_views, today_likes)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_links_active ON youtube_links(is_active, user_id)")
             
             conn.commit()
     
@@ -821,18 +561,7 @@ class UltraScalableDatabase:
         finally:
             conn.close()
     
-    def get_boost_multiplier(self, referral_count: int) -> int:
-        if referral_count >= REFERRAL_BOOST_THRESHOLD * 10:
-            return REFERRAL_BOOST_MULTIPLIER * 5
-        elif referral_count >= REFERRAL_BOOST_THRESHOLD * 5:
-            return REFERRAL_BOOST_MULTIPLIER * 3
-        elif referral_count >= REFERRAL_BOOST_THRESHOLD * 2:
-            return REFERRAL_BOOST_MULTIPLIER * 2
-        elif referral_count >= REFERRAL_BOOST_THRESHOLD:
-            return REFERRAL_BOOST_MULTIPLIER
-        else:
-            return 1
-    
+    # ===== متدهای کاربران =====
     async def get_user(self, user_id: int) -> Optional[Dict]:
         cache_key = f"user_{user_id}"
         cached = await self.cache.get(cache_key)
@@ -862,613 +591,253 @@ class UltraScalableDatabase:
             conn.commit()
             
             await self.cache.delete(f"user_{user_id}")
-            await self.cache.delete(f"ref_count_{user_id}")
             
             if referred_by:
-                await self.cache.delete(f"ref_count_{referred_by}")
                 await self.cache.delete(f"user_{referred_by}")
-                
-                async with self.get_connection(referred_by) as conn2:
-                    cursor2 = conn2.cursor()
-                    cursor2.execute("SELECT COUNT(*) as count FROM users WHERE referred_by = ?", (referred_by,))
-                    new_count = cursor2.fetchone()['count']
-                    await self.cache.set(f"ref_count_{referred_by}", new_count, ttl=120)
-                    
-                    cursor2.execute("UPDATE users SET total_referrals = ? WHERE user_id = ?", (new_count, referred_by))
-                    conn2.commit()
         
         return await self.get_user(user_id)
-    
-    async def get_user_referrals_count(self, user_id: int) -> int:
-        cache_key = f"ref_count_{user_id}"
-        cached = await self.cache.get(cache_key)
-        if cached is not None:
-            return cached
-        
-        async with self.get_connection(user_id) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) as count FROM users WHERE referred_by = ?", (user_id,))
-            count = cursor.fetchone()['count']
-            await self.cache.set(cache_key, count, ttl=120)
-            return count
-    
-    async def get_user_by_referral_code(self, referral_code: str) -> Optional[Dict]:
-        cache_key = f"ref_user_{referral_code}"
-        cached = await self.cache.get(cache_key)
-        if cached:
-            return cached
-        
-        for shard_idx in range(self.shard_count):
-            shard_path = self._get_shard_path(shard_idx)
-            try:
-                with sqlite3.connect(shard_path, timeout=10) as conn:
-                    conn.row_factory = sqlite3.Row
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT user_id, first_name FROM users WHERE referral_code = ?", (referral_code,))
-                    row = cursor.fetchone()
-                    if row:
-                        user = dict(row)
-                        await self.cache.set(cache_key, user, ttl=3600)
-                        return user
-            except:
-                pass
-        return None
     
     async def update_user_language(self, user_id: int, language: str):
         async with self.get_connection(user_id) as conn:
             cursor = conn.cursor()
-            cursor.execute("UPDATE users SET language = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?", (language, user_id))
+            cursor.execute("UPDATE users SET language = ? WHERE user_id = ?", (language, user_id))
             conn.commit()
             await self.cache.delete(f"user_{user_id}")
     
-    async def update_user_subscription(self, user_id: int, months: int = 1):
+    async def update_subscription(self, user_id: int, months: int = 1):
         expiry = datetime.now() + timedelta(days=30*months)
         async with self.get_connection(user_id) as conn:
             cursor = conn.cursor()
-            cursor.execute("UPDATE users SET is_subscribed = 1, subscription_expiry = ? WHERE user_id = ?", (expiry.isoformat(), user_id))
+            cursor.execute("UPDATE users SET is_subscribed = 1, subscription_expiry = ? WHERE user_id = ?", 
+                         (expiry.isoformat(), user_id))
             conn.commit()
             await self.cache.delete(f"user_{user_id}")
     
-    async def set_user_payment_address(self, user_id: int, address: str):
-        async with self.get_connection(user_id) as conn:
-            cursor = conn.cursor()
-            cursor.execute("UPDATE users SET payment_address = ? WHERE user_id = ?", (address, user_id))
-            conn.commit()
-            await self.cache.delete(f"user_{user_id}")
-    
-    async def set_user_reward_address(self, user_id: int, address: str):
-        async with self.get_connection(user_id) as conn:
-            cursor = conn.cursor()
-            cursor.execute("UPDATE users SET referral_reward_address = ? WHERE user_id = ?", (address, user_id))
-            conn.commit()
-            await self.cache.delete(f"user_{user_id}")
-    
-    async def mark_reward_received(self, user_id: int):
-        async with self.get_connection(user_id) as conn:
-            cursor = conn.cursor()
-            cursor.execute("UPDATE users SET referral_reward_received = 1 WHERE user_id = ?", (user_id,))
-            conn.commit()
-            await self.cache.delete(f"user_{user_id}")
-    
-    def _extract_video_id(self, url: str) -> Optional[str]:
-        patterns = [
-            r'(?:youtube\.com\/watch\?v=)([\w-]+)',
-            r'(?:youtu\.be\/)([\w-]+)',
-            r'(?:youtube\.com\/embed\/)([\w-]+)',
-            r'(?:youtube\.com\/shorts\/)([\w-]+)'
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, url)
-            if match:
-                return match.group(1)
-        return None
-    
-    async def add_youtube_link(self, user_id: int, video_url: str) -> Tuple[bool, str]:
-        video_id = self._extract_video_id(video_url)
-        if not video_id:
-            return False, "لینک یوتیوب نامعتبر است"
+    async def check_subscription(self, user_id: int) -> bool:
+        user = await self.get_user(user_id)
+        if not user:
+            return False
         
-        cache_key = f"video_{video_id}"
-        cached = await self.cache.get(cache_key)
-        if cached:
-            return False, "این ویدیو قبلاً ثبت شده است"
+        if not user.get('is_subscribed'):
+            return False
         
-        async with self.get_connection(user_id) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT id FROM youtube_links WHERE video_id = ?", (video_id,))
-            if cursor.fetchone():
-                await self.cache.set(cache_key, True, ttl=3600)
-                return False, "این ویدیو قبلاً ثبت شده است"
-        
-        today = datetime.now().date().isoformat()
-        async with self.get_connection(user_id) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) as count FROM youtube_links WHERE user_id = ? AND DATE(created_at) = ?", (user_id, today))
-            result = cursor.fetchone()
-            if result['count'] >= MAX_YOUTUBE_LINKS_PER_DAY:
-                return False, f"امروز بیش از حد مجاز ({MAX_YOUTUBE_LINKS_PER_DAY}) لینک ثبت کرده‌اید"
-            
-            ref_count = await self.get_user_referrals_count(user_id)
-            boost = self.get_boost_multiplier(ref_count)
-            
-            cursor.execute("""
-                INSERT INTO youtube_links (user_id, video_url, video_id, boost_multiplier)
-                VALUES (?, ?, ?, ?)
-            """, (user_id, video_url, video_id, boost))
-            conn.commit()
-            await self.cache.set(cache_key, True, ttl=3600)
-            return True, f"لینک با موفقیت ثبت شد! ضریب بازدید: {boost}x"
-    
-    async def get_user_links(self, user_id: int, limit: int = 10) -> List[Dict]:
-        cache_key = f"user_links_{user_id}_{limit}"
-        cached = await self.cache.get(cache_key)
-        if cached:
-            return cached
-        
-        async with self.get_connection(user_id) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT * FROM youtube_links 
-                WHERE user_id = ? AND is_active = 1 
-                ORDER BY created_at DESC LIMIT ?
-            """, (user_id, limit))
-            links = [dict(row) for row in cursor.fetchall()]
-            await self.cache.set(cache_key, links, ttl=300)
-            return links
-    
-    async def get_all_links_count(self) -> int:
-        total = 0
-        for shard_idx in range(self.shard_count):
-            shard_path = self._get_shard_path(shard_idx)
-            try:
-                with sqlite3.connect(shard_path, timeout=5) as conn:
-                    conn.row_factory = sqlite3.Row
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT COUNT(*) as count FROM youtube_links WHERE is_active = 1")
-                    total += cursor.fetchone()['count']
-            except:
-                pass
-        return total
-    
-    async def get_daily_links_for_user(self, user_id: int, count: int = DAILY_INTERACTIONS_REQUIRED) -> List[Dict]:
-        """دریافت لینک‌های روزانه برای کاربر - لینک‌های کاربران دیگه رو نمایش میده"""
-        today = datetime.now().date().isoformat()
-        cache_key = f"daily_links_{user_id}_{today}"
-        cached = await self.cache.get(cache_key)
-        if cached:
-            return cached
-        
-        async with self.get_connection(user_id) as conn:
-            cursor = conn.cursor()
-            
-            # ===== اول بررسی کن که کاربر خودش لینک ثبت کرده یا نه =====
-            cursor.execute("""
-                SELECT COUNT(*) as count FROM youtube_links 
-                WHERE user_id = ? AND is_active = 1
-            """, (user_id,))
-            user_links_count = cursor.fetchone()['count']
-            
-            if user_links_count == 0:
-                # ===== کاربر لینکی ثبت نکرده → هیچ لینکی نمایش نده =====
-                await self.cache.set(cache_key, [], ttl=300)
-                return []
-            
-            # ===== دریافت لینک‌های فعال از کاربران دیگه =====
-            cursor.execute("""
-                SELECT yl.*, u.username, u.first_name,
-                       (SELECT COUNT(*) FROM link_distribution 
-                        WHERE link_id = yl.id AND DATE(view_date) = ? AND viewed = 1) as today_views
-                FROM youtube_links yl
-                JOIN users u ON yl.user_id = u.user_id
-                WHERE yl.user_id != ? 
-                  AND yl.is_active = 1
-                  AND yl.id NOT IN (
-                      SELECT link_id FROM link_distribution 
-                      WHERE user_id = ? AND DATE(view_date) = ?
-                  )
-                  AND EXISTS (
-                      SELECT 1 FROM youtube_links 
-                      WHERE user_id = yl.user_id AND is_active = 1
-                  )
-                ORDER BY 
-                    today_views ASC,
-                    yl.views_count ASC,
-                    yl.created_at ASC
-                LIMIT ?
-            """, (today, user_id, user_id, today, count * 3))
-            
-            links = [dict(row) for row in cursor.fetchall()]
-            selected_links = []
-            used_users = set()
-            
-            for link in links:
-                if link['user_id'] not in used_users and len(selected_links) < count:
-                    selected_links.append(link)
-                    used_users.add(link['user_id'])
-            
-            # ===== اگر لینک کافی نبود، از بقیه بگیر (تکراری مجاز) =====
-            if len(selected_links) < count:
-                cursor.execute("""
-                    SELECT yl.*, u.username, u.first_name, 999999 as today_views
-                    FROM youtube_links yl
-                    JOIN users u ON yl.user_id = u.user_id
-                    WHERE yl.user_id != ? 
-                      AND yl.is_active = 1
-                      AND yl.id NOT IN (SELECT link_id FROM link_distribution WHERE user_id = ? AND DATE(view_date) = ?)
-                    ORDER BY yl.views_count ASC, yl.created_at ASC
-                    LIMIT ?
-                """, (user_id, user_id, today, count - len(selected_links)))
-                
-                for row in cursor.fetchall():
-                    if len(selected_links) < count:
-                        selected_links.append(dict(row))
-                        used_users.add(row['user_id'])
-            
-            # ===== ثبت توزیع =====
-            for link in selected_links:
-                cursor.execute("""
-                    INSERT OR IGNORE INTO link_distribution (user_id, link_id, view_date)
-                    VALUES (?, ?, ?)
-                """, (user_id, link['id'], today))
-            
-            conn.commit()
-            await self.cache.set(cache_key, selected_links, ttl=3600)
-            return selected_links
-    
-    async def mark_link_viewed(self, user_id: int, link_id: int):
-        """ثبت بازدید کاربر از لینک"""
-        today = datetime.now().date().isoformat()
-        
-        async with self.get_connection(user_id) as conn:
-            cursor = conn.cursor()
-            
-            # ===== بروزرسانی توزیع =====
-            cursor.execute("""
-                UPDATE link_distribution 
-                SET viewed = 1, liked = 1
-                WHERE user_id = ? AND link_id = ? AND viewed = 0
-            """, (user_id, link_id))
-            
-            if cursor.rowcount == 0:
-                return False, "این لینک قبلاً بازدید شده است"
-            
-            # ===== دریافت ضریب بازدید =====
-            cursor.execute("SELECT boost_multiplier FROM youtube_links WHERE id = ?", (link_id,))
-            result = cursor.fetchone()
-            boost = result['boost_multiplier'] if result else 1
-            
-            # ===== بروزرسانی لینک =====
-            cursor.execute("""
-                UPDATE youtube_links 
-                SET views_count = views_count + ?,
-                    daily_views = daily_views + ?,
-                    today_views = today_views + ?,
-                    likes_count = likes_count + ?,
-                    daily_likes = daily_likes + ?,
-                    today_likes = today_likes + ?,
-                    last_interaction_date = CURRENT_TIMESTAMP
-                WHERE id = ?
-            """, (boost, boost, boost, boost, boost, boost, link_id))
-            
-            # ===== بروزرسانی کاربر =====
-            cursor.execute("""
-                UPDATE users 
-                SET daily_views = daily_views + ?,
-                    last_view_date = ?
-                WHERE user_id = ?
-            """, (boost, today, user_id))
-            
-            conn.commit()
-            
-            # ===== پاک کردن کش =====
-            await self.cache.delete(f"daily_links_{user_id}_{today}")
-            await self.cache.delete(f"daily_stats_{user_id}_{today}")
-            
-            return True, "✅ بازدید و لایک با موفقیت ثبت شد!"
-    
-    async def get_user_daily_stats(self, user_id: int) -> Dict:
-        today = datetime.now().date().isoformat()
-        cache_key = f"daily_stats_{user_id}_{today}"
-        cached = await self.cache.get(cache_key)
-        if cached:
-            return cached
-        
-        async with self.get_connection(user_id) as conn:
-            cursor = conn.cursor()
-            
-            # ===== تعداد لینک‌های ثبت شده امروز =====
-            cursor.execute("""
-                SELECT COUNT(*) as links_count FROM youtube_links 
-                WHERE user_id = ? AND DATE(created_at) = ?
-            """, (user_id, today))
-            links = cursor.fetchone()['links_count']
-            
-            # ===== تعداد بازدیدهای امروز =====
-            cursor.execute("""
-                SELECT COUNT(*) as views_count FROM link_distribution 
-                WHERE user_id = ? AND DATE(view_date) = ? AND viewed = 1
-            """, (user_id, today))
-            views = cursor.fetchone()['views_count']
-            
-            stats = {
-                'links': links,
-                'views': views,
-                'required': DAILY_INTERACTIONS_REQUIRED,
-                'max_links': MAX_YOUTUBE_LINKS_PER_DAY
-            }
-            await self.cache.set(cache_key, stats, ttl=1800)
-            return stats
-    
-    async def delete_user_link(self, user_id: int, link_id: int) -> Tuple[bool, str]:
-        """حذف لینک توسط کاربر"""
-        async with self.get_connection(user_id) as conn:
-            cursor = conn.cursor()
-            
-            # ===== بررسی مالکیت =====
-            cursor.execute("""
-                SELECT user_id FROM youtube_links 
-                WHERE id = ? AND user_id = ? AND is_active = 1
-            """, (link_id, user_id))
-            
-            if not cursor.fetchone():
-                return False, "❌ این لینک متعلق به شما نیست یا وجود ندارد"
-            
-            # ===== حذف لینک =====
-            cursor.execute("""
-                UPDATE youtube_links SET is_active = 0 
-                WHERE id = ? AND user_id = ?
-            """, (link_id, user_id))
-            conn.commit()
-            
-            await self.cache.delete(f"user_links_{user_id}_10")
-            return True, "✅ لینک شما با موفقیت حذف شد!"
-    
-    async def admin_delete_link(self, link_id: int) -> Tuple[bool, str]:
-        """حذف لینک توسط ادمین"""
-        for shard_idx in range(self.shard_count):
-            shard_path = self._get_shard_path(shard_idx)
-            try:
-                with sqlite3.connect(shard_path, timeout=10) as conn:
-                    conn.row_factory = sqlite3.Row
-                    cursor = conn.cursor()
-                    
-                    cursor.execute("""
-                        SELECT user_id FROM youtube_links 
-                        WHERE id = ? AND is_active = 1
-                    """, (link_id,))
-                    result = cursor.fetchone()
-                    
-                    if result:
-                        cursor.execute("""
-                            UPDATE youtube_links SET is_active = 0 
-                            WHERE id = ?
-                        """, (link_id,))
-                        conn.commit()
-                        await self.cache.delete(f"user_links_{result['user_id']}_10")
-                        return True, f"✅ لینک {link_id} با موفقیت حذف شد!"
-            except:
-                pass
-        
-        return False, "❌ لینک مورد نظر یافت نشد!"
-    
-    async def admin_get_user_links(self, target_user_id: int) -> List[Dict]:
-        """دریافت لینک‌های یک کاربر توسط ادمین"""
-        shard_idx = self._get_shard(target_user_id)
-        shard_path = self._get_shard_path(shard_idx)
+        expiry = user.get('subscription_expiry')
+        if not expiry:
+            return False
         
         try:
-            with sqlite3.connect(shard_path, timeout=10) as conn:
-                conn.row_factory = sqlite3.Row
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT id, video_url, views_count, likes_count, created_at 
-                    FROM youtube_links 
-                    WHERE user_id = ? AND is_active = 1
-                    ORDER BY created_at DESC
-                """, (target_user_id,))
-                return [dict(row) for row in cursor.fetchall()]
-        except:
-            return []
-    
-    # ===== متدهای چالش رفرال =====
-    async def start_referral_challenge(self, duration_days: int, reward: int = 100, top_users: int = 10):
-        challenge_active = await self.get_system_setting('challenge_active')
-        if challenge_active == '1':
-            return False, "چالش در حال حاضر فعال است"
-        
-        end_date = (datetime.now() + timedelta(days=duration_days)).isoformat()
-        
-        await self.set_system_setting('challenge_active', '1')
-        await self.set_system_setting('challenge_end_date', end_date)
-        await self.set_system_setting('challenge_reward', str(reward))
-        await self.set_system_setting('challenge_top_users', str(top_users))
-        await self.set_system_setting('challenge_duration', str(duration_days))
-        
-        shard_path = self._get_shard_path(0)
-        with sqlite3.connect(shard_path, timeout=10) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO referral_challenge (is_active, start_date, end_date, reward_amount, top_users)
-                VALUES (1, CURRENT_TIMESTAMP, ?, ?, ?)
-            """, (end_date, reward, top_users))
-            conn.commit()
-        
-        return True, f"چالش رفرال با جایزه {reward} USDT برای {top_users} نفر شروع شد"
-    
-    async def stop_referral_challenge(self):
-        challenge_active = await self.get_system_setting('challenge_active')
-        if challenge_active != '1':
-            return False, "چالش فعال نیست"
-        
-        await self.set_system_setting('challenge_active', '0')
-        
-        shard_path = self._get_shard_path(0)
-        with sqlite3.connect(shard_path, timeout=10) as conn:
-            cursor = conn.cursor()
-            cursor.execute("UPDATE referral_challenge SET is_active = 0 WHERE is_active = 1")
-            conn.commit()
-        
-        return True, "چالش متوقف شد"
-    
-    async def get_challenge_status(self) -> Dict:
-        is_active = await self.get_system_setting('challenge_active') == '1'
-        end_date_str = await self.get_system_setting('challenge_end_date') or ''
-        reward = int(await self.get_system_setting('challenge_reward') or '100')
-        top_users = int(await self.get_system_setting('challenge_top_users') or '10')
-        duration = int(await self.get_system_setting('challenge_duration') or '7')
-        
-        time_left = "نامشخص"
-        if end_date_str:
-            try:
-                end_date = datetime.fromisoformat(end_date_str)
-                if datetime.now() < end_date:
-                    remaining = end_date - datetime.now()
-                    days = remaining.days
-                    hours = remaining.seconds // 3600
-                    time_left = f"{days} روز و {hours} ساعت"
-                else:
-                    time_left = "به پایان رسیده"
-            except:
-                time_left = "نامشخص"
-        
-        top_users_list = await self.get_challenge_top_users(limit=top_users)
-        
-        return {
-            'is_active': is_active,
-            'end_date': end_date_str,
-            'time_left': time_left,
-            'reward': reward,
-            'top_users': top_users,
-            'duration': duration,
-            'top_users_list': top_users_list
-        }
-    
-    async def get_challenge_top_users(self, limit: int = 10) -> List[Dict]:
-        all_users_refs = []
-        
-        for shard_idx in range(self.shard_count):
-            shard_path = self._get_shard_path(shard_idx)
-            try:
-                with sqlite3.connect(shard_path, timeout=10) as conn:
-                    conn.row_factory = sqlite3.Row
+            expiry_date = datetime.fromisoformat(expiry)
+            if datetime.now() > expiry_date:
+                # اشتراک منقضی شده
+                async with self.get_connection(user_id) as conn:
                     cursor = conn.cursor()
-                    cursor.execute("""
-                        SELECT u.user_id, u.first_name, u.username, u.total_referrals,
-                               (SELECT COUNT(*) FROM users WHERE referred_by = u.user_id) as referral_count
-                        FROM users u
-                        WHERE u.user_id != 0
-                        ORDER BY referral_count DESC
-                        LIMIT ?
-                    """, (limit * 2,))
-                    for row in cursor.fetchall():
-                        all_users_refs.append(dict(row))
-            except:
-                pass
-        
-        all_users_refs.sort(key=lambda x: x.get('referral_count', 0), reverse=True)
-        return all_users_refs[:limit]
-    
-    async def declare_challenge_winners(self) -> List[Dict]:
-        challenge_active = await self.get_system_setting('challenge_active')
-        if challenge_active == '1':
-            return None, "چالش هنوز فعال است"
-        
-        top_users = int(await self.get_system_setting('challenge_top_users') or '10')
-        reward = int(await self.get_system_setting('challenge_reward') or '100')
-        
-        top_users_list = await self.get_challenge_top_users(limit=top_users)
-        
-        if not top_users_list:
-            return None, "هیچ کاربری یافت نشد"
-        
-        winners = []
-        for user in top_users_list:
-            if user.get('referral_count', 0) > 0:
-                winners.append({
-                    'user_id': user['user_id'],
-                    'first_name': user.get('first_name', 'کاربر'),
-                    'referral_count': user.get('referral_count', 0),
-                    'reward_amount': reward
-                })
-                
-                shard_path = self._get_shard_path(self._get_shard(user['user_id']))
-                with sqlite3.connect(shard_path, timeout=10) as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        INSERT INTO referral_challenge_winners (user_id, referral_count, reward_amount)
-                        VALUES (?, ?, ?)
-                    """, (user['user_id'], user.get('referral_count', 0), reward))
+                    cursor.execute("UPDATE users SET is_subscribed = 0 WHERE user_id = ?", (user_id,))
                     conn.commit()
-        
-        await self.set_system_setting('challenge_winners_declared', '1')
-        
-        return winners, "برندگان با موفقیت اعلام شدند"
-    
-    async def get_challenge_winner_by_user(self, user_id: int) -> Optional[Dict]:
-        shard_idx = self._get_shard(user_id)
-        shard_path = self._get_shard_path(shard_idx)
-        try:
-            with sqlite3.connect(shard_path, timeout=10) as conn:
-                conn.row_factory = sqlite3.Row
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT * FROM referral_challenge_winners 
-                    WHERE user_id = ? AND paid = 0 
-                    ORDER BY created_at DESC LIMIT 1
-                """, (user_id,))
-                row = cursor.fetchone()
-                if row:
-                    return dict(row)
+                    await self.cache.delete(f"user_{user_id}")
+                return False
+            return True
         except:
-            pass
+            return False
+    
+    async def check_download_limit(self, user_id: int, platform: str) -> bool:
+        # اگر کاربر اشتراک دارد
+        if await self.check_subscription(user_id):
+            return True
+        
+        today = datetime.now().date().isoformat()
+        
+        async with self.get_connection(user_id) as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"""
+                SELECT daily_{platform}_downloads as count 
+                FROM users 
+                WHERE user_id = ? AND last_download_date = ?
+            """, (user_id, today))
+            
+            row = cursor.fetchone()
+            if row:
+                return row['count'] < 2
+            return True
+    
+    async def increment_download_count(self, user_id: int, platform: str):
+        today = datetime.now().date().isoformat()
+        
+        async with self.get_connection(user_id) as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"""
+                UPDATE users 
+                SET daily_{platform}_downloads = daily_{platform}_downloads + 1,
+                    last_download_date = ?
+                WHERE user_id = ?
+            """, (today, user_id))
+            conn.commit()
+            await self.cache.delete(f"user_{user_id}")
+    
+    # ===== متدهای مشاغل =====
+    async def create_job(self, employer_id: int, data: Dict) -> int:
+        async with self.get_connection(employer_id) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO job_posts (employer_id, category, title, description, salary, contact, address, expires_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                employer_id,
+                data['category'],
+                data['title'],
+                data['description'],
+                data['salary'],
+                data['contact'],
+                data['address'],
+                (datetime.now() + timedelta(days=30)).isoformat()
+            ))
+            conn.commit()
+            return cursor.lastrowid
+    
+    async def get_jobs(self, category: str = None) -> List[Dict]:
+        jobs = []
+        
+        for shard_idx in range(self.shard_count):
+            shard_path = self._get_shard_path(shard_idx)
+            try:
+                with sqlite3.connect(shard_path, timeout=10) as conn:
+                    conn.row_factory = sqlite3.Row
+                    cursor = conn.cursor()
+                    
+                    if category:
+                        cursor.execute("""
+                            SELECT j.*, u.first_name, u.username
+                            FROM job_posts j
+                            JOIN users u ON j.employer_id = u.user_id
+                            WHERE j.category = ? AND j.is_active = 1
+                            ORDER BY j.created_at DESC
+                        """, (category,))
+                    else:
+                        cursor.execute("""
+                            SELECT j.*, u.first_name, u.username
+                            FROM job_posts j
+                            JOIN users u ON j.employer_id = u.user_id
+                            WHERE j.is_active = 1
+                            ORDER BY j.created_at DESC
+                            LIMIT 50
+                        """)
+                    
+                    jobs.extend([dict(row) for row in cursor.fetchall()])
+            except Exception as e:
+                logger.error(f"Error getting jobs from shard {shard_idx}: {e}")
+        
+        return jobs
+    
+    async def get_user_jobs(self, employer_id: int) -> List[Dict]:
+        async with self.get_connection(employer_id) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM job_posts 
+                WHERE employer_id = ? 
+                ORDER BY created_at DESC
+            """, (employer_id,))
+            return [dict(row) for row in cursor.fetchall()]
+    
+    async def apply_for_job(self, job_id: int, applicant_id: int, message: str) -> bool:
+        async with self.get_connection(applicant_id) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO job_applications (job_id, applicant_id, message)
+                VALUES (?, ?, ?)
+            """, (job_id, applicant_id, message))
+            
+            cursor.execute("UPDATE job_posts SET applications = applications + 1 WHERE id = ?", (job_id,))
+            conn.commit()
+            return True
+    
+    # ===== متدهای پرداخت =====
+    async def add_transaction(self, user_id: int, tx_hash: str, amount: float):
+        timeout = (datetime.now() + timedelta(minutes=PAYMENT_TIMEOUT_MINUTES)).isoformat()
+        async with self.get_connection(user_id) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO transactions (user_id, tx_hash, amount, payment_timeout)
+                VALUES (?, ?, ?, ?)
+            """, (user_id, tx_hash, amount, timeout))
+            conn.commit()
+            await self.cache.delete(f"transactions_{user_id}")
+    
+    async def get_transaction(self, tx_hash: str) -> Optional[Dict]:
+        for shard_idx in range(self.shard_count):
+            shard_path = self._get_shard_path(shard_idx)
+            try:
+                with sqlite3.connect(shard_path, timeout=10) as conn:
+                    conn.row_factory = sqlite3.Row
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT * FROM transactions WHERE tx_hash = ?", (tx_hash,))
+                    row = cursor.fetchone()
+                    if row:
+                        return dict(row)
+            except:
+                pass
         return None
     
-    async def mark_winner_paid(self, user_id: int):
-        shard_idx = self._get_shard(user_id)
-        shard_path = self._get_shard_path(shard_idx)
-        try:
-            with sqlite3.connect(shard_path, timeout=10) as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE referral_challenge_winners 
-                    SET paid = 1, paid_at = CURRENT_TIMESTAMP 
-                    WHERE user_id = ? AND paid = 0
-                """, (user_id,))
-                conn.commit()
-                await self.mark_reward_received(user_id)
-                return True
-        except:
-            pass
-        return False
+    async def get_user_transactions(self, user_id: int) -> List[Dict]:
+        cache_key = f"transactions_{user_id}"
+        cached = await self.cache.get(cache_key)
+        if cached:
+            return cached
+        
+        async with self.get_connection(user_id) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM transactions 
+                WHERE user_id = ? 
+                ORDER BY created_at DESC 
+                LIMIT 10
+            """, (user_id,))
+            txs = [dict(row) for row in cursor.fetchall()]
+            await self.cache.set(cache_key, txs, ttl=300)
+            return txs
     
-    async def get_all_users(self) -> List[int]:
-        all_users = []
+    async def verify_transaction(self, tx_hash: str) -> bool:
+        tx = await self.get_transaction(tx_hash)
+        if not tx:
+            return False
+        
+        user_id = tx['user_id']
+        
+        async with self.get_connection(user_id) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE transactions 
+                SET status = 'approved', verified_at = CURRENT_TIMESTAMP 
+                WHERE tx_hash = ?
+            """, (tx_hash,))
+            conn.commit()
+            
+            if tx.get('is_subscription', 1):
+                await self.update_subscription(user_id)
+            
+            await self.cache.delete(f"transactions_{user_id}")
+            return True
+    
+    async def get_pending_transactions(self) -> List[Dict]:
+        all_txs = []
         for shard_idx in range(self.shard_count):
             shard_path = self._get_shard_path(shard_idx)
             try:
                 with sqlite3.connect(shard_path, timeout=10) as conn:
                     conn.row_factory = sqlite3.Row
                     cursor = conn.cursor()
-                    cursor.execute("SELECT user_id FROM users")
-                    all_users.extend([row['user_id'] for row in cursor.fetchall()])
+                    cursor.execute("""
+                        SELECT t.*, u.first_name, u.username
+                        FROM transactions t
+                        JOIN users u ON t.user_id = u.user_id
+                        WHERE t.status = 'pending'
+                        ORDER BY t.created_at ASC
+                        LIMIT 100
+                    """)
+                    all_txs.extend([dict(row) for row in cursor.fetchall()])
             except:
                 pass
-        return all_users
+        return all_txs
     
-    async def get_all_active_users(self) -> List[int]:
-        all_users = []
-        for shard_idx in range(self.shard_count):
-            shard_path = self._get_shard_path(shard_idx)
-            try:
-                with sqlite3.connect(shard_path, timeout=10) as conn:
-                    conn.row_factory = sqlite3.Row
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT user_id FROM users WHERE is_subscribed = 1")
-                    all_users.extend([row['user_id'] for row in cursor.fetchall()])
-            except:
-                pass
-        return all_users
-    
+    # ===== متدهای سیستم =====
     async def get_system_setting(self, key: str) -> Optional[str]:
         cache_key = f"system_{key}"
         cached = await self.cache.get(cache_key)
@@ -1491,26 +860,50 @@ class UltraScalableDatabase:
         shard_path = self._get_shard_path(0)
         with sqlite3.connect(shard_path, timeout=10) as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                INSERT OR REPLACE INTO system_settings (key, value, updated_at)
-                VALUES (?, ?, CURRENT_TIMESTAMP)
-            """, (key, value))
+            cursor.execute("INSERT OR REPLACE INTO system_settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)", 
+                         (key, value))
             conn.commit()
-            await self.cache.set(f"system_{key}", value, ttl=3600)
+            await self.cache.delete(f"system_{key}")
+    
+    async def get_owner_wallet(self) -> str:
+        wallet = await self.get_system_setting('owner_wallet')
+        return wallet or OWNER_WALLET
+    
+    async def get_subscription_price(self) -> int:
+        price = await self.get_system_setting('subscription_price')
+        return int(price) if price else SUBSCRIPTION_PRICE_USD
     
     async def is_paid_mode(self) -> bool:
         value = await self.get_system_setting('is_paid')
         return value == '1'
     
-    async def save_api_key(self, key_value: str, notes: str = ""):
-        async with self.get_connection() as conn:
+    async def get_all_users(self) -> List[int]:
+        all_users = []
+        for shard_idx in range(self.shard_count):
+            shard_path = self._get_shard_path(shard_idx)
+            try:
+                with sqlite3.connect(shard_path, timeout=10) as conn:
+                    conn.row_factory = sqlite3.Row
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT user_id FROM users")
+                    all_users.extend([row['user_id'] for row in cursor.fetchall()])
+            except:
+                pass
+        return all_users
+    
+    async def delete_user(self, user_id: int) -> bool:
+        async with self.get_connection(user_id) as conn:
             cursor = conn.cursor()
-            cursor.execute("INSERT OR IGNORE INTO api_keys (key_value, notes) VALUES (?, ?)", (key_value, notes))
+            cursor.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
             conn.commit()
+            await self.cache.delete(f"user_{user_id}")
+            await self.cache.delete(f"transactions_{user_id}")
+            return cursor.rowcount > 0
     
     async def get_db_stats(self) -> Dict:
         total_users = 0
-        total_links = 0
+        total_jobs = 0
+        total_downloads = 0
         total_transactions = 0
         
         for shard_idx in range(self.shard_count):
@@ -1521,364 +914,109 @@ class UltraScalableDatabase:
                     cursor = conn.cursor()
                     cursor.execute("SELECT COUNT(*) as count FROM users")
                     total_users += cursor.fetchone()['count']
-                    cursor.execute("SELECT COUNT(*) as count FROM youtube_links")
-                    total_links += cursor.fetchone()['count']
+                    cursor.execute("SELECT COUNT(*) as count FROM job_posts")
+                    total_jobs += cursor.fetchone()['count']
+                    cursor.execute("SELECT COUNT(*) as count FROM downloads")
+                    total_downloads += cursor.fetchone()['count']
                     cursor.execute("SELECT COUNT(*) as count FROM transactions")
                     total_transactions += cursor.fetchone()['count']
             except:
                 pass
         
         cache_stats = await self.cache.get_stats()
+        
         return {
             'shard_count': self.shard_count,
             'total_users': total_users,
-            'total_links': total_links,
+            'total_jobs': total_jobs,
+            'total_downloads': total_downloads,
             'total_transactions': total_transactions,
             'cache': cache_stats
         }
 
-# ==================== مدیریت کلیدهای API ====================
-class AdvancedAPIManager:
-    def __init__(self, api_keys: List[str]):
-        self.api_keys = api_keys
-        self.key_stats = {}
-        self.lock = asyncio.Lock()
-        self.global_requests = 0
-        self.global_errors = 0
-        self.global_success = 0
-        self.start_time = time.time()
-        
-        for key in api_keys:
-            self.key_stats[key] = {
-                'requests': 0, 'errors': 0, 'success': 0,
-                'rate_limits': 0, 'last_used': 0, 'cooldown_until': 0,
-                'weight': 1.0, 'active': True,
-                'response_times': [], 'consecutive_errors': 0,
-                'total_requests': 0, 'error_rate': 0.0,
-                'added_at': time.time()
-            }
-    
-    async def get_best_key(self) -> Tuple[str, Dict]:
-        async with self.lock:
-            current_time = time.time()
-            available_keys = []
-            
-            for key in self.api_keys:
-                stats = self.key_stats[key]
-                if not stats['active'] or current_time < stats['cooldown_until']:
-                    continue
-                
-                score = (
-                    stats['error_rate'] * 5000 +
-                    (sum(stats['response_times']) / max(1, len(stats['response_times']))) * 20 if stats['response_times'] else 0 +
-                    stats['requests'] * 0.1 -
-                    stats['weight'] * 100 +
-                    (current_time - stats['last_used']) * 0.01
-                )
-                available_keys.append((score, key, stats))
-            
-            if not available_keys:
-                return self.api_keys[0], self.key_stats[self.api_keys[0]]
-            
-            available_keys.sort(key=lambda x: x[0])
-            best_key = available_keys[0][1]
-            best_stats = available_keys[0][2]
-            
-            best_stats['requests'] += 1
-            best_stats['total_requests'] += 1
-            best_stats['last_used'] = current_time
-            self.global_requests += 1
-            
-            return best_key, best_stats
-    
-    async def report_success(self, api_key: str, response_time: float = 0):
-        async with self.lock:
-            if api_key in self.key_stats:
-                stats = self.key_stats[api_key]
-                stats['success'] += 1
-                stats['consecutive_errors'] = 0
-                self.global_success += 1
-                if response_time > 0:
-                    stats['response_times'].append(response_time)
-                    if len(stats['response_times']) > 100:
-                        stats['response_times'] = stats['response_times'][-50:]
-                if stats['errors'] > 0:
-                    stats['errors'] = max(0, stats['errors'] - 1)
-    
-    async def report_error(self, api_key: str, error_type: str = 'unknown'):
-        async with self.lock:
-            if api_key in self.key_stats:
-                stats = self.key_stats[api_key]
-                stats['errors'] += 1
-                stats['consecutive_errors'] += 1
-                self.global_errors += 1
-                
-                if error_type == 'rate_limit':
-                    stats['rate_limits'] += 1
-                    if stats['rate_limits'] > 3:
-                        stats['cooldown_until'] = time.time() + 180
-                        stats['weight'] *= 0.5
-                elif error_type == 'timeout':
-                    stats['weight'] *= 0.8
-                    if stats['consecutive_errors'] > 3:
-                        stats['cooldown_until'] = time.time() + 60
-                elif error_type == 'invalid':
-                    stats['active'] = False
-                    stats['weight'] = 0
-                    stats['cooldown_until'] = time.time() + 3600
-                
-                if stats['consecutive_errors'] > 5:
-                    stats['cooldown_until'] = time.time() + 120
-                    stats['weight'] *= 0.5
-                if stats['weight'] < 0.01:
-                    stats['active'] = False
-    
-    async def add_api_key(self, new_key: str) -> bool:
-        async with self.lock:
-            if new_key in self.api_keys:
-                return False
-            self.api_keys.append(new_key)
-            self.key_stats[new_key] = {
-                'requests': 0, 'errors': 0, 'success': 0,
-                'rate_limits': 0, 'last_used': 0, 'cooldown_until': 0,
-                'weight': 1.0, 'active': True,
-                'response_times': [], 'consecutive_errors': 0,
-                'total_requests': 0, 'error_rate': 0.0,
-                'added_at': time.time()
-            }
-            return True
-    
-    async def remove_api_key(self, api_key: str) -> bool:
-        async with self.lock:
-            if api_key in self.api_keys:
-                self.api_keys.remove(api_key)
-                del self.key_stats[api_key]
-                return True
-            return False
-    
-    async def toggle_api_key(self, api_key: str) -> bool:
-        async with self.lock:
-            if api_key in self.key_stats:
-                self.key_stats[api_key]['active'] = not self.key_stats[api_key]['active']
-                return True
-            return False
-    
-    async def get_stats(self) -> Dict:
-        async with self.lock:
-            stats = {
-                'total_keys': len(self.api_keys),
-                'active_keys': len([k for k in self.key_stats if self.key_stats[k]['active']]),
-                'total_requests': self.global_requests,
-                'total_errors': self.global_errors,
-                'total_success': self.global_success,
-                'success_rate': (self.global_success / max(1, self.global_requests)) * 100,
-                'uptime_seconds': time.time() - self.start_time,
-                'keys': {}
-            }
-            for key in self.api_keys:
-                key_stats = self.key_stats[key].copy()
-                key_stats['key_preview'] = f"{key[:8]}...{key[-4:]}"
-                key_stats['response_time_avg'] = (
-                    sum(key_stats['response_times']) / len(key_stats['response_times'])
-                    if key_stats['response_times'] else 0
-                )
-                stats['keys'][key] = key_stats
-            return stats
-
-# ==================== API ترون ====================
-class TronAPI:
-    def __init__(self, api_keys: List[str]):
-        self.api_manager = AdvancedAPIManager(api_keys)
-        self.base_url = TRON_API_URL
-        self.sessions = {}
-        self.cache = DistributedUltraCache(max_size=100_000, ttl_seconds=300, shard_count=50)
-    
-    async def get_session(self, api_key: str):
-        if api_key not in self.sessions:
-            self.sessions[api_key] = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=30),
-                headers={"TRON-PRO-API-KEY": api_key}
-            )
-        return self.sessions[api_key]
-    
-    async def verify_transaction(self, tx_hash: str, user_id: int, owner_wallet: str, from_address: str = None) -> bool:
-        cache_key = f"tx_{tx_hash}"
-        cached = await self.cache.get(cache_key)
-        if cached is not None:
-            return cached
-        
-        for attempt in range(3):
-            try:
-                api_key, stats = await self.api_manager.get_best_key()
-                if not api_key:
-                    await asyncio.sleep(2 ** attempt)
-                    continue
-                
-                start_time = time.time()
-                session = await self.get_session(api_key)
-                url = f"{self.base_url}/v1/transactions/{tx_hash}"
-                
-                async with session.get(url) as response:
-                    response_time = time.time() - start_time
-                    
-                    if response.status == 429:
-                        await self.api_manager.report_error(api_key, 'rate_limit')
-                        await asyncio.sleep(min(2 ** attempt * 5, 60))
-                        continue
-                    if response.status == 403:
-                        await self.api_manager.report_error(api_key, 'invalid')
-                        continue
-                    if response.status != 200:
-                        await self.api_manager.report_error(api_key, 'unknown')
-                        continue
-                    
-                    data = await response.json()
-                    if not data.get('data'):
-                        await self.cache.set(cache_key, False, ttl=300)
-                        return False
-                    
-                    tx_data = data['data'][0]
-                    contracts = tx_data.get('raw_data', {}).get('contract', [])
-                    
-                    for contract in contracts:
-                        value = contract.get('parameter', {}).get('value', {})
-                        to_address = value.get('to_address')
-                        if to_address and to_address == owner_wallet:
-                            amount = value.get('amount', 0) / 1e6
-                            if amount >= SUBSCRIPTION_PRICE_USD - 1:
-                                if from_address:
-                                    owner_addr = value.get('owner_address')
-                                    if owner_addr and owner_addr == from_address:
-                                        await self.api_manager.report_success(api_key, response_time)
-                                        await self.cache.set(cache_key, True, ttl=3600)
-                                        return True
-                                else:
-                                    await self.api_manager.report_success(api_key, response_time)
-                                    await self.cache.set(cache_key, True, ttl=3600)
-                                    return True
-                    
-                    await self.cache.set(cache_key, False, ttl=300)
-                    return False
-                    
-            except Exception as e:
-                logger.error(f"خطا در بررسی تراکنش (تلاش {attempt+1}): {e}")
-                await asyncio.sleep(2 ** attempt)
-        
-        await self.cache.set(cache_key, False, ttl=60)
-        return False
-    
-    async def test_api_key(self, api_key: str) -> Tuple[bool, str]:
-        try:
-            session = await self.get_session(api_key)
-            url = f"{self.base_url}/v1/accounts/{OWNER_WALLET}"
-            async with session.get(url) as response:
-                if response.status == 200:
-                    return True, "✅ کلید معتبر است"
-                elif response.status == 403:
-                    return False, "❌ کلید نامعتبر است"
-                else:
-                    return False, f"❌ خطا: {response.status}"
-        except Exception as e:
-            return False, f"❌ خطا: {str(e)[:50]}"
-    
-    async def add_api_key(self, new_key: str) -> Tuple[bool, str]:
-        is_valid, message = await self.test_api_key(new_key)
-        if not is_valid:
-            return False, message
-        success = await self.api_manager.add_api_key(new_key)
-        if success:
-            return True, "✅ کلید با موفقیت اضافه شد"
-        return False, "❌ این کلید قبلاً اضافه شده است"
-    
-    async def remove_api_key(self, api_key: str) -> Tuple[bool, str]:
-        success = await self.api_manager.remove_api_key(api_key)
-        if success:
-            return True, "✅ کلید با موفقیت حذف شد"
-        return False, "❌ کلید یافت نشد"
-    
-    async def toggle_api_key(self, api_key: str) -> Tuple[bool, str]:
-        success = await self.api_manager.toggle_api_key(api_key)
-        if success:
-            stats = await self.api_manager.get_stats()
-            status = "فعال" if stats['keys'][api_key]['active'] else "غیرفعال"
-            return True, f"✅ وضعیت کلید به {status} تغییر کرد"
-        return False, "❌ کلید یافت نشد"
-    
-    async def get_api_stats(self) -> Dict:
-        return await self.api_manager.get_stats()
-    
-    async def close(self):
-        for session in self.sessions.values():
-            await session.close()
-        self.sessions.clear()
 
 # ==================== کلاس اصلی ربات ====================
-class YouTubeEarningBot:
-    __slots__ = ('token', 'db', 'tron_api', 'user_states')
-    
+class SmartServiceBot:
     def __init__(self, token: str):
         self.token = token
         self.db = UltraScalableDatabase(shard_count=1000)
-        self.tron_api = TronAPI(TRON_API_KEYS)
+        self.tron_payment = TronPaymentProcessor(TRON_API_KEYS, OWNER_WALLET)
         self.user_states = {}
+        self.payment_monitor_task = None
         
-        asyncio.create_task(self._show_stats())
-        asyncio.create_task(self._challenge_monitor())
-        asyncio.create_task(self._cache_cleaner())
+        # شروع مونیتورینگ پرداخت‌ها
+        asyncio.create_task(self._payment_monitor())
         
-        logger.info("🚀 ربات با معماری میکروسرویس و ۱۰۰۰ شارد راه‌اندازی شد")
+        logger.info("🚀 ربات خدمات هوشمند با ۱۰۰۰ شارد راه‌اندازی شد")
     
     def get_texts(self, lang: str) -> Dict:
         return TEXTS.get(lang, TEXTS['fa'])
     
-    async def _show_stats(self):
-        await asyncio.sleep(5)
-        stats = await self.db.get_db_stats()
-        logger.info(f"📊 **آمار دیتابیس:**")
-        logger.info(f"   🗄️ تعداد شاردها: {stats['shard_count']}")
-        logger.info(f"   👥 کل کاربران: {stats['total_users']:,}")
-        logger.info(f"   🔗 کل لینک‌ها: {stats['total_links']:,}")
-        logger.info(f"   💳 کل تراکنش‌ها: {stats['total_transactions']:,}")
-        logger.info(f"   💾 کش: {stats['cache']['total_items']:,} آیتم")
-        logger.info(f"   📈 نرخ موفقیت کش: {stats['cache']['hit_rate']:.2f}%")
-    
-    async def _challenge_monitor(self):
+    # ===== مونیتورینگ خودکار پرداخت‌ها =====
+    async def _payment_monitor(self):
+        """بررسی خودکار تراکنش‌های پرداخت هر ۳۰ ثانیه"""
         while True:
             try:
-                challenge_active = await self.db.get_system_setting('challenge_active')
-                if challenge_active == '1':
-                    end_date_str = await self.db.get_system_setting('challenge_end_date') or ''
-                    if end_date_str:
+                pending_txs = await self.db.get_pending_transactions()
+                
+                for tx in pending_txs[:50]:  # حداکثر ۵۰ تراکنش در هر بار
+                    # چک کردن زمان اتمام
+                    timeout = tx.get('payment_timeout')
+                    if timeout:
                         try:
-                            end_date = datetime.fromisoformat(end_date_str)
-                            if datetime.now() >= end_date:
-                                await self.db.set_system_setting('challenge_active', '0')
-                                winners, msg = await self.db.declare_challenge_winners()
-                                if winners:
-                                    logger.info(f"🏆 چالش رفرال به پایان رسید! {len(winners)} برنده")
+                            timeout_date = datetime.fromisoformat(timeout)
+                            if datetime.now() > timeout_date:
+                                # زمان به پایان رسیده
+                                async with self.db.get_connection(tx['user_id']) as conn:
+                                    cursor = conn.cursor()
+                                    cursor.execute("UPDATE transactions SET status = 'timeout' WHERE tx_hash = ?", (tx['tx_hash'],))
+                                    conn.commit()
+                                continue
                         except:
                             pass
+                    
+                    # بررسی تراکنش در بلاکچین
+                    is_valid = await self.tron_payment.verify_transaction(
+                        tx['tx_hash'], 
+                        tx['user_id'], 
+                        tx['amount']
+                    )
+                    
+                    if is_valid:
+                        # تایید و فعال‌سازی اشتراک
+                        await self.db.verify_transaction(tx['tx_hash'])
+                        user = await self.db.get_user(tx['user_id'])
+                        if user:
+                            lang = user.get('language', 'fa')
+                            texts = self.get_texts(lang)
+                            expiry = user.get('subscription_expiry', 'نامشخص')
+                            try:
+                                await self._send_message(
+                                    tx['user_id'],
+                                    texts['payment_success'].format(expiry=expiry[:10]),
+                                    parse_mode=ParseMode.HTML
+                                )
+                            except:
+                                pass
+                        
+                        logger.info(f"✅ تراکنش {tx['tx_hash']} تایید شد برای کاربر {tx['user_id']}")
+                
+                await asyncio.sleep(30)  # هر ۳۰ ثانیه
+                
             except Exception as e:
-                logger.error(f"خطا در مانیتورینگ چالش: {e}")
-            await asyncio.sleep(30)
+                logger.error(f"خطا در مونیتورینگ پرداخت‌ها: {e}")
+                await asyncio.sleep(60)
     
-    async def _cache_cleaner(self):
-        while True:
-            try:
-                stats = await self.db.cache.get_stats()
-                if stats['total_items'] > stats['max_size'] * 0.9:
-                    logger.info("🧹 پاک‌سازی خودکار کش در حال اجرا...")
-                    for shard in self.db.cache.shards:
-                        keys_to_delete = []
-                        for key, (value, timestamp) in shard.items():
-                            if time.time() - timestamp > self.db.cache.ttl:
-                                keys_to_delete.append(key)
-                        for key in keys_to_delete:
-                            del shard[key]
-            except Exception as e:
-                logger.error(f"خطا در پاک‌سازی کش: {e}")
-            await asyncio.sleep(300)
+    async def _send_message(self, user_id: int, text: str, **kwargs):
+        """ارسال پیام با مدیریت خطا"""
+        try:
+            # این متد باید توسط application.bot استفاده شود
+            # در هندلرها از context.bot استفاده می‌شود
+            pass
+        except Exception as e:
+            logger.error(f"خطا در ارسال پیام به {user_id}: {e}")
     
+    # ===== هندلر استارت =====
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         user_id = user.id
@@ -1888,66 +1026,52 @@ class YouTubeEarningBot:
             referred_by = None
             if context.args:
                 ref_code = context.args[0]
-                ref_user = await self.db.get_user_by_referral_code(ref_code)
-                if ref_user:
-                    referred_by = ref_user['user_id']
-                    await update.message.reply_text(
-                        self.get_texts('fa')['referral_success'].format(ref_name=ref_user.get('first_name', 'کاربر')),
-                        parse_mode=ParseMode.HTML
-                    )
-                else:
-                    await update.message.reply_text(
-                        self.get_texts('fa')['referral_not_found'],
-                        parse_mode=ParseMode.HTML
-                    )
+                # پیدا کردن کاربر با کد رفرال
+                for shard_idx in range(1000):
+                    try:
+                        shard_path = self.db._get_shard_path(shard_idx)
+                        with sqlite3.connect(shard_path, timeout=10) as conn:
+                            conn.row_factory = sqlite3.Row
+                            cursor = conn.cursor()
+                            cursor.execute("SELECT user_id FROM users WHERE referral_code = ?", (ref_code,))
+                            row = cursor.fetchone()
+                            if row:
+                                referred_by = row['user_id']
+                                break
+                    except:
+                        pass
             
             db_user = await self.db.create_user(
                 user_id, user.username, user.first_name, user.last_name, referred_by
             )
-            
-            if referred_by:
-                ref_count = await self.db.get_user_referrals_count(referred_by)
-                boost = self.db.get_boost_multiplier(ref_count)
-                try:
-                    ref_user = await self.db.get_user(referred_by)
-                    ref_lang = ref_user.get('language', 'fa') if ref_user else 'fa'
-                    ref_texts = self.get_texts(ref_lang)
-                    await context.bot.send_message(
-                        referred_by,
-                        ref_texts['new_referral_notification'].format(
-                            name=user.first_name or 'کاربر',
-                            count=ref_count
-                        ),
-                        parse_mode=ParseMode.HTML
-                    )
-                except Exception as e:
-                    logger.error(f"خطا در ارسال پیام رفرال: {e}")
         
         lang = db_user.get('language', 'fa')
         texts = self.get_texts(lang)
         
-        keyboard = [
-            [InlineKeyboardButton(texts['register_link'], callback_data='register_link')],
-            [InlineKeyboardButton(texts['my_stats'], callback_data='my_stats')],
-            [InlineKeyboardButton(texts['referral'], callback_data='referral')],
-            [InlineKeyboardButton(texts['change_language'], callback_data='change_language')],
-            [InlineKeyboardButton(texts['view_links'], callback_data='view_links')],
-            [InlineKeyboardButton(texts['my_links'], callback_data='my_links')]
-        ]
+        # بررسی اشتراک
+        is_subscribed = await self.db.check_subscription(user_id)
+        subscription_text = "✅ اشتراک فعال" if is_subscribed else "❌ بدون اشتراک"
         
-        challenge_active = await self.db.get_system_setting('challenge_active')
-        if challenge_active == '1':
-            keyboard.append([InlineKeyboardButton("🏆 چالش رفرال", callback_data='referral_challenge')])
+        keyboard = [
+            [InlineKeyboardButton(texts['download_instagram'], callback_data='download_instagram')],
+            [InlineKeyboardButton(texts['download_youtube'], callback_data='download_youtube')],
+            [InlineKeyboardButton(texts['download_tiktok'], callback_data='download_tiktok')],
+            [InlineKeyboardButton(texts['job_seeker'], callback_data='job_seeker')],
+            [InlineKeyboardButton(texts['employer'], callback_data='employer')],
+            [InlineKeyboardButton("💳 خرید اشتراک", callback_data='buy_subscription')],
+            [InlineKeyboardButton(texts['language'], callback_data='language')]
+        ]
         
         if user_id == ADMIN_ID:
             keyboard.append([InlineKeyboardButton("🛠 پنل مدیریت", callback_data='admin_panel')])
         
         await update.message.reply_text(
-            texts['welcome'].format(first_name=user.first_name or 'کاربر'),
+            texts['welcome'].format(first_name=user.first_name or 'کاربر') + f"\n\n📊 وضعیت اشتراک: {subscription_text}",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode=ParseMode.HTML
         )
     
+    # ===== هندلر کال‌بک =====
     async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -1963,1074 +1087,956 @@ class YouTubeEarningBot:
         texts = self.get_texts(lang)
         data = query.data
         
-        if data == 'change_language':
-            keyboard = []
-            for code, name in SUPPORTED_LANGUAGES.items():
-                keyboard.append([InlineKeyboardButton(f"🌐 {name}", callback_data=f"set_lang_{code}")])
-            keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data='back')])
-            await query.edit_message_text("🌐 انتخاب زبان:", reply_markup=InlineKeyboardMarkup(keyboard))
-        
-        elif data.startswith('set_lang_'):
-            new_lang = data.split('_')[2]
-            await self.db.update_user_language(user_id, new_lang)
-            texts = self.get_texts(new_lang)
-            keyboard = [
-                [InlineKeyboardButton(texts['register_link'], callback_data='register_link')],
-                [InlineKeyboardButton(texts['my_stats'], callback_data='my_stats')],
-                [InlineKeyboardButton(texts['referral'], callback_data='referral')],
-                [InlineKeyboardButton(texts['change_language'], callback_data='change_language')],
-                [InlineKeyboardButton(texts['view_links'], callback_data='view_links')],
-                [InlineKeyboardButton(texts['my_links'], callback_data='my_links')]
-            ]
-            challenge_active = await self.db.get_system_setting('challenge_active')
-            if challenge_active == '1':
-                keyboard.append([InlineKeyboardButton("🏆 چالش رفرال", callback_data='referral_challenge')])
-            if user_id == ADMIN_ID:
-                keyboard.append([InlineKeyboardButton("🛠 پنل مدیریت", callback_data='admin_panel')])
-            await query.edit_message_text(
-                f"✅ زبان به {SUPPORTED_LANGUAGES[new_lang]} تغییر یافت",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        
-        elif data == 'view_links':
-            # ===== نمایش لینک‌های روزانه =====
-            links = await self.db.get_daily_links_for_user(user_id, DAILY_INTERACTIONS_REQUIRED)
-            
-            if not links:
-                # ===== چک کن کاربر لینک ثبت کرده یا نه =====
-                user_links = await self.db.get_user_links(user_id, limit=1)
-                if not user_links:
-                    await query.edit_message_text(
-                        texts['no_links_available'],
-                        reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("📝 ثبت لینک", callback_data='register_link')],
-                            [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
-                        ]),
-                        parse_mode=ParseMode.HTML
-                    )
-                else:
-                    await query.edit_message_text(
-                        texts['no_links_to_view'].format(count=0),
-                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='back')]])
-                    )
-                return
-            
-            link_text = ""
-            for i, link in enumerate(links, 1):
-                link_text += f"{i}. 🎬 <a href='{link['video_url']}'>{link['video_url'][:30]}...</a>\n"
-                link_text += f"   👤 {link.get('first_name', 'کاربر')}\n"
-                link_text += f"   👀 {link.get('views_count', 0)} بازدید\n\n"
-            
-            await query.edit_message_text(
-                texts['daily_links_title'] + link_text,
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("✅ همه را بازدید کردم", callback_data="viewed_all")],
-                    [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
-                ]),
-                parse_mode=ParseMode.HTML
-            )
-        
-        elif data == 'viewed_all':
-            # ===== تایید بازدید همه لینک‌ها =====
-            links = await self.db.get_daily_links_for_user(user_id, DAILY_INTERACTIONS_REQUIRED)
-            
-            if links:
-                viewed_count = 0
-                for link in links:
-                    success, msg = await self.db.mark_link_viewed(user_id, link['id'])
-                    if success:
-                        viewed_count += 1
-                
-                stats = await self.db.get_user_daily_stats(user_id)
+        # ===== دانلود از اینستاگرام =====
+        if data == 'download_instagram':
+            if not await self.db.check_download_limit(user_id, 'instagram'):
                 await query.edit_message_text(
-                    texts['all_links_viewed'].format(count=viewed_count),
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='back')]]),
-                    parse_mode=ParseMode.HTML
-                )
-            else:
-                await query.edit_message_text(
-                    "❌ هیچ لینکی برای بازدید وجود ندارد",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='back')]])
-                )
-        
-        elif data == 'my_links':
-            # ===== نمایش لینک‌های کاربر =====
-            links = await self.db.get_user_links(user_id, limit=20)
-            
-            if links:
-                text = "📋 **لینک‌های شما:**\n\n"
-                for link in links:
-                    text += f"🆔 {link['id']}\n"
-                    text += f"🔗 <a href='{link['video_url']}'>{link['video_url'][:40]}...</a>\n"
-                    text += f"👀 {link['views_count']} بازدید\n"
-                    text += f"❤️ {link['likes_count']} لایک\n"
-                    text += f"📅 {link['created_at'][:10]}\n"
-                    text += f"━━━━━━━━━━━━━━━\n\n"
-                
-                keyboard = [
-                    [InlineKeyboardButton("🗑️ حذف لینک", callback_data='delete_link_menu')],
-                    [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
-                ]
-                await query.edit_message_text(
-                    text,
-                    reply_markup=InlineKeyboardMarkup(keyboard),
-                    parse_mode=ParseMode.HTML
-                )
-            else:
-                await query.edit_message_text(
-                    texts['no_links'],
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='back')]])
-                )
-        
-        elif data == 'delete_link_menu':
-            await query.edit_message_text(
-                "🗑️ **حذف لینک**\n\nلطفا آیدی لینکی که می‌خواهید حذف کنید را ارسال کنید:\n\n📌 برای لغو /cancel را بزنید",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            self.user_states[user_id] = 'waiting_for_delete_link'
-        
-        elif data == 'referral':
-            ref_code = db_user.get('referral_code')
-            ref_count = await self.db.get_user_referrals_count(user_id)
-            ref_link = f"https://t.me/SEGNALF_bot?start={ref_code}"
-            
-            await query.edit_message_text(
-                texts['referral_info'].format(
-                    ref_code=ref_code,
-                    ref_count=ref_count,
-                    ref_link=ref_link
-                ),
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("📋 کپی کد", callback_data=f"copy_ref_{ref_code}")],
-                    [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
-                ]),
-                parse_mode=ParseMode.HTML
-            )
-        
-        elif data.startswith('copy_ref_'):
-            ref_code = data.split('_')[2]
-            await query.edit_message_text(
-                texts['referral_copied'].format(ref_code=ref_code),
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 بازگشت", callback_data='referral')]
-                ]),
-                parse_mode=ParseMode.HTML
-            )
-        
-        elif data == 'my_stats':
-            ref_count = await self.db.get_user_referrals_count(user_id)
-            user_links = await self.db.get_user_links(user_id)
-            stats = await self.db.get_user_daily_stats(user_id)
-            boost = self.db.get_boost_multiplier(ref_count)
-            
-            await query.edit_message_text(
-                texts['stats_info'].format(
-                    links=stats['links'],
-                    max_links=stats['max_links'],
-                    views=stats['views'],
-                    required=stats['required'],
-                    referrals=ref_count,
-                    active_links=len(user_links)
-                ),
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🚀 ضریب بازدید", callback_data='boost_info')],
-                    [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
-                ]),
-                parse_mode=ParseMode.HTML
-            )
-        
-        elif data == 'boost_info':
-            ref_count = await self.db.get_user_referrals_count(user_id)
-            boost = self.db.get_boost_multiplier(ref_count)
-            
-            await query.edit_message_text(
-                texts['boost_info'].format(
-                    boost=boost,
-                    ref_count=ref_count,
-                    threshold=REFERRAL_BOOST_THRESHOLD
-                ),
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='back')]]),
-                parse_mode=ParseMode.HTML
-            )
-        
-        elif data == 'register_link':
-            is_paid = await self.db.is_paid_mode()
-            
-            if is_paid and not db_user.get('is_subscribed'):
-                await query.edit_message_text(
-                    texts['not_subscribed'],
+                    texts['download_limit'],
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("💰 پرداخت", callback_data='payment')],
+                        [InlineKeyboardButton("💳 خرید اشتراک", callback_data='buy_subscription')],
                         [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
                     ]),
                     parse_mode=ParseMode.HTML
                 )
                 return
             
-            today = datetime.now().date().isoformat()
-            async with self.db.get_connection(user_id) as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT COUNT(*) as count FROM youtube_links 
-                    WHERE user_id = ? AND DATE(created_at) = ?
-                """, (user_id, today))
-                result = cursor.fetchone()
-                if result['count'] >= MAX_YOUTUBE_LINKS_PER_DAY:
-                    await query.edit_message_text(
-                        f"⚠️ امروز بیش از حد مجاز ({MAX_YOUTUBE_LINKS_PER_DAY}) لینک ثبت کرده‌اید",
-                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='back')]])
-                    )
-                    return
-            
-            await query.edit_message_text(
-                texts['register_link_prompt'].format(required_ref=MAX_YOUTUBE_LINKS_PER_DAY),
-                parse_mode=ParseMode.HTML
-            )
-            self.user_states[user_id] = 'waiting_for_link'
+            await query.edit_message_text("📥 لینک ویدیو/عکس اینستاگرام را ارسال کنید:")
+            self.user_states[user_id] = 'waiting_instagram_download'
         
-        elif data == 'payment':
-            await query.edit_message_text(texts['enter_source_address'], parse_mode=ParseMode.HTML)
-            self.user_states[user_id] = 'waiting_for_source_address'
-        
-        elif data == 'confirm_payment':
-            await query.edit_message_text(texts['payment_confirmed'], parse_mode=ParseMode.HTML)
-            
-            user_txs = await self.db.get_user_transactions(user_id)
-            if user_txs:
-                latest_tx = user_txs[0]
-                is_valid = await self.tron_api.verify_transaction(
-                    latest_tx['tx_hash'], user_id, OWNER_WALLET,
-                    latest_tx.get('from_address')
-                )
-                
-                if is_valid:
-                    await self.db.verify_transaction(latest_tx['tx_hash'], 'approved')
-                    await self.db.update_user_subscription(user_id)
-                    await query.edit_message_text(
-                        texts['payment_success'],
-                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='back')]]),
-                        parse_mode=ParseMode.HTML
-                    )
-                else:
-                    tx_time = datetime.fromisoformat(latest_tx['created_at'])
-                    if datetime.now() - tx_time > timedelta(minutes=PAYMENT_TIMEOUT_MINUTES):
-                        await query.edit_message_text(
-                            texts['payment_timeout'],
-                            reply_markup=InlineKeyboardMarkup([
-                                [InlineKeyboardButton(texts['send_hash_button'], callback_data='send_hash')],
-                                [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
-                            ]),
-                            parse_mode=ParseMode.HTML
-                        )
-                    else:
-                        await query.edit_message_text(
-                            texts['payment_failed'],
-                            reply_markup=InlineKeyboardMarkup([
-                                [InlineKeyboardButton(texts['send_hash_button'], callback_data='send_hash')],
-                                [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
-                            ]),
-                            parse_mode=ParseMode.HTML
-                        )
-            else:
+        # ===== دانلود از یوتیوب =====
+        elif data == 'download_youtube':
+            if not await self.db.check_download_limit(user_id, 'youtube'):
                 await query.edit_message_text(
-                    "❌ هیچ تراکنشی یافت نشد",
+                    texts['download_limit'],
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton(texts['send_hash_button'], callback_data='send_hash')],
+                        [InlineKeyboardButton("💳 خرید اشتراک", callback_data='buy_subscription')],
                         [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
-                    ])
+                    ]),
+                    parse_mode=ParseMode.HTML
                 )
+                return
+            
+            await query.edit_message_text("📥 لینک ویدیو یوتیوب را ارسال کنید:")
+            self.user_states[user_id] = 'waiting_youtube_download'
         
-        elif data == 'send_hash':
-            await query.edit_message_text(texts['enter_tx_hash'], parse_mode=ParseMode.HTML)
-            self.user_states[user_id] = 'waiting_for_manual_hash'
+        # ===== دانلود از تیک تاک =====
+        elif data == 'download_tiktok':
+            if not await self.db.check_download_limit(user_id, 'tiktok'):
+                await query.edit_message_text(
+                    texts['download_limit'],
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("💳 خرید اشتراک", callback_data='buy_subscription')],
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
+                    ]),
+                    parse_mode=ParseMode.HTML
+                )
+                return
+            
+            await query.edit_message_text("📥 لینک ویدیو تیک تاک را ارسال کنید:")
+            self.user_states[user_id] = 'waiting_tiktok_download'
         
-        elif data == 'admin_panel' and user_id == ADMIN_ID:
+        # ===== جویای کار =====
+        elif data == 'job_seeker':
             keyboard = [
-                [InlineKeyboardButton("💰 پولی کردن", callback_data='make_paid')],
-                [InlineKeyboardButton("🆓 رایگان کردن", callback_data='make_free')],
-                [InlineKeyboardButton("📢 ارسال پیام همگانی", callback_data='broadcast')],
-                [InlineKeyboardButton("✅ تایید پرداخت‌ها", callback_data='verify_payments')],
-                [InlineKeyboardButton("🔑 مدیریت کلیدهای API", callback_data='manage_keys')],
-                [InlineKeyboardButton("📊 آمار دیتابیس", callback_data='db_stats')],
-                [InlineKeyboardButton("🏆 مدیریت چالش رفرال", callback_data='manage_challenge')],
-                [InlineKeyboardButton("📋 مدیریت لینک‌های کاربران", callback_data='admin_links')],
+                [InlineKeyboardButton("📋 مشاهده همه آگهی‌ها", callback_data='view_all_jobs')],
+                [InlineKeyboardButton("📂 دسته‌بندی مشاغل", callback_data='job_categories')],
                 [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
             ]
-            await query.edit_message_text("🛠 **پنل مدیریت**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
-        
-        elif data == 'admin_links' and user_id == ADMIN_ID:
             await query.edit_message_text(
-                "📋 **مدیریت لینک‌های کاربران**\n\n"
-                "برای حذف لینک یک کاربر:\n"
-                "1️⃣ ابتدا آیدی کاربر را ارسال کنید\n"
-                "2️⃣ سپس آیدی لینک را ارسال کنید\n\n"
-                "📌 برای لغو /cancel را بزنید",
-                parse_mode=ParseMode.MARKDOWN
+                "👨‍💼 **جویای کار**\n\n"
+                "📋 مشاهده آگهی‌های استخدام\n"
+                "📂 جستجو بر اساس دسته‌بندی",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.HTML
             )
-            self.user_states[user_id] = 'waiting_admin_user_id'
         
-        elif data == 'manage_challenge' and user_id == ADMIN_ID:
+        # ===== کارفرما =====
+        elif data == 'employer':
             keyboard = [
-                [InlineKeyboardButton("▶️ شروع چالش جدید", callback_data='start_challenge')],
-                [InlineKeyboardButton("⏹️ توقف چالش", callback_data='stop_challenge')],
-                [InlineKeyboardButton("📊 وضعیت چالش", callback_data='challenge_status')],
-                [InlineKeyboardButton("💰 اعلام برندگان", callback_data='declare_winners')],
-                [InlineKeyboardButton("🎁 تنظیم مبلغ جایزه", callback_data='set_reward')],
-                [InlineKeyboardButton("👥 تنظیم تعداد برندگان", callback_data='set_top_users')],
-                [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]
+                [InlineKeyboardButton("📝 ثبت آگهی جدید", callback_data='new_job')],
+                [InlineKeyboardButton("📋 آگهی‌های من", callback_data='my_jobs')],
+                [InlineKeyboardButton("📊 آمار", callback_data='job_stats')],
+                [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
             ]
             await query.edit_message_text(
-                "🏆 **مدیریت چالش رفرال**",
+                "👔 **پنل کارفرما**\n\n"
+                "📝 ثبت آگهی استخدام جدید\n"
+                "📋 مشاهده آگهی‌های ثبت شده\n"
+                "📊 آمار و عملکرد",
                 reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode=ParseMode.MARKDOWN
+                parse_mode=ParseMode.HTML
             )
         
-        elif data == 'start_challenge' and user_id == ADMIN_ID:
-            challenge_active = await self.db.get_system_setting('challenge_active')
-            if challenge_active == '1':
+        # ===== ثبت آگهی جدید =====
+        elif data == 'new_job':
+            await query.edit_message_text(
+                texts['job_categories'],
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data='employer')]
+                ]),
+                parse_mode=ParseMode.HTML
+            )
+            self.user_states[user_id] = 'waiting_job_category'
+        
+        # ===== آگهی‌های من =====
+        elif data == 'my_jobs':
+            jobs = await self.db.get_user_jobs(user_id)
+            
+            if not jobs:
                 await query.edit_message_text(
-                    texts['challenge_already_active'],
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
+                    "❌ شما هیچ آگهی ثبت نکردید.",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data='employer')]
+                    ])
                 )
                 return
             
-            await query.edit_message_text(texts['enter_duration'], parse_mode=ParseMode.HTML)
-            self.user_states[user_id] = 'waiting_for_challenge_duration'
-        
-        elif data == 'stop_challenge' and user_id == ADMIN_ID:
-            success, msg = await self.db.stop_referral_challenge()
-            await query.edit_message_text(
-                msg if success else f"❌ {msg}",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
-            )
-        
-        elif data == 'challenge_status' and user_id == ADMIN_ID:
-            status = await self.db.get_challenge_status()
-            
-            text = f"📊 **وضعیت چالش رفرال**\n\n"
-            text += f"📌 وضعیت: {'✅ فعال' if status['is_active'] else '❌ غیرفعال'}\n"
-            text += f"⏳ زمان باقی‌مانده: {status['time_left']}\n"
-            text += f"🎁 مبلغ جایزه: {status['reward']} USDT\n"
-            text += f"👥 تعداد برندگان: {status['top_users']}\n"
-            
-            if status['top_users_list']:
-                text += "\n🏆 **برترین‌ها:**\n"
-                for idx, u in enumerate(status['top_users_list'][:5], 1):
-                    text += f"{idx}. {u.get('first_name', 'کاربر')} - {u.get('referral_count', 0)} رفرال\n"
+            text = "📋 **آگهی‌های شما:**\n\n"
+            for job in jobs:
+                status = "🟢 فعال" if job['is_active'] else "🔴 غیرفعال"
+                text += f"📌 {job['title']}\n   💰 {job['salary']}\n   👁️ {job['views']} بازدید\n   📥 {job['applications']} درخواست\n   {status}\n\n"
             
             await query.edit_message_text(
                 text,
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]]),
-                parse_mode=ParseMode.MARKDOWN
-            )
-        
-        elif data == 'declare_winners' and user_id == ADMIN_ID:
-            challenge_active = await self.db.get_system_setting('challenge_active')
-            if challenge_active == '1':
-                await query.edit_message_text(
-                    texts['challenge_not_active'],
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
-                )
-                return
-            
-            winners, msg = await self.db.declare_challenge_winners()
-            
-            if not winners:
-                await query.edit_message_text(
-                    texts['no_winners'],
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
-                )
-                return
-            
-            for winner in winners:
-                try:
-                    await context.bot.send_message(
-                        winner['user_id'],
-                        TEXTS['fa']['you_won'].format(
-                            reward=winner['reward_amount']
-                        ),
-                        parse_mode=ParseMode.HTML
-                    )
-                except:
-                    pass
-            
-            winners_text = ""
-            for idx, w in enumerate(winners, 1):
-                winners_text += f"{idx}. {w['first_name']} - {w['referral_count']} رفرال - {w['reward_amount']} USDT\n"
-            
-            await query.edit_message_text(
-                texts['winners_announced'].format(winners=winners_text, reward=winners[0]['reward_amount'] if winners else 0),
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("💰 تایید پرداخت جایزه", callback_data='confirm_reward_payment')],
-                    [InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data='employer')]
                 ]),
                 parse_mode=ParseMode.HTML
             )
         
-        elif data == 'confirm_reward_payment' and user_id == ADMIN_ID:
-            await query.edit_message_text(
-                "💰 **تایید پرداخت جایزه**\n\nلطفا پس از واریز جایزه، دکمه زیر را بزنید:",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("✅ همه برندگان دریافت کردند", callback_data='mark_all_paid')],
-                    [InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]
-                ]),
-                parse_mode=ParseMode.MARKDOWN
-            )
-        
-        elif data == 'mark_all_paid' and user_id == ADMIN_ID:
-            winners = await self.db.get_challenge_top_users(limit=10)
-            paid_count = 0
+        # ===== آمار شغلی =====
+        elif data == 'job_stats':
+            jobs = await self.db.get_user_jobs(user_id)
             
-            for w in winners:
-                if await self.db.mark_winner_paid(w['user_id']):
-                    paid_count += 1
-                    try:
-                        await context.bot.send_message(
-                            w['user_id'],
-                            TEXTS['fa']['reward_sent'].format(reward=100),
-                            parse_mode=ParseMode.HTML
-                        )
-                    except:
-                        pass
-            
-            await query.edit_message_text(
-                texts['reward_paid'].format(count=paid_count),
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
-            )
-        
-        elif data == 'set_reward' and user_id == ADMIN_ID:
-            await query.edit_message_text(
-                "🎁 **تنظیم مبلغ جایزه**\n\nلطفا مبلغ جایزه را به دلار وارد کنید:",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            self.user_states[user_id] = 'waiting_for_reward_amount'
-        
-        elif data == 'set_top_users' and user_id == ADMIN_ID:
-            await query.edit_message_text(
-                "👥 **تنظیم تعداد برندگان**\n\nلطفا تعداد برندگان را وارد کنید:",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            self.user_states[user_id] = 'waiting_for_top_users'
-        
-        elif data == 'manage_keys' and user_id == ADMIN_ID:
-            keyboard = [
-                [InlineKeyboardButton("➕ ثبت کلید جدید", callback_data='add_new_key')],
-                [InlineKeyboardButton("📋 لیست کلیدها", callback_data='list_keys')],
-                [InlineKeyboardButton("🔄 فعال/غیرفعال کردن", callback_data='toggle_key')],
-                [InlineKeyboardButton("🗑️ حذف کلید", callback_data='delete_key')],
-                [InlineKeyboardButton("📊 آمار کلیدها", callback_data='api_stats')],
-                [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]
-            ]
-            await query.edit_message_text(
-                "🔑 **مدیریت کلیدهای API**",
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode=ParseMode.MARKDOWN
-            )
-        
-        elif data == 'add_new_key' and user_id == ADMIN_ID:
-            await query.edit_message_text(
-                "🔑 **ثبت کلید جدید**\n\nلطفا کلید API را ارسال کنید:",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            self.user_states[user_id] = 'waiting_for_new_api_key'
-        
-        elif data == 'list_keys' and user_id == ADMIN_ID:
-            await query.edit_message_text("⏳ در حال دریافت لیست...")
-            stats = await self.tron_api.get_api_stats()
-            
-            if stats['total_keys'] == 0:
-                text = texts['no_keys']
-            else:
-                text = f"{texts['key_list']} ({stats['active_keys']}/{stats['total_keys']} فعال)\n\n"
-                for key, data in stats['keys'].items():
-                    status = "🟢 فعال" if data['active'] else "🔴 غیرفعال"
-                    text += f"🔑 `{data['key_preview']}` - {status}\n"
-                    text += f"   📥{data['requests']} ✅{data['success']} ❌{data['errors']}\n\n"
-            
-            await query.edit_message_text(
-                text,
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_keys')]]),
-                parse_mode=ParseMode.MARKDOWN
-            )
-        
-        elif data == 'api_stats' and user_id == ADMIN_ID:
-            stats = await self.tron_api.get_api_stats()
-            text = f"📊 **آمار کلیدها**\n\n"
-            text += f"📌 کل کلیدها: {stats['total_keys']}\n"
-            text += f"✅ فعال: {stats['active_keys']}\n"
-            text += f"📥 درخواست‌ها: {stats['total_requests']:,}\n"
-            text += f"✅ موفقیت: {stats['total_success']:,}\n"
-            text += f"❌ خطاها: {stats['total_errors']:,}\n"
-            text += f"📈 نرخ موفقیت: {stats['success_rate']:.2f}%"
-            
-            await query.edit_message_text(
-                text,
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_keys')]]),
-                parse_mode=ParseMode.MARKDOWN
-            )
-        
-        elif data == 'toggle_key' and user_id == ADMIN_ID:
-            await query.edit_message_text(
-                "🔄 **فعال/غیرفعال کردن کلید**\n\nلطفا کلید را ارسال کنید:",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            self.user_states[user_id] = 'waiting_for_toggle_key'
-        
-        elif data == 'delete_key' and user_id == ADMIN_ID:
-            await query.edit_message_text(
-                "🗑️ **حذف کلید**\n\n⚠️ غیرقابل بازگشت!\n\nلطفا کلید را ارسال کنید:",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            self.user_states[user_id] = 'waiting_for_delete_key'
-        
-        elif data == 'db_stats' and user_id == ADMIN_ID:
-            await query.edit_message_text("⏳ در حال دریافت آمار...")
-            stats = await self.db.get_db_stats()
-            
-            text = f"📊 **آمار دیتابیس**\n\n"
-            text += f"🗄️ تعداد شاردها: {stats['shard_count']}\n"
-            text += f"👥 کل کاربران: {stats['total_users']:,}\n"
-            text += f"🔗 کل لینک‌ها: {stats['total_links']:,}\n"
-            text += f"💳 کل تراکنش‌ها: {stats['total_transactions']:,}\n\n"
-            text += f"💾 **کش:**\n"
-            text += f"• آیتم‌ها: {stats['cache']['total_items']:,}\n"
-            text += f"• نرخ موفقیت: {stats['cache']['hit_rate']:.2f}%"
-            
-            await query.edit_message_text(
-                text,
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔄 بروزرسانی", callback_data='db_stats')],
-                    [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]
-                ]),
-                parse_mode=ParseMode.MARKDOWN
-            )
-        
-        elif data == 'make_paid' and user_id == ADMIN_ID:
-            await self.db.set_system_setting('is_paid', '1')
-            await query.edit_message_text(
-                texts['paid_mode'],
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]])
-            )
-        
-        elif data == 'make_free' and user_id == ADMIN_ID:
-            await self.db.set_system_setting('is_paid', '0')
-            await query.edit_message_text(
-                texts['free_mode'],
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]])
-            )
-        
-        elif data == 'broadcast' and user_id == ADMIN_ID:
-            await query.edit_message_text(
-                "📢 لطفا پیام خود را ارسال کنید:",
-                parse_mode=ParseMode.HTML
-            )
-            self.user_states[user_id] = 'waiting_for_broadcast'
-        
-        elif data == 'verify_payments' and user_id == ADMIN_ID:
-            pending_txs = await self.db.get_pending_manual_transactions()
-            
-            if not pending_txs:
+            if not jobs:
                 await query.edit_message_text(
-                    "✅ هیچ پرداخت در انتظار تاییدی نیست",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]])
+                    "❌ شما هیچ آگهی ثبت نکردید.",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data='employer')]
+                    ])
                 )
                 return
             
-            text = "📋 **پرداخت‌های نیازمند بررسی:**\n\n"
-            for tx in pending_txs[:10]:
-                text += f"👤 {tx['first_name']}\n"
-                text += f"💰 {tx['amount']} USDT\n"
-                text += f"🔗 `{tx['tx_hash'][:20]}...`\n"
-                text += f"📅 {tx['created_at'][:16]}\n\n"
+            total_views = sum(job['views'] for job in jobs)
+            total_applications = sum(job['applications'] for job in jobs)
+            active_jobs = sum(1 for job in jobs if job['is_active'])
+            
+            text = f"📊 **آمار آگهی‌های شما:**\n\n"
+            text += f"📋 کل آگهی‌ها: {len(jobs)}\n"
+            text += f"🟢 آگهی‌های فعال: {active_jobs}\n"
+            text += f"👁️ کل بازدیدها: {total_views}\n"
+            text += f"📥 کل درخواست‌ها: {total_applications}\n"
+            text += f"📈 نرخ تبدیل: {total_applications / max(1, total_views) * 100:.1f}%"
+            
+            await query.edit_message_text(
+                text,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data='employer')]
+                ]),
+                parse_mode=ParseMode.HTML
+            )
+        
+        # ===== دسته‌بندی مشاغل =====
+        elif data == 'job_categories':
+            keyboard = [
+                [InlineKeyboardButton("💻 برنامه‌نویسی", callback_data='job_cat_برنامه‌نویسی')],
+                [InlineKeyboardButton("🎨 طراحی", callback_data='job_cat_طراحی')],
+                [InlineKeyboardButton("📊 بازاریابی", callback_data='job_cat_بازاریابی')],
+                [InlineKeyboardButton("🏢 مدیریت", callback_data='job_cat_مدیریت')],
+                [InlineKeyboardButton("📚 آموزش", callback_data='job_cat_آموزش')],
+                [InlineKeyboardButton("🏥 پزشکی", callback_data='job_cat_پزشکی')],
+                [InlineKeyboardButton("🔧 تعمیرات", callback_data='job_cat_تعمیرات')],
+                [InlineKeyboardButton("🍽️ رستوران", callback_data='job_cat_رستوران')],
+                [InlineKeyboardButton("🧵 خیاطی", callback_data='job_cat_خیاطی')],
+                [InlineKeyboardButton("🔙 بازگشت", callback_data='job_seeker')]
+            ]
+            await query.edit_message_text(
+                "📂 **انتخاب دسته‌بندی:**",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.HTML
+            )
+        
+        # ===== مشاهده آگهی‌های یک دسته =====
+        elif data.startswith('job_cat_'):
+            category = data.replace('job_cat_', '')
+            jobs = await self.db.get_jobs(category)
+            
+            if not jobs:
+                await query.edit_message_text(
+                    f"❌ هیچ آگهی در دسته '{category}' یافت نشد.",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data='job_categories')]
+                    ])
+                )
+                return
+            
+            text = f"📋 **آگهی‌های {category}**\n\n"
+            for i, job in enumerate(jobs[:10], 1):
+                text += f"{i}. {job['title']}\n   💰 {job['salary']}\n   👤 {job.get('first_name', 'نامشخص')}\n\n"
+            
+            text += f"\n📊 {len(jobs)} آگهی موجود است."
             
             buttons = []
-            for tx in pending_txs[:10]:
-                buttons.append([
-                    InlineKeyboardButton(f"✅ {tx['first_name']}", callback_data=f"approve_manual_{tx['tx_hash']}"),
-                    InlineKeyboardButton(f"❌ {tx['first_name']}", callback_data=f"reject_manual_{tx['tx_hash']}")
-                ])
-            buttons.append([InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')])
+            for job in jobs[:5]:
+                buttons.append([InlineKeyboardButton(f"📌 {job['title']}", callback_data=f"job_detail_{job['id']}")])
+            buttons.append([InlineKeyboardButton("🔙 بازگشت", callback_data='job_categories')])
             
             await query.edit_message_text(
                 text,
                 reply_markup=InlineKeyboardMarkup(buttons),
-                parse_mode=ParseMode.MARKDOWN
-            )
-        
-        elif data.startswith('approve_manual_') or data.startswith('reject_manual_'):
-            if user_id != ADMIN_ID:
-                await query.edit_message_text("⛔ دسترسی غیرمجاز")
-                return
-            
-            parts = data.split('_')
-            action = parts[0]
-            tx_hash = parts[2]
-            
-            if action == 'approve':
-                await self.db.verify_transaction(tx_hash, 'approved')
-                async with self.db.get_connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT user_id FROM transactions WHERE tx_hash = ?", (tx_hash,))
-                    result = cursor.fetchone()
-                    if result:
-                        await self.db.update_user_subscription(result['user_id'])
-                        await context.bot.send_message(result['user_id'], "✅ اشتراک شما فعال شد! 🎉")
-                await query.edit_message_text(
-                    f"✅ تراکنش تایید شد",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='verify_payments')]])
-                )
-            else:
-                await self.db.verify_transaction(tx_hash, 'rejected')
-                await query.edit_message_text(
-                    f"❌ تراکنش رد شد",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='verify_payments')]])
-                )
-        
-        elif data == 'back':
-            texts = self.get_texts(lang)
-            keyboard = [
-                [InlineKeyboardButton(texts['register_link'], callback_data='register_link')],
-                [InlineKeyboardButton(texts['my_stats'], callback_data='my_stats')],
-                [InlineKeyboardButton(texts['referral'], callback_data='referral')],
-                [InlineKeyboardButton(texts['change_language'], callback_data='change_language')],
-                [InlineKeyboardButton(texts['view_links'], callback_data='view_links')],
-                [InlineKeyboardButton(texts['my_links'], callback_data='my_links')]
-            ]
-            challenge_active = await self.db.get_system_setting('challenge_active')
-            if challenge_active == '1':
-                keyboard.append([InlineKeyboardButton("🏆 چالش رفرال", callback_data='referral_challenge')])
-            if user_id == ADMIN_ID:
-                keyboard.append([InlineKeyboardButton("🛠 پنل مدیریت", callback_data='admin_panel')])
-            
-            await query.edit_message_text(
-                texts['welcome'].format(first_name=db_user.get('first_name', 'کاربر')),
-                reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode=ParseMode.HTML
             )
-    
-    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        text = update.message.text
-        state = self.user_states.get(user_id)
         
-        # ===== پیام همگانی =====
-        if state == 'waiting_for_broadcast' and user_id == ADMIN_ID:
-            msg_text = update.message.text or update.message.caption or ""
-            photo = update.message.photo[-1].file_id if update.message.photo else None
-            video = update.message.video.file_id if update.message.video else None
+        # ===== مشاهده همه آگهی‌ها =====
+        elif data == 'view_all_jobs':
+            jobs = await self.db.get_jobs()
             
-            users = await self.db.get_all_users()
-            
-            if not users:
-                await update.message.reply_text("❌ هیچ کاربری وجود ندارد!")
-                self.user_states[user_id] = None
+            if not jobs:
+                await query.edit_message_text(
+                    "❌ هیچ آگهی فعالی یافت نشد.",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data='job_seeker')]
+                    ])
+                )
                 return
             
-            total_users = len(users)
-            await update.message.reply_text(f"⏳ ارسال به {total_users:,} کاربر...")
+            text = "📋 **همه آگهی‌های استخدام:**\n\n"
+            for i, job in enumerate(jobs[:10], 1):
+                text += f"{i}. {job['title']}\n   💰 {job['salary']}\n   📂 {job['category']}\n   👤 {job.get('first_name', 'نامشخص')}\n\n"
             
-            success_count = 0
-            fail_count = 0
-            batch_size = 50
-            delay_between_batches = 0.3
+            text += f"\n📊 {len(jobs)} آگهی موجود است."
             
-            for i in range(0, total_users, batch_size):
-                batch = users[i:i+batch_size]
-                tasks = []
-                
-                for uid in batch:
-                    try:
-                        if photo:
-                            tasks.append(context.bot.send_photo(uid, photo, caption=msg_text, parse_mode=ParseMode.HTML))
-                        elif video:
-                            tasks.append(context.bot.send_video(uid, video, caption=msg_text, parse_mode=ParseMode.HTML))
-                        else:
-                            tasks.append(context.bot.send_message(uid, msg_text, parse_mode=ParseMode.HTML))
-                    except:
-                        fail_count += 1
-                
-                if tasks:
-                    results = await asyncio.gather(*tasks, return_exceptions=True)
-                    for result in results:
-                        if isinstance(result, Exception):
-                            fail_count += 1
-                        else:
-                            success_count += 1
-                
-                if i % (batch_size * 10) == 0 or i + batch_size >= total_users:
-                    await update.message.reply_text(
-                        f"📊 {min(i+batch_size, total_users):,}/{total_users:,} | ✅ {success_count:,} | ❌ {fail_count:,}"
-                    )
-                
-                await asyncio.sleep(delay_between_batches)
+            buttons = []
+            for job in jobs[:5]:
+                buttons.append([InlineKeyboardButton(f"📌 {job['title']}", callback_data=f"job_detail_{job['id']}")])
+            buttons.append([InlineKeyboardButton("🔙 بازگشت", callback_data='job_seeker')])
             
-            await update.message.reply_text(
-                f"✅ **ارسال کامل شد!**\n👥 {total_users:,}\n✅ {success_count:,}\n❌ {fail_count:,}"
+            await query.edit_message_text(
+                text,
+                reply_markup=InlineKeyboardMarkup(buttons),
+                parse_mode=ParseMode.HTML
             )
-            self.user_states[user_id] = None
         
-        # ===== حذف لینک توسط کاربر =====
-        elif state == 'waiting_for_delete_link':
-            if text == '/cancel':
-                await update.message.reply_text(
-                    "✅ لغو شد",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='my_links')]])
-                )
-                self.user_states[user_id] = None
+        # ===== جزییات آگهی =====
+        elif data.startswith('job_detail_'):
+            job_id = int(data.replace('job_detail_', ''))
+            
+            async with self.db.get_connection(user_id) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT j.*, u.first_name, u.username, u.user_id as employer_id
+                    FROM job_posts j
+                    JOIN users u ON j.employer_id = u.user_id
+                    WHERE j.id = ?
+                """, (job_id,))
+                job = cursor.fetchone()
+            
+            if not job:
+                await query.edit_message_text("❌ آگهی یافت نشد")
                 return
             
-            try:
-                link_id = int(text.strip())
-                success, msg = await self.db.delete_user_link(user_id, link_id)
-                await update.message.reply_text(
-                    msg,
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='my_links')]])
-                )
-            except ValueError:
-                await update.message.reply_text(
-                    "❌ لطفا یک عدد معتبر وارد کنید",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='my_links')]])
-                )
-            self.user_states[user_id] = None
-        
-        # ===== مدیریت لینک‌ها توسط ادمین =====
-        elif state == 'waiting_admin_user_id' and user_id == ADMIN_ID:
-            if text == '/cancel':
-                await update.message.reply_text(
-                    "✅ لغو شد",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]])
-                )
-                self.user_states[user_id] = None
-                return
+            # افزایش بازدید
+            async with self.db.get_connection(user_id) as conn:
+                cursor = conn.cursor()
+                cursor.execute("UPDATE job_posts SET views = views + 1 WHERE id = ?", (job_id,))
+                conn.commit()
             
-            try:
-                target_user_id = int(text.strip())
-                links = await self.db.admin_get_user_links(target_user_id)
-                
-                if links:
-                    text_msg = f"📋 **لینک‌های کاربر {target_user_id}:**\n\n"
-                    for link in links:
-                        text_msg += f"🆔 {link['id']}\n"
-                        text_msg += f"🔗 {link['video_url'][:50]}...\n"
-                        text_msg += f"👀 {link['views_count']} بازدید\n"
-                        text_msg += f"━━━━━━━━━━━━━\n\n"
-                    
-                    await update.message.reply_text(
-                        text_msg,
-                        reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("🗑️ حذف لینک", callback_data='admin_delete_link')],
-                            [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]
-                        ]),
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-                    self.user_states[user_id] = 'waiting_admin_link_id'
-                    self.user_states[f"admin_target_{user_id}"] = target_user_id
-                else:
-                    await update.message.reply_text(
-                        "❌ این کاربر هیچ لینکی ندارد",
-                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]])
-                    )
-                    self.user_states[user_id] = None
-            except ValueError:
-                await update.message.reply_text(
-                    "❌ لطفا یک عدد معتبر وارد کنید",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]])
-                )
-        
-        elif state == 'waiting_admin_link_id' and user_id == ADMIN_ID:
-            if text == '/cancel':
-                await update.message.reply_text(
-                    "✅ لغو شد",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]])
-                )
-                self.user_states[user_id] = None
-                return
+            text = texts['job_detail'].format(
+                job_title=job['title'],
+                description=job['description'],
+                salary=job['salary'],
+                contact=job['contact'],
+                address=job['address']
+            )
             
-            try:
-                link_id = int(text.strip())
-                success, msg = await self.db.admin_delete_link(link_id)
-                await update.message.reply_text(
-                    msg,
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]])
-                )
-            except ValueError:
-                await update.message.reply_text(
-                    "❌ لطفا یک عدد معتبر وارد کنید",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]])
-                )
-            self.user_states[user_id] = None
-        
-        # ===== ثبت لینک =====
-        elif state == 'waiting_for_link':
-            if not text.startswith('http') or ('youtube.com' not in text and 'youtu.be' not in text):
-                await update.message.reply_text("❌ لطفا یک لینک معتبر یوتیوب ارسال کنید")
-                return
-            
-            success, msg = await self.db.add_youtube_link(user_id, text)
-            if not success:
-                await update.message.reply_text(f"❌ {msg}")
-                self.user_states[user_id] = None
-                return
-            
-            await update.message.reply_text(
-                texts['link_registered'],
+            await query.edit_message_text(
+                text,
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("👀 مشاهده لینک‌های بازدید", callback_data='view_links')],
-                    [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
+                    [InlineKeyboardButton(texts['apply_job'], callback_data=f"apply_{job_id}")],
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data='job_seeker')]
                 ]),
                 parse_mode=ParseMode.HTML
             )
-            self.user_states[user_id] = None
         
-        # ===== سایر =====
-        elif state == 'waiting_for_source_address':
-            address = text.strip()
-            if len(address) < 30 or len(address) > 50:
-                await update.message.reply_text("❌ آدرس نامعتبر است")
-                return
+        # ===== درخواست شغل =====
+        elif data.startswith('apply_'):
+            job_id = int(data.replace('apply_', ''))
+            await query.edit_message_text("📝 پیام خود را برای کارفرما ارسال کنید:")
+            self.user_states[user_id] = f'apply_{job_id}'
+        
+        # ===== خرید اشتراک =====
+        elif data == 'buy_subscription':
+            wallet = await self.db.get_owner_wallet()
+            price = await self.db.get_subscription_price()
             
-            await self.db.set_user_payment_address(user_id, address)
-            lang = (await self.db.get_user(user_id))['language']
-            texts = self.get_texts(lang)
-            
-            await update.message.reply_text(
-                texts['source_address_saved'].format(wallet=OWNER_WALLET),
+            await query.edit_message_text(
+                texts['payment_info'].format(price=price, wallet=wallet),
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("✅ پرداخت کردم", callback_data='confirm_payment')],
                     [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
                 ]),
                 parse_mode=ParseMode.HTML
             )
-            self.user_states[user_id] = None
         
-        elif state == 'waiting_for_manual_hash':
-            tx_hash = text.strip()
-            if len(tx_hash) != 64:
-                await update.message.reply_text("❌ هش نامعتبر است")
-                return
-            
-            async with self.db.get_connection(user_id) as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    INSERT INTO transactions (user_id, tx_hash, amount, manual_review)
-                    VALUES (?, ?, ?, 1)
-                """, (user_id, tx_hash, SUBSCRIPTION_PRICE_USD))
-                conn.commit()
-            
-            lang = (await self.db.get_user(user_id))['language']
-            texts = self.get_texts(lang)
-            
-            await update.message.reply_text(texts['hash_received'], parse_mode=ParseMode.HTML)
-            await context.bot.send_message(
-                ADMIN_ID,
-                f"🔔 درخواست بررسی دستی:\n👤 {update.effective_user.first_name}\n🆔 {user_id}\n🔗 `{tx_hash[:20]}...`",
-                parse_mode=ParseMode.MARKDOWN
+        # ===== تایید پرداخت =====
+        elif data == 'confirm_payment':
+            await query.edit_message_text(
+                "🔑 لطفا هش تراکنش (TX Hash) خود را وارد کنید:",
+                parse_mode=ParseMode.HTML
             )
-            self.user_states[user_id] = None
+            self.user_states[user_id] = 'waiting_payment_hash'
         
-        elif state == 'waiting_for_challenge_duration' and user_id == ADMIN_ID:
-            if text == '/cancel':
-                await update.message.reply_text(
-                    "✅ لغو شد",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
+        # ===== پنل مدیریت =====
+        elif data == 'admin_panel' and user_id == ADMIN_ID:
+            keyboard = [
+                [InlineKeyboardButton(texts['admin_broadcast'], callback_data='admin_broadcast')],
+                [InlineKeyboardButton(texts['admin_delete_user'], callback_data='admin_delete_user')],
+                [InlineKeyboardButton(texts['admin_paid_mode'], callback_data='admin_paid_mode')],
+                [InlineKeyboardButton(texts['admin_free_mode'], callback_data='admin_free_mode')],
+                [InlineKeyboardButton(texts['admin_verify_hash'], callback_data='admin_verify_hash')],
+                [InlineKeyboardButton(texts['admin_add_api'], callback_data='admin_add_api')],
+                [InlineKeyboardButton(texts['admin_wallet'], callback_data='admin_wallet')],
+                [InlineKeyboardButton(texts['admin_stats'], callback_data='admin_stats')],
+                [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
+            ]
+            await query.edit_message_text(
+                "🛠 **پنل مدیریت**",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.HTML
+            )
+        
+        # ===== تنظیمات کیف پول =====
+        elif data == 'admin_wallet' and user_id == ADMIN_ID:
+            current_wallet = await self.db.get_owner_wallet()
+            current_price = await self.db.get_subscription_price()
+            
+            await query.edit_message_text(
+                f"💰 **تنظیمات کیف پول و قیمت**\n\n"
+                f"📌 آدرس کیف پول فعلی:\n<code>{current_wallet}</code>\n\n"
+                f"💰 قیمت اشتراک فعلی: {current_price} دلار\n\n"
+                f"📤 برای تغییر آدرس کیف پول، دستور زیر را ارسال کنید:\n"
+                f"<code>/setwallet آدرس_جدید</code>\n\n"
+                f"📤 برای تغییر قیمت اشتراک:\n"
+                f"<code>/setprice عدد_قیمت</code>",
+                parse_mode=ParseMode.HTML
+            )
+        
+        # ===== ارسال پیام همگانی =====
+        elif data == 'admin_broadcast' and user_id == ADMIN_ID:
+            await query.edit_message_text("📢 لطفا پیام خود را ارسال کنید:")
+            self.user_states[user_id] = 'waiting_broadcast'
+        
+        # ===== حذف کاربر =====
+        elif data == 'admin_delete_user' and user_id == ADMIN_ID:
+            await query.edit_message_text("🗑️ لطفا آیدی کاربر را ارسال کنید:")
+            self.user_states[user_id] = 'waiting_delete_user'
+        
+        # ===== پولی کردن ربات =====
+        elif data == 'admin_paid_mode' and user_id == ADMIN_ID:
+            await self.db.set_system_setting('is_paid', '1')
+            await query.edit_message_text(
+                "💰 ربات به حالت پولی تغییر کرد.\nکاربران برای دانلود بیشتر باید اشتراک بخرند.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]
+                ])
+            )
+        
+        # ===== رایگان کردن ربات =====
+        elif data == 'admin_free_mode' and user_id == ADMIN_ID:
+            await self.db.set_system_setting('is_paid', '0')
+            await query.edit_message_text(
+                "🆓 ربات به حالت رایگان تغییر کرد.\nهمه کاربران می‌توانند بدون محدودیت دانلود کنند.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]
+                ])
+            )
+        
+        # ===== تایید هش =====
+        elif data == 'admin_verify_hash' and user_id == ADMIN_ID:
+            pending_txs = await self.db.get_pending_transactions()
+            
+            if not pending_txs:
+                await query.edit_message_text(
+                    "✅ هیچ پرداخت در انتظار تاییدی وجود ندارد.",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]
+                    ])
                 )
-                self.user_states[user_id] = None
                 return
             
-            try:
-                duration = int(text.strip())
-                if duration <= 0:
-                    raise ValueError
-                
-                reward = int(await self.db.get_system_setting('challenge_reward') or '100')
-                top_users = int(await self.db.get_system_setting('challenge_top_users') or '10')
-                
-                success, msg = await self.db.start_referral_challenge(duration, reward, top_users)
-                
-                if success:
-                    users = await self.db.get_all_active_users()
-                    for uid in users[:100]:
-                        try:
-                            user_lang = (await self.db.get_user(uid))['language'] if await self.db.get_user(uid) else 'fa'
-                            u_texts = self.get_texts(user_lang)
-                            await context.bot.send_message(
-                                uid,
-                                u_texts['challenge_started'].format(
-                                    duration=duration,
-                                    reward=reward,
-                                    top_users=top_users
-                                ),
-                                parse_mode=ParseMode.HTML
-                            )
-                            await asyncio.sleep(0.05)
-                        except:
-                            pass
-                    
-                    await update.message.reply_text(
-                        f"✅ **چالش شروع شد!**\n\n📅 {duration} روز\n🎁 {reward} USDT\n👥 {top_users} نفر",
-                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]]),
-                        parse_mode=ParseMode.MARKDOWN
+            text = "📋 **پرداخت‌های در انتظار تایید:**\n\n"
+            for tx in pending_txs[:10]:
+                text += f"👤 {tx.get('first_name', 'نامشخص')}\n"
+                text += f"🆔 {tx['user_id']}\n"
+                text += f"💰 {tx['amount']} دلار\n"
+                text += f"🔗 <code>{tx['tx_hash'][:20]}...</code>\n"
+                text += f"📅 {tx['created_at'][:10]}\n\n"
+            
+            buttons = []
+            for tx in pending_txs[:5]:
+                buttons.append([
+                    InlineKeyboardButton(
+                        f"✅ {tx.get('first_name', 'کاربر')}", 
+                        callback_data=f"approve_tx_{tx['tx_hash']}"
                     )
-                else:
-                    await update.message.reply_text(
-                        f"❌ {msg}",
-                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
-                    )
-            except ValueError:
-                await update.message.reply_text(
-                    texts['invalid_duration'],
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
-                )
-            self.user_states[user_id] = None
+                ])
+            buttons.append([InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')])
+            
+            await query.edit_message_text(
+                text,
+                reply_markup=InlineKeyboardMarkup(buttons),
+                parse_mode=ParseMode.HTML
+            )
         
-        elif state == 'waiting_for_reward_amount' and user_id == ADMIN_ID:
-            if text == '/cancel':
-                await update.message.reply_text(
-                    "✅ لغو شد",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
-                )
-                self.user_states[user_id] = None
-                return
+        # ===== تایید تراکنش =====
+        elif data.startswith('approve_tx_') and user_id == ADMIN_ID:
+            tx_hash = data.replace('approve_tx_', '')
             
-            try:
-                amount = int(text.strip())
-                if amount <= 0:
-                    raise ValueError
-                
-                await self.db.set_system_setting('challenge_reward', str(amount))
-                await update.message.reply_text(
-                    texts['challenge_reward_set'].format(amount=amount),
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
-                )
-            except ValueError:
-                await update.message.reply_text(
-                    "❌ عدد نامعتبر!",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
-                )
-            self.user_states[user_id] = None
-        
-        elif state == 'waiting_for_top_users' and user_id == ADMIN_ID:
-            if text == '/cancel':
-                await update.message.reply_text(
-                    "✅ لغو شد",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
-                )
-                self.user_states[user_id] = None
-                return
-            
-            try:
-                count = int(text.strip())
-                if count <= 0:
-                    raise ValueError
-                
-                await self.db.set_system_setting('challenge_top_users', str(count))
-                await update.message.reply_text(
-                    texts['challenge_top_users_set'].format(count=count),
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
-                )
-            except ValueError:
-                await update.message.reply_text(
-                    "❌ عدد نامعتبر!",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
-                )
-            self.user_states[user_id] = None
-        
-        elif state == 'waiting_for_new_api_key' and user_id == ADMIN_ID:
-            if text == '/cancel':
-                await update.message.reply_text(
-                    "✅ لغو شد",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_keys')]])
-                )
-                self.user_states[user_id] = None
-                return
-            
-            await update.message.reply_text("⏳ در حال تست...")
-            
-            success, message = await self.tron_api.add_api_key(text.strip())
+            success = await self.db.verify_transaction(tx_hash)
             
             if success:
-                await self.db.save_api_key(text.strip(), f"اضافه شده در {datetime.now()}")
-                await update.message.reply_text(
-                    f"✅ **کلید ثبت شد!**\n\n🔑 `{text.strip()[:20]}...`",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_keys')]]),
-                    parse_mode=ParseMode.MARKDOWN
+                await query.edit_message_text(
+                    f"✅ تراکنش <code>{tx_hash[:20]}...</code> با موفقیت تایید شد!",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_verify_hash')]
+                    ]),
+                    parse_mode=ParseMode.HTML
                 )
             else:
-                await update.message.reply_text(
-                    f"❌ **خطا:** {message}",
-                    parse_mode=ParseMode.MARKDOWN
+                await query.edit_message_text(
+                    f"❌ خطا در تایید تراکنش",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_verify_hash')]
+                    ])
                 )
+        
+        # ===== اضافه کردن API =====
+        elif data == 'admin_add_api' and user_id == ADMIN_ID:
+            await query.edit_message_text(
+                "🔑 لطفا کلید API ترون را ارسال کنید:\n\n"
+                "📌 کلید باید از سایت TronGrid دریافت شده باشد.",
+                parse_mode=ParseMode.HTML
+            )
+            self.user_states[user_id] = 'waiting_add_api'
+        
+        # ===== آمار دیتابیس =====
+        elif data == 'admin_stats' and user_id == ADMIN_ID:
+            await query.edit_message_text("⏳ در حال دریافت آمار...")
+            
+            stats = await self.db.get_db_stats()
+            
+            text = f"📊 **آمار دیتابیس و کش**\n\n"
+            text += f"🗄️ **ساختار:**\n"
+            text += f"• تعداد شاردها: {stats['shard_count']}\n"
+            text += f"• کل کاربران: {stats['total_users']:,}\n"
+            text += f"• کل آگهی‌ها: {stats['total_jobs']:,}\n"
+            text += f"• کل دانلودها: {stats['total_downloads']:,}\n"
+            text += f"• کل تراکنش‌ها: {stats['total_transactions']:,}\n\n"
+            text += f"💾 **کش:**\n"
+            text += f"• آیتم‌های کش: {stats['cache']['total_items']:,}\n"
+            text += f"• نرخ موفقیت: {stats['cache']['hit_rate']:.2f}%"
+            
+            await query.edit_message_text(
+                text,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 بروزرسانی", callback_data='admin_stats')],
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]
+                ]),
+                parse_mode=ParseMode.HTML
+            )
+        
+        # ===== زبان =====
+        elif data == 'language':
+            keyboard = [
+                [InlineKeyboardButton("🇮🇷 فارسی", callback_data='set_lang_fa')],
+                [InlineKeyboardButton("🇬🇧 English", callback_data='set_lang_en')],
+                [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
+            ]
+            await query.edit_message_text(
+                "🌐 انتخاب زبان / Select Language:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        
+        elif data.startswith('set_lang_'):
+            new_lang = data.replace('set_lang_', '')
+            await self.db.update_user_language(user_id, new_lang)
+            
+            lang = new_lang
+            texts = self.get_texts(lang)
+            
+            is_subscribed = await self.db.check_subscription(user_id)
+            subscription_text = "✅ اشتراک فعال" if is_subscribed else "❌ بدون اشتراک"
+            
+            keyboard = [
+                [InlineKeyboardButton(texts['download_instagram'], callback_data='download_instagram')],
+                [InlineKeyboardButton(texts['download_youtube'], callback_data='download_youtube')],
+                [InlineKeyboardButton(texts['download_tiktok'], callback_data='download_tiktok')],
+                [InlineKeyboardButton(texts['job_seeker'], callback_data='job_seeker')],
+                [InlineKeyboardButton(texts['employer'], callback_data='employer')],
+                [InlineKeyboardButton("💳 خرید اشتراک", callback_data='buy_subscription')],
+                [InlineKeyboardButton(texts['language'], callback_data='language')]
+            ]
+            
+            if user_id == ADMIN_ID:
+                keyboard.append([InlineKeyboardButton("🛠 پنل مدیریت", callback_data='admin_panel')])
+            
+            await query.edit_message_text(
+                f"✅ زبان به {SUPPORTED_LANGUAGES[new_lang]} تغییر یافت\n\n📊 وضعیت اشتراک: {subscription_text}",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        
+        # ===== بازگشت =====
+        elif data == 'back':
+            lang = db_user.get('language', 'fa')
+            texts = self.get_texts(lang)
+            
+            is_subscribed = await self.db.check_subscription(user_id)
+            subscription_text = "✅ اشتراک فعال" if is_subscribed else "❌ بدون اشتراک"
+            
+            keyboard = [
+                [InlineKeyboardButton(texts['download_instagram'], callback_data='download_instagram')],
+                [InlineKeyboardButton(texts['download_youtube'], callback_data='download_youtube')],
+                [InlineKeyboardButton(texts['download_tiktok'], callback_data='download_tiktok')],
+                [InlineKeyboardButton(texts['job_seeker'], callback_data='job_seeker')],
+                [InlineKeyboardButton(texts['employer'], callback_data='employer')],
+                [InlineKeyboardButton("💳 خرید اشتراک", callback_data='buy_subscription')],
+                [InlineKeyboardButton(texts['language'], callback_data='language')]
+            ]
+            
+            if user_id == ADMIN_ID:
+                keyboard.append([InlineKeyboardButton("🛠 پنل مدیریت", callback_data='admin_panel')])
+            
+            await query.edit_message_text(
+                texts['welcome'].format(first_name=db_user.get('first_name', 'کاربر')) + f"\n\n📊 وضعیت اشتراک: {subscription_text}",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.HTML
+            )
+    
+    # ===== هندلر پیام‌ها =====
+    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        text = update.message.text
+        state = self.user_states.get(user_id)
+        
+        if not text:
+            return
+        
+        # ===== دستورات ادمین =====
+        if text.startswith('/setwallet') and user_id == ADMIN_ID:
+            parts = text.split(' ', 1)
+            if len(parts) < 2:
+                await update.message.reply_text("❌ لطفا آدرس کیف پول را وارد کنید:\n<code>/setwallet آدرس_جدید</code>", parse_mode=ParseMode.HTML)
+                return
+            
+            new_wallet = parts[1].strip()
+            if len(new_wallet) < 30:
+                await update.message.reply_text("❌ آدرس کیف پول نامعتبر است")
+                return
+            
+            await self.db.set_system_setting('owner_wallet', new_wallet)
+            await update.message.reply_text(
+                f"✅ آدرس کیف پول با موفقیت به‌روزرسانی شد:\n<code>{new_wallet}</code>",
+                parse_mode=ParseMode.HTML
+            )
+            return
+        
+        if text.startswith('/setprice') and user_id == ADMIN_ID:
+            parts = text.split(' ', 1)
+            if len(parts) < 2:
+                await update.message.reply_text("❌ لطفا قیمت را وارد کنید:\n<code>/setprice عدد_قیمت</code>", parse_mode=ParseMode.HTML)
+                return
+            
+            try:
+                new_price = int(parts[1].strip())
+                if new_price <= 0:
+                    raise ValueError
+                
+                await self.db.set_system_setting('subscription_price', str(new_price))
+                await update.message.reply_text(
+                    f"✅ قیمت اشتراک با موفقیت به‌روزرسانی شد:\n💰 {new_price} دلار",
+                    parse_mode=ParseMode.HTML
+                )
+            except ValueError:
+                await update.message.reply_text("❌ لطفا یک عدد معتبر وارد کنید")
+            return
+        
+        if text.startswith('/') and user_id == ADMIN_ID:
+            await update.message.reply_text("❌ دستور نامعتبر است.\nدستورات موجود:\n/setwallet آدرس_جدید\n/setprice عدد_قیمت")
+            return
+        
+        if not state:
+            await update.message.reply_text("❌ لطفا ابتدا یک گزینه را انتخاب کنید.\nبرای شروع /start را بزنید.")
+            return
+        
+        # ===== دانلود از اینستاگرام =====
+        if state == 'waiting_instagram_download':
+            if not text.startswith('http'):
+                await update.message.reply_text("❌ لطفا لینک معتبر ارسال کنید")
+                return
+            
+            await update.message.reply_text("⏳ در حال دانلود از اینستاگرام...")
+            
+            try:
+                import yt_dlp
+                
+                ydl_opts = {
+                    'format': 'best',
+                    'outtmpl': f'downloads/{user_id}_instagram_%(title)s.%(ext)s',
+                    'quiet': True,
+                    'no_warnings': True,
+                }
+                
+                os.makedirs('downloads', exist_ok=True)
+                
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(text, download=True)
+                    filename = ydl.prepare_filename(info)
+                
+                # ارسال فایل به کاربر
+                with open(filename, 'rb') as f:
+                    await update.message.reply_video(f, caption="✅ دانلود از اینستاگرام با موفقیت انجام شد!")
+                
+                # حذف فایل
+                os.remove(filename)
+                
+                # افزایش تعداد دانلود
+                await self.db.increment_download_count(user_id, 'instagram')
+                
+                await update.message.reply_text(
+                    "📊 امروز: ۱/۲ دانلود رایگان\n"
+                    "💳 برای دانلود بیشتر اشتراک بخرید."
+                )
+                
+            except Exception as e:
+                logger.error(f"Instagram download error: {e}")
+                await update.message.reply_text(f"❌ خطا در دانلود: {str(e)[:100]}")
+            
             self.user_states[user_id] = None
         
-        elif state == 'waiting_for_toggle_key' and user_id == ADMIN_ID:
-            if text == '/cancel':
+        # ===== دانلود از یوتیوب =====
+        elif state == 'waiting_youtube_download':
+            if not text.startswith('http'):
+                await update.message.reply_text("❌ لطفا لینک معتبر ارسال کنید")
+                return
+            
+            await update.message.reply_text("⏳ در حال دانلود از یوتیوب...")
+            
+            try:
+                import yt_dlp
+                
+                ydl_opts = {
+                    'format': 'best[height<=1080]',
+                    'outtmpl': f'downloads/{user_id}_youtube_%(title)s.%(ext)s',
+                    'quiet': True,
+                    'no_warnings': True,
+                }
+                
+                os.makedirs('downloads', exist_ok=True)
+                
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(text, download=True)
+                    filename = ydl.prepare_filename(info)
+                
+                with open(filename, 'rb') as f:
+                    await update.message.reply_video(f, caption="✅ دانلود از یوتیوب با موفقیت انجام شد!")
+                
+                os.remove(filename)
+                await self.db.increment_download_count(user_id, 'youtube')
+                
                 await update.message.reply_text(
-                    "✅ لغو شد",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_keys')]])
+                    "📊 امروز: ۱/۲ دانلود رایگان\n"
+                    "💳 برای دانلود بیشتر اشتراک بخرید."
                 )
+                
+            except Exception as e:
+                logger.error(f"YouTube download error: {e}")
+                await update.message.reply_text(f"❌ خطا در دانلود: {str(e)[:100]}")
+            
+            self.user_states[user_id] = None
+        
+        # ===== دانلود از تیک تاک =====
+        elif state == 'waiting_tiktok_download':
+            if not text.startswith('http'):
+                await update.message.reply_text("❌ لطفا لینک معتبر ارسال کنید")
+                return
+            
+            await update.message.reply_text("⏳ در حال دانلود از تیک تاک...")
+            
+            try:
+                import yt_dlp
+                
+                ydl_opts = {
+                    'format': 'best',
+                    'outtmpl': f'downloads/{user_id}_tiktok_%(title)s.%(ext)s',
+                    'quiet': True,
+                    'no_warnings': True,
+                }
+                
+                os.makedirs('downloads', exist_ok=True)
+                
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(text, download=True)
+                    filename = ydl.prepare_filename(info)
+                
+                with open(filename, 'rb') as f:
+                    await update.message.reply_video(f, caption="✅ دانلود از تیک تاک با موفقیت انجام شد!")
+                
+                os.remove(filename)
+                await self.db.increment_download_count(user_id, 'tiktok')
+                
+                await update.message.reply_text(
+                    "📊 امروز: ۱/۲ دانلود رایگان\n"
+                    "💳 برای دانلود بیشتر اشتراک بخرید."
+                )
+                
+            except Exception as e:
+                logger.error(f"TikTok download error: {e}")
+                await update.message.reply_text(f"❌ خطا در دانلود: {str(e)[:100]}")
+            
+            self.user_states[user_id] = None
+        
+        # ===== ثبت آگهی جدید =====
+        elif state == 'waiting_job_category':
+            category = text.strip()
+            
+            # چک کردن اینکه دسته بندی معتبر است
+            valid_categories = [
+                'برنامه‌نویسی', 'طراحی', 'بازاریابی', 'مدیریت', 'آموزش',
+                'پزشکی', 'تعمیرات', 'رستوران', 'خیاطی', 'آرایشگری',
+                'حمل و نقل', 'کشاورزی', 'ساختمان', 'حقوق', 'حسابداری',
+                'گردشگری', 'ورزش', 'هنر', 'خدمات مشتریان', 'مهندسی'
+            ]
+            
+            if category not in valid_categories:
+                await update.message.reply_text(
+                    "❌ دسته بندی نامعتبر است.\n"
+                    "لطفاً یکی از دسته‌های لیست شده را انتخاب کنید.",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data='new_job')]
+                    ])
+                )
+                return
+            
+            await update.message.reply_text("📌 عنوان شغل را وارد کنید:")
+            self.user_states[user_id] = f'job_title_{category}'
+        
+        elif state and state.startswith('job_title_'):
+            category = state.replace('job_title_', '')
+            title = text.strip()
+            await update.message.reply_text("📝 توضیحات شغل را وارد کنید:")
+            self.user_states[user_id] = f'job_desc_{category}_{title}'
+        
+        elif state and state.startswith('job_desc_'):
+            parts = state.split('_')
+            category = parts[2]
+            title = parts[3]
+            description = text.strip()
+            await update.message.reply_text("💰 حقوق/دستمزد را وارد کنید:")
+            self.user_states[user_id] = f'job_salary_{category}_{title}_{description}'
+        
+        elif state and state.startswith('job_salary_'):
+            parts = state.split('_')
+            category = parts[2]
+            title = parts[3]
+            description = parts[4]
+            salary = text.strip()
+            await update.message.reply_text("📞 شماره تماس را وارد کنید:")
+            self.user_states[user_id] = f'job_contact_{category}_{title}_{description}_{salary}'
+        
+        elif state and state.startswith('job_contact_'):
+            parts = state.split('_')
+            category = parts[2]
+            title = parts[3]
+            description = parts[4]
+            salary = parts[5]
+            contact = text.strip()
+            await update.message.reply_text("📍 آدرس را وارد کنید:")
+            self.user_states[user_id] = f'job_address_{category}_{title}_{description}_{salary}_{contact}'
+        
+        elif state and state.startswith('job_address_'):
+            parts = state.split('_')
+            category = parts[2]
+            title = parts[3]
+            description = parts[4]
+            salary = parts[5]
+            contact = parts[6]
+            address = text.strip()
+            
+            job_data = {
+                'category': category,
+                'title': title,
+                'description': description,
+                'salary': salary,
+                'contact': contact,
+                'address': address
+            }
+            
+            job_id = await self.db.create_job(user_id, job_data)
+            
+            await update.message.reply_text(
+                f"✅ آگهی با موفقیت ثبت شد!\n\n"
+                f"📌 عنوان: {title}\n"
+                f"📂 دسته: {category}\n"
+                f"💰 حقوق: {salary}\n"
+                f"📞 تماس: {contact}\n"
+                f"📍 آدرس: {address}\n\n"
+                f"🆔 شناسه آگهی: {job_id}\n\n"
+                f"📢 آگهی شما به زودی به کاربران نمایش داده می‌شود."
+            )
+            
+            self.user_states[user_id] = None
+        
+        # ===== درخواست شغل =====
+        elif state and state.startswith('apply_'):
+            job_id = int(state.replace('apply_', ''))
+            message = text.strip()
+            
+            if len(message) < 10:
+                await update.message.reply_text("❌ لطفا پیام خود را با جزئیات بیشتر ارسال کنید (حداقل ۱۰ کاراکتر)")
+                return
+            
+            success = await self.db.apply_for_job(job_id, user_id, message)
+            
+            if success:
+                await update.message.reply_text(
+                    "✅ درخواست شما با موفقیت ارسال شد!\n"
+                    "📌 کارفرما به زودی با شما تماس می‌گیرد.\n\n"
+                    "💡 برای مشاهده آگهی‌های بیشتر، به بخش جویای کار بروید."
+                )
+            else:
+                await update.message.reply_text("❌ خطا در ارسال درخواست")
+            
+            self.user_states[user_id] = None
+        
+        # ===== پرداخت اشتراک =====
+        elif state == 'waiting_payment_hash':
+            tx_hash = text.strip()
+            
+            if len(tx_hash) != 64:
+                await update.message.reply_text("❌ هش نامعتبر است (باید ۶۴ کاراکتر باشد)")
+                return
+            
+            price = await self.db.get_subscription_price()
+            
+            await self.db.add_transaction(user_id, tx_hash, price)
+            
+            await update.message.reply_text(
+                f"✅ هش شما با موفقیت ثبت شد!\n\n"
+                f"🔗 هش: <code>{tx_hash}</code>\n"
+                f"💰 مبلغ: {price} دلار\n\n"
+                f"⏳ در حال بررسی بلاکچین...\n"
+                f"📌 این فرآیند به صورت خودکار انجام می‌شود و حداکثر ۳۰ دقیقه زمان می‌برد.\n\n"
+                f"✅ پس از تایید، اشتراک شما فعال می‌شود.",
+                parse_mode=ParseMode.HTML
+            )
+            
+            # اطلاع به ادمین
+            await context.bot.send_message(
+                ADMIN_ID,
+                f"🔔 درخواست اشتراک جدید:\n"
+                f"👤 {update.effective_user.first_name}\n"
+                f"🆔 {user_id}\n"
+                f"🔗 هش: <code>{tx_hash}</code>\n"
+                f"💰 مبلغ: {price} دلار\n"
+                f"📅 زمان: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                parse_mode=ParseMode.HTML
+            )
+            
+            self.user_states[user_id] = None
+        
+        # ===== پیام همگانی (ادمین) =====
+        elif state == 'waiting_broadcast' and user_id == ADMIN_ID:
+            users = await self.db.get_all_users()
+            
+            if not users:
+                await update.message.reply_text("❌ هیچ کاربری یافت نشد")
                 self.user_states[user_id] = None
                 return
             
-            success, message = await self.tron_api.toggle_api_key(text.strip())
+            await update.message.reply_text(f"⏳ ارسال پیام به {len(users)} کاربر...")
+            
+            success_count = 0
+            fail_count = 0
+            
+            for i, uid in enumerate(users):
+                try:
+                    await context.bot.send_message(uid, text, parse_mode=ParseMode.HTML)
+                    success_count += 1
+                    await asyncio.sleep(0.05)
+                except Exception as e:
+                    fail_count += 1
+                
+                if i % 30 == 0 and i > 0:
+                    await asyncio.sleep(0.5)
+            
             await update.message.reply_text(
-                message,
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_keys')]])
+                f"✅ پیام با موفقیت ارسال شد!\n"
+                f"👤 موفق: {success_count}\n"
+                f"❌ ناموفق: {fail_count}"
             )
+            
             self.user_states[user_id] = None
         
-        elif state == 'waiting_for_delete_key' and user_id == ADMIN_ID:
-            if text == '/cancel':
-                await update.message.reply_text(
-                    "✅ لغو شد",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_keys')]])
-                )
+        # ===== حذف کاربر (ادمین) =====
+        elif state == 'waiting_delete_user' and user_id == ADMIN_ID:
+            try:
+                target_id = int(text.strip())
+                user_to_delete = await self.db.get_user(target_id)
+                
+                if not user_to_delete:
+                    await update.message.reply_text(f"❌ کاربر {target_id} یافت نشد")
+                    self.user_states[user_id] = None
+                    return
+                
+                success = await self.db.delete_user(target_id)
+                
+                if success:
+                    await update.message.reply_text(
+                        f"✅ کاربر {target_id} با موفقیت حذف شد\n"
+                        f"👤 نام: {user_to_delete.get('first_name', 'نامشخص')}"
+                    )
+                else:
+                    await update.message.reply_text(f"❌ خطا در حذف کاربر {target_id}")
+                    
+            except ValueError:
+                await update.message.reply_text("❌ لطفا یک آیدی عددی معتبر ارسال کنید")
+            
+            self.user_states[user_id] = None
+        
+        # ===== اضافه کردن API (ادمین) =====
+        elif state == 'waiting_add_api' and user_id == ADMIN_ID:
+            api_key = text.strip()
+            
+            if len(api_key) < 20:
+                await update.message.reply_text("❌ کلید API نامعتبر است")
                 self.user_states[user_id] = None
                 return
             
-            success, message = await self.tron_api.remove_api_key(text.strip())
-            await update.message.reply_text(
-                message,
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_keys')]])
-            )
+            success = await self.tron_payment.api_manager.add_api_key(api_key)
+            
+            if success:
+                await update.message.reply_text(
+                    f"✅ کلید API با موفقیت اضافه شد:\n<code>{api_key[:20]}...</code>",
+                    parse_mode=ParseMode.HTML
+                )
+            else:
+                await update.message.reply_text("❌ این کلید قبلاً اضافه شده است")
+            
             self.user_states[user_id] = None
         
         else:
-            # ===== برنده چالش =====
-            winner = await self.db.get_challenge_winner_by_user(user_id)
-            if winner:
-                address = text.strip()
-                if len(address) >= 30 and len(address) <= 50:
-                    await self.db.set_user_reward_address(user_id, address)
-                    
-                    lang = (await self.db.get_user(user_id))['language']
-                    texts = self.get_texts(lang)
-                    
-                    await update.message.reply_text(
-                        texts['address_received'].format(reward=winner['reward_amount']),
-                        parse_mode=ParseMode.HTML
-                    )
-                    
-                    await context.bot.send_message(
-                        ADMIN_ID,
-                        f"💰 **درخواست جایزه**\n👤 {update.effective_user.first_name}\n🆔 {user_id}\n🔗 `{address}`\n💰 {winner['reward_amount']} USDT",
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-                else:
-                    await update.message.reply_text("❌ آدرس TRC20 نامعتبر است!")
-                return
-            
-            await update.message.reply_text("برای شروع /start را بزنید")
+            await update.message.reply_text("❌ دستور نامعتبر است.\nبرای شروع /start را بزنید.")
+
 
 # ==================== اجرای ربات ====================
 async def main():
-    bot = YouTubeEarningBot(BOT_TOKEN)
+    bot = SmartServiceBot(BOT_TOKEN)
     
     application = Application.builder().token(BOT_TOKEN).build()
     
     application.add_handler(CommandHandler("start", bot.start))
     application.add_handler(CallbackQueryHandler(bot.handle_callback))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_message))
-    application.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO, bot.handle_message))
     
     await application.initialize()
     await application.start()
@@ -3044,7 +2050,8 @@ async def main():
     finally:
         await application.updater.stop()
         await application.stop()
-        await bot.tron_api.close()
+        await bot.tron_payment.close()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
