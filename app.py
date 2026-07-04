@@ -50,7 +50,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ==================== تنظیمات اصلی ====================
-BOT_TOKEN = "8991812542:AAHtoXClDy_CHFqRCVmALJVpXWgT7bG1cdY"
+BOT_TOKEN = "7780798170:AAHTDl295s15_RwhfhjGentSLZzye3keJP0"
 ADMIN_ID = 327855654
 OWNER_WALLET = "TV61aTh98MGqmteYzda5AaBzdXgGqreG6A"
 
@@ -1875,7 +1875,7 @@ class YouTubeEarningBot:
         elif data == 'referral':
             ref_code = db_user.get('referral_code')
             ref_count = await self.db.get_user_referrals_count(user_id)
-            ref_link = f"https://t.me/SEGNALF_bot?start={ref_code}"
+            ref_link = f"https://t.me/UTYOB_bot?start={ref_code}"
             
             await query.edit_message_text(
                 texts['referral_info'].format(ref_code=ref_code, ref_count=ref_count, required_ref=0, ref_link=ref_link),
