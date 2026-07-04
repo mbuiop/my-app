@@ -50,7 +50,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ==================== تنظیمات اصلی ====================
-BOT_TOKEN = "7780798170:AAHTDl295s15_RwhfhjGentSLZzye3keJP0"
+BOT_TOKEN = "8991812542:AAHtoXClDy_CHFqRCVmALJVpXWgT7bG1cdY"
 ADMIN_ID = 327855654
 OWNER_WALLET = "TV61aTh98MGqmteYzda5AaBzdXgGqreG6A"
 
@@ -90,7 +90,7 @@ TEXTS = {
         'referral': "👥 سیستم رفرال",
         'change_language': "🌐 تغییر زبان",
         'register_link_prompt': "📤 لطفا لینک ویدیو یوتیوب خود را ارسال کنید:\n\n⚠️ روزانه فقط <b>{required_ref}</b> لینک می‌توانید ثبت کنید\n🔔 برای ثبت لینک نیازی به رفرال ندارید",
-        'link_registered': "✅ لینک شما با موفقیت ثبت شد!\n\n📌 لطفا <b>۵</b> لینک دیگران را بازدید و لایک کنید",
+        'link_registered': "✅ لینک شما با موفقیت ثبت شد!\n\n📌 لطفا <b>{count}</b> لینک دیگران را بازدید و لایک کنید",
         'interaction_prompt': "👀 لطفا این {count} لینک را بازدید و لایک کنید:\n\n{links}",
         'link_viewed': "✅ لینک بازدید و لایک شد!\n\n🎉 لینک شما در تبادل ثبت شد",
         'referral_info': "👥 **سیستم رفرال شما**\n\n🔗 **کد رفرال شما:**\n<code>{ref_code}</code>\n\n👤 **تعداد رفرال‌ها:** {ref_count} کاربر\n🎯 **رفرال مورد نیاز:** {required_ref}\n\n📋 **لینک دعوت:**\n<code>{ref_link}</code>\n\n📤 روی دکمه زیر کلیک کنید تا کپی شود:",
@@ -117,8 +117,8 @@ TEXTS = {
         'verify_payments': "✅ تایید پرداخت‌ها",
         'manage_keys': "🔑 مدیریت کلیدهای API",
         'db_stats': "📊 آمار دیتابیس",
-        'paid_mode': "💰 ربات به حالت پولی تغییر کرد\nهمه کاربران برای استفاده باید اشتراک خریداری کنند",
-        'free_mode': "🆓 ربات به حالت رایگان تغییر کرد\nهمه کاربران می‌توانند بدون اشتراک استفاده کنند",
+        'paid_mode': "💰 ربات به حالت پولی تغییر کرد\nکاربران برای ثبت لینک باید اشتراک خریداری کنند",
+        'free_mode': "🆓 ربات به حالت رایگان تغییر کرد\nهمه کاربران می‌توانند بدون اشتراک لینک ثبت کنند",
         'stats_info': "📊 **آمار شما:**\n\n📝 لینک‌های امروز: {links}/{max_links}\n👀 تعاملات امروز: {interactions}/{required}\n👥 تعداد رفرال‌ها: {referrals}\n📌 لینک‌های فعال: {active_links}\n🚀 ضریب بازدید: {boost}x",
         'no_links_to_view': "✅ شما تمام تعاملات امروز را تکمیل کرده‌اید!",
         'interaction_complete': "✅ شما {count} لینک را بازدید و لایک کردید!\n🎉 لینک‌های شما در تبادل ثبت شدند",
@@ -163,7 +163,7 @@ TEXTS = {
         'referral': "👥 Referral System",
         'change_language': "🌐 Change Language",
         'register_link_prompt': "📤 Please send your YouTube video link:\n\n⚠️ You can register up to <b>{required_ref}</b> links per day\n🔔 No referral needed to register",
-        'link_registered': "✅ Your link has been successfully registered!\n\n📌 Now view and like <b>5</b> other users' links",
+        'link_registered': "✅ Your link has been successfully registered!\n\n📌 Now view and like <b>{count}</b> other users' links",
         'interaction_prompt': "👀 Please view and like these {count} links:\n\n{links}",
         'link_viewed': "✅ Link viewed and liked successfully!\n\n🎉 Your link has been registered in the exchange",
         'referral_info': "👥 **Your Referral System**\n\n🔗 **Your Referral Code:**\n<code>{ref_code}</code>\n\n👤 **Referrals:** {ref_count} users\n🎯 **Required Referrals:** {required_ref}\n\n📋 **Invite Link:**\n<code>{ref_link}</code>\n\n📤 Click the button below to copy:",
@@ -190,8 +190,8 @@ TEXTS = {
         'verify_payments': "✅ Verify Payments",
         'manage_keys': "🔑 Manage API Keys",
         'db_stats': "📊 Database Stats",
-        'paid_mode': "💰 Bot changed to paid mode\nAll users must purchase subscription",
-        'free_mode': "🆓 Bot changed to free mode\nAll users can use without subscription",
+        'paid_mode': "💰 Bot changed to paid mode\nUsers must purchase subscription to register links",
+        'free_mode': "🆓 Bot changed to free mode\nAll users can register links without subscription",
         'stats_info': "📊 **Your Statistics:**\n\n📝 Today's links: {links}/{max_links}\n👀 Today's interactions: {interactions}/{required}\n👥 Referrals: {referrals}\n📌 Active links: {active_links}\n🚀 View boost: {boost}x",
         'no_links_to_view': "✅ You have completed all required interactions for today!",
         'interaction_complete': "✅ You have viewed and liked all {count} links!\n🎉 Your links are now registered in the exchange",
@@ -236,7 +236,7 @@ TEXTS = {
         'referral': "👥 نظام الإحالة",
         'change_language': "🌐 تغيير اللغة",
         'register_link_prompt': "📤 الرجاء إرسال رابط فيديو يوتيوب الخاص بك:\n\n⚠️ يمكنك تسجيل <b>{required_ref}</b> رابط فقط في اليوم\n🔔 لا حاجة للإحالات للتسجيل",
-        'link_registered': "✅ تم تسجيل رابطك بنجاح!\n\n📌 قم بمشاهدة وإعجاب <b>5</b> روابط للمستخدمين الآخرين",
+        'link_registered': "✅ تم تسجيل رابطك بنجاح!\n\n📌 قم بمشاهدة وإعجاب <b>{count}</b> روابط للمستخدمين الآخرين",
         'interaction_prompt': "👀 الرجاء مشاهدة وإعجاب هذه الروابط {count}:\n\n{links}",
         'link_viewed': "✅ تم مشاهدة الرابط والإعجاب به!\n\n🎉 تم تسجيل رابطك في التبادل",
         'referral_info': "👥 **نظام الإحالة الخاص بك**\n\n🔗 **رمز الإحالة الخاص بك:**\n<code>{ref_code}</code>\n\n👤 **عدد الإحالات:** {ref_count} مستخدم\n🎯 **الإحالات المطلوبة:** {required_ref}\n\n📋 **رابط الدعوة:**\n<code>{ref_link}</code>\n\n📤 انقر على الزر أدناه للنسخ:",
@@ -263,8 +263,8 @@ TEXTS = {
         'verify_payments': "✅ التحقق من المدفوعات",
         'manage_keys': "🔑 إدارة مفاتيح API",
         'db_stats': "📊 إحصائيات قاعدة البيانات",
-        'paid_mode': "💰 تم تغيير البوت إلى وضع الدفع\nيجب على جميع المستخدمين شراء اشتراك",
-        'free_mode': "🆓 تم تغيير البوت إلى وضع مجاني\nيمكن لجميع المستخدمين استخدامه بدون اشتراك",
+        'paid_mode': "💰 تم تغيير البوت إلى وضع الدفع\nيجب على المستخدمين شراء اشتراك لتسجيل الروابط",
+        'free_mode': "🆓 تم تغيير البوت إلى وضع مجاني\nيمكن لجميع المستخدمين تسجيل الروابط بدون اشتراك",
         'stats_info': "📊 **إحصائياتك:**\n\n📝 روابط اليوم: {links}/{max_links}\n👀 تفاعلات اليوم: {interactions}/{required}\n👥 الإحالات: {referrals}\n📌 الروابط النشطة: {active_links}\n🚀 مضاعف المشاهدات: {boost}x",
         'no_links_to_view': "✅ لقد أكملت جميع التفاعلات المطلوبة لهذا اليوم!",
         'interaction_complete': "✅ لقد شاهدت وأعجبت بجميع الروابط {count}!\n🎉 تم تسجيل روابطك في التبادل",
@@ -309,7 +309,7 @@ TEXTS = {
         'referral': "👥 Реферальная система",
         'change_language': "🌐 Сменить язык",
         'register_link_prompt': "📤 Пожалуйста, отправьте ссылку на видео YouTube:\n\n⚠️ Вы можете зарегистрировать <b>{required_ref}</b> ссылки в день\n🔔 Рефералы не требуются для регистрации",
-        'link_registered': "✅ Ваша ссылка успешно зарегистрирована!\n\n📌 Теперь просмотрите и поставьте лайки <b>5</b> ссылкам других пользователей",
+        'link_registered': "✅ Ваша ссылка успешно зарегистрирована!\n\n📌 Теперь просмотрите и поставьте лайки <b>{count}</b> ссылкам других пользователей",
         'interaction_prompt': "👀 Пожалуйста, просмотрите и поставьте лайки этим {count} ссылкам:\n\n{links}",
         'link_viewed': "✅ Ссылка просмотрена и отлайкана!\n\n🎉 Ваша ссылка зарегистрирована в обмене",
         'referral_info': "👥 **Ваша реферальная система**\n\n🔗 **Ваш реферальный код:**\n<code>{ref_code}</code>\n\n👤 **Рефералов:** {ref_count} пользователей\n🎯 **Требуется рефералов:** {required_ref}\n\n📋 **Ссылка для приглашения:**\n<code>{ref_link}</code>\n\n📤 Нажмите кнопку ниже для копирования:",
@@ -336,8 +336,8 @@ TEXTS = {
         'verify_payments': "✅ Проверить платежи",
         'manage_keys': "🔑 Управление ключами API",
         'db_stats': "📊 Статистика базы данных",
-        'paid_mode': "💰 Бот переведен в платный режим\nВсе пользователи должны купить подписку",
-        'free_mode': "🆓 Бот переведен в бесплатный режим\nВсе пользователи могут использовать без подписки",
+        'paid_mode': "💰 Бот переведен в платный режим\nПользователи должны купить подписку для регистрации ссылок",
+        'free_mode': "🆓 Бот переведен в бесплатный режим\nВсе пользователи могут регистрировать ссылки без подписки",
         'stats_info': "📊 **Ваша статистика:**\n\n📝 Ссылок сегодня: {links}/{max_links}\n👀 Взаимодействий сегодня: {interactions}/{required}\n👥 Рефералов: {referrals}\n📌 Активных ссылок: {active_links}\n🚀 Множитель просмотров: {boost}x",
         'no_links_to_view': "✅ Вы выполнили все необходимые взаимодействия на сегодня!",
         'interaction_complete': "✅ Вы просмотрели и отлайкали все {count} ссылок!\n🎉 Ваши ссылки зарегистрированы в обмене",
@@ -382,7 +382,7 @@ TEXTS = {
         'referral': "👥 Referans Sistemi",
         'change_language': "🌐 Dili Değiştir",
         'register_link_prompt': "📤 Lütfen YouTube video linkinizi gönderin:\n\n⚠️ Günde <b>{required_ref}</b> link kaydedebilirsiniz\n🔔 Kayıt için referans gerekmez",
-        'link_registered': "✅ Linkiniz başarıyla kaydedildi!\n\n📌 Şimdi <b>5</b> başka kullanıcının linkini görüntüleyin ve beğenin",
+        'link_registered': "✅ Linkiniz başarıyla kaydedildi!\n\n📌 Şimdi <b>{count}</b> başka kullanıcının linkini görüntüleyin ve beğenin",
         'interaction_prompt': "👀 Lütfen bu {count} linki görüntüleyin ve beğenin:\n\n{links}",
         'link_viewed': "✅ Link görüntülendi ve beğenildi!\n\n🎉 Linkiniz takasa kaydedildi",
         'referral_info': "👥 **Referans Sisteminiz**\n\n🔗 **Referans Kodunuz:**\n<code>{ref_code}</code>\n\n👤 **Referans Sayısı:** {ref_count} kullanıcı\n🎯 **Gerekli Referans:** {required_ref}\n\n📋 **Davet Linki:**\n<code>{ref_link}</code>\n\n📤 Kopyalamak için aşağıdaki butona tıklayın:",
@@ -409,8 +409,8 @@ TEXTS = {
         'verify_payments': "✅ Ödemeleri Doğrula",
         'manage_keys': "🔑 API Anahtarlarını Yönet",
         'db_stats': "📊 Veritabanı İstatistikleri",
-        'paid_mode': "💰 Bot ücretli moda geçti\nTüm kullanıcılar abonelik satın almalı",
-        'free_mode': "🆓 Bot ücretsiz moda geçti\nTüm kullanıcılar aboneliksiz kullanabilir",
+        'paid_mode': "💰 Bot ücretli moda geçti\nKullanıcılar link kaydetmek için abonelik satın almalı",
+        'free_mode': "🆓 Bot ücretsiz moda geçti\nTüm kullanıcılar aboneliksiz link kaydedebilir",
         'stats_info': "📊 **İstatistikleriniz:**\n\n📝 Bugünkü linkler: {links}/{max_links}\n👀 Bugünkü etkileşimler: {interactions}/{required}\n👥 Referanslar: {referrals}\n📌 Aktif linkler: {active_links}\n🚀 Görüntülenme çarpanı: {boost}x",
         'no_links_to_view': "✅ Bugün için tüm gerekli etkileşimleri tamamladınız!",
         'interaction_complete': "✅ Tüm {count} linki görüntülediniz ve beğendiniz!\n🎉 Linkleriniz takasa kaydedildi",
@@ -921,6 +921,7 @@ class UltraScalableDatabase:
             return links
     
     async def distribute_links(self, user_id: int, count: int = DAILY_INTERACTIONS_REQUIRED) -> List[Dict]:
+        """توزیع عادلانه لینک‌ها بین کاربران - هر تعداد لینک که هست رو می‌فرسته"""
         today = datetime.now().date().isoformat()
         cache_key = f"distribute_{user_id}_{today}"
         cached = await self.cache.get(cache_key)
@@ -933,31 +934,73 @@ class UltraScalableDatabase:
             actual_count = count * boost
             
             cursor = conn.cursor()
+            
+            # ===== ۱. دریافت لینک‌های فعال از کاربران دیگه که امروز دیده نشدن =====
             cursor.execute("""
                 SELECT yl.*, u.username, u.first_name,
                        COUNT(DISTINCT ld.user_id) as today_views
                 FROM youtube_links yl
                 JOIN users u ON yl.user_id = u.user_id
                 LEFT JOIN link_distribution ld ON yl.id = ld.link_id AND DATE(ld.assigned_at) = ?
-                WHERE yl.user_id != ? AND yl.is_active = 1
-                    AND yl.id NOT IN (SELECT link_id FROM link_distribution WHERE user_id = ? AND DATE(assigned_at) = ?)
+                WHERE yl.user_id != ? 
+                  AND yl.is_active = 1
+                  AND yl.id NOT IN (
+                      SELECT link_id FROM link_distribution 
+                      WHERE user_id = ? AND DATE(assigned_at) = ?
+                  )
                 GROUP BY yl.id
                 ORDER BY today_views ASC, yl.views_count ASC, yl.created_at ASC
                 LIMIT ?
-            """, (today, user_id, user_id, today, actual_count * 2))
+            """, (today, user_id, user_id, today, actual_count * 3))
             
             links = [dict(row) for row in cursor.fetchall()]
-            
             selected_links = []
             used_users = set()
             
+            # انتخاب لینک‌ها با اولویت کاربران مختلف
             for link in links:
                 if link['user_id'] not in used_users and len(selected_links) < actual_count:
                     selected_links.append(link)
                     used_users.add(link['user_id'])
             
+            # ===== ۲. اگر لینک کافی نبود، از لینک‌های دیگه (تکراری) استفاده کن =====
+            if len(selected_links) < actual_count:
+                cursor.execute("""
+                    SELECT yl.*, u.username, u.first_name, 999999 as today_views
+                    FROM youtube_links yl
+                    JOIN users u ON yl.user_id = u.user_id
+                    WHERE yl.user_id != ? 
+                      AND yl.is_active = 1
+                      AND yl.id NOT IN (SELECT link_id FROM link_distribution WHERE user_id = ? AND DATE(assigned_at) = ?)
+                    ORDER BY yl.views_count ASC, yl.created_at ASC
+                    LIMIT ?
+                """, (user_id, user_id, today, actual_count - len(selected_links)))
+                
+                for row in cursor.fetchall():
+                    if len(selected_links) < actual_count:
+                        selected_links.append(dict(row))
+            
+            # ===== ۳. اگر باز هم لینک کافی نبود، از هر لینکی استفاده کن (حتی اگه امروز دیده شده) =====
+            if len(selected_links) < actual_count:
+                cursor.execute("""
+                    SELECT yl.*, u.username, u.first_name, 999999 as today_views
+                    FROM youtube_links yl
+                    JOIN users u ON yl.user_id = u.user_id
+                    WHERE yl.user_id != ? AND yl.is_active = 1
+                    ORDER BY yl.views_count ASC, yl.created_at ASC
+                    LIMIT ?
+                """, (user_id, actual_count - len(selected_links)))
+                
+                for row in cursor.fetchall():
+                    if len(selected_links) < actual_count:
+                        selected_links.append(dict(row))
+            
+            # ===== ۴. ثبت لینک‌های توزیع شده =====
             for link in selected_links:
-                cursor.execute("INSERT INTO link_distribution (user_id, link_id) VALUES (?, ?)", (user_id, link['id']))
+                cursor.execute("""
+                    INSERT OR IGNORE INTO link_distribution (user_id, link_id, assigned_at)
+                    VALUES (?, ?, CURRENT_TIMESTAMP)
+                """, (user_id, link['id']))
             
             conn.commit()
             await self.cache.set(cache_key, selected_links, ttl=1800)
@@ -966,13 +1009,23 @@ class UltraScalableDatabase:
     async def mark_link_interacted(self, user_id: int, link_id: int, interaction_type: str):
         async with self.get_connection(user_id) as conn:
             cursor = conn.cursor()
-            cursor.execute(f"UPDATE link_distribution SET {interaction_type} = 1, viewed = 1 WHERE user_id = ? AND link_id = ? AND {interaction_type} = 0", (user_id, link_id))
+            cursor.execute(f"""
+                UPDATE link_distribution 
+                SET {interaction_type} = 1, viewed = 1 
+                WHERE user_id = ? AND link_id = ? AND {interaction_type} = 0
+            """, (user_id, link_id))
             
             cursor.execute("SELECT boost_multiplier FROM youtube_links WHERE id = ?", (link_id,))
             result = cursor.fetchone()
             boost = result['boost_multiplier'] if result else 1
             
-            cursor.execute(f"UPDATE youtube_links SET {interaction_type}_count = {interaction_type}_count + ?, daily_{interaction_type}s = daily_{interaction_type}s + ?, last_interaction_date = CURRENT_TIMESTAMP WHERE id = ?", (boost, boost, link_id))
+            cursor.execute(f"""
+                UPDATE youtube_links 
+                SET {interaction_type}_count = {interaction_type}_count + ?,
+                    daily_{interaction_type}s = daily_{interaction_type}s + ?,
+                    last_interaction_date = CURRENT_TIMESTAMP 
+                WHERE id = ?
+            """, (boost, boost, link_id))
             conn.commit()
             today = datetime.now().date().isoformat()
             await self.cache.delete(f"distribute_{user_id}_{today}")
@@ -1830,12 +1883,16 @@ class YouTubeEarningBot:
             )
         
         elif data == 'register_link':
+            # ===== بررسی حالت پولی/رایگان برای ثبت لینک =====
             is_paid = await self.db.is_paid_mode()
             
             if is_paid and not db_user.get('is_subscribed'):
                 await query.edit_message_text(
                     texts['not_subscribed'],
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💰 پرداخت", callback_data='payment')], [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]]),
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("💰 پرداخت", callback_data='payment')],
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
+                    ]),
                     parse_mode=ParseMode.HTML
                 )
                 return
@@ -1846,36 +1903,76 @@ class YouTubeEarningBot:
                 cursor.execute("SELECT COUNT(*) as count FROM youtube_links WHERE user_id = ? AND DATE(created_at) = ?", (user_id, today))
                 result = cursor.fetchone()
                 if result['count'] >= MAX_YOUTUBE_LINKS_PER_DAY:
-                    await query.edit_message_text(f"⚠️ امروز بیش از حد مجاز ({MAX_YOUTUBE_LINKS_PER_DAY}) لینک ثبت کرده‌اید", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='back')]]))
-                    return
-            
-            stats = await self.db.get_user_daily_stats(user_id)
-            if stats['interactions'] < DAILY_INTERACTIONS_REQUIRED:
-                links = await self.db.distribute_links(user_id, DAILY_INTERACTIONS_REQUIRED)
-                if links:
-                    link_text = ""
-                    for i, link in enumerate(links, 1):
-                        link_text += f"{i}. 🎬 {link['video_url']}\n   👤 {link.get('first_name', 'کاربر')}\n\n"
-                    
                     await query.edit_message_text(
-                        texts['interaction_prompt'].format(count=len(links), links=link_text),
-                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ همه را بازدید و لایک کردم", callback_data=f"viewed_all_{links[0]['id']}")]]),
-                        parse_mode=ParseMode.HTML
+                        f"⚠️ امروز بیش از حد مجاز ({MAX_YOUTUBE_LINKS_PER_DAY}) لینک ثبت کرده‌اید",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='back')]])
                     )
                     return
             
-            await query.edit_message_text(texts['register_link_prompt'].format(required_ref=MAX_YOUTUBE_LINKS_PER_DAY), parse_mode=ParseMode.HTML)
+            # ===== همیشه لینک‌ها رو توزیع کن و به کاربر نمایش بده =====
+            links = await self.db.distribute_links(user_id, DAILY_INTERACTIONS_REQUIRED)
+            
+            # ثبت لینک کاربر
+            await query.edit_message_text(
+                texts['register_link_prompt'].format(required_ref=MAX_YOUTUBE_LINKS_PER_DAY),
+                parse_mode=ParseMode.HTML
+            )
             self.user_states[user_id] = 'waiting_for_link'
+        
+        elif data == 'confirm_link_registered':
+            # ===== بعد از ثبت لینک، لینک‌های دیگه رو نمایش بده =====
+            links = await self.db.distribute_links(user_id, DAILY_INTERACTIONS_REQUIRED)
+            
+            if links:
+                link_text = ""
+                for i, link in enumerate(links, 1):
+                    link_text += f"{i}. 🎬 {link['video_url']}\n   👤 {link.get('first_name', 'کاربر')}\n\n"
+                
+                await query.edit_message_text(
+                    texts['interaction_prompt'].format(count=len(links), links=link_text),
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("✅ همه را بازدید و لایک کردم", callback_data=f"viewed_all_{links[0]['id']}")],
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
+                    ]),
+                    parse_mode=ParseMode.HTML
+                )
+            else:
+                await query.edit_message_text(
+                    "✅ لینک شما ثبت شد!\n\n📌 در حال حاضر هیچ لینکی برای بازدید وجود ندارد.",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='back')]])
+                )
         
         elif data.startswith('viewed_all_'):
             link_id = int(data.split('_')[2])
             await self.db.mark_link_interacted(user_id, link_id, 'like')
-            await query.edit_message_text(texts['interaction_complete'].format(count=1), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='back')]]), parse_mode=ParseMode.HTML)
+            
+            # ===== بعد از بازدید، لینک‌های باقی‌مونده رو نمایش بده =====
+            remaining_links = await self.db.distribute_links(user_id, DAILY_INTERACTIONS_REQUIRED)
+            
+            if remaining_links:
+                link_text = ""
+                for i, link in enumerate(remaining_links, 1):
+                    link_text += f"{i}. 🎬 {link['video_url']}\n   👤 {link.get('first_name', 'کاربر')}\n\n"
+                
+                await query.edit_message_text(
+                    texts['interaction_prompt'].format(count=len(remaining_links), links=link_text),
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("✅ همه را بازدید و لایک کردم", callback_data=f"viewed_all_{remaining_links[0]['id']}")],
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
+                    ]),
+                    parse_mode=ParseMode.HTML
+                )
+            else:
+                await query.edit_message_text(
+                    texts['interaction_complete'].format(count=1),
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='back')]]),
+                    parse_mode=ParseMode.HTML
+                )
         
         elif data == 'referral':
             ref_code = db_user.get('referral_code')
             ref_count = await self.db.get_user_referrals_count(user_id)
-            ref_link = f"https://t.me/UTYOB_bot?start={ref_code}"
+            ref_link = f"https://t.me/SEGNALF_bot?start={ref_code}"
             
             await query.edit_message_text(
                 texts['referral_info'].format(ref_code=ref_code, ref_count=ref_count, required_ref=0, ref_link=ref_link),
@@ -1913,15 +2010,39 @@ class YouTubeEarningBot:
                 if is_valid:
                     await self.db.verify_transaction(latest_tx['tx_hash'], 'approved')
                     await self.db.update_user_subscription(user_id)
-                    await query.edit_message_text(texts['payment_success'], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='back')]]), parse_mode=ParseMode.HTML)
+                    await query.edit_message_text(
+                        texts['payment_success'],
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='back')]]),
+                        parse_mode=ParseMode.HTML
+                    )
                 else:
                     tx_time = datetime.fromisoformat(latest_tx['created_at'])
                     if datetime.now() - tx_time > timedelta(minutes=PAYMENT_TIMEOUT_MINUTES):
-                        await query.edit_message_text(texts['payment_timeout'], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(texts['send_hash_button'], callback_data='send_hash')], [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]]), parse_mode=ParseMode.HTML)
+                        await query.edit_message_text(
+                            texts['payment_timeout'],
+                            reply_markup=InlineKeyboardMarkup([
+                                [InlineKeyboardButton(texts['send_hash_button'], callback_data='send_hash')],
+                                [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
+                            ]),
+                            parse_mode=ParseMode.HTML
+                        )
                     else:
-                        await query.edit_message_text(texts['payment_failed'], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(texts['send_hash_button'], callback_data='send_hash')], [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]]), parse_mode=ParseMode.HTML)
+                        await query.edit_message_text(
+                            texts['payment_failed'],
+                            reply_markup=InlineKeyboardMarkup([
+                                [InlineKeyboardButton(texts['send_hash_button'], callback_data='send_hash')],
+                                [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
+                            ]),
+                            parse_mode=ParseMode.HTML
+                        )
             else:
-                await query.edit_message_text("❌ هیچ تراکنشی یافت نشد", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(texts['send_hash_button'], callback_data='send_hash')], [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]]))
+                await query.edit_message_text(
+                    "❌ هیچ تراکنشی یافت نشد",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton(texts['send_hash_button'], callback_data='send_hash')],
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
+                    ])
+                )
         
         elif data == 'send_hash':
             await query.edit_message_text(texts['enter_tx_hash'], parse_mode=ParseMode.HTML)
@@ -2007,14 +2128,20 @@ class YouTubeEarningBot:
             
             await query.edit_message_text(
                 TEXTS['fa']['winners_announced'].format(winners=winners_text, reward=winners[0]['reward_amount'] if winners else 0),
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💰 تایید پرداخت جایزه", callback_data='confirm_reward_payment')], [InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]]),
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💰 تایید پرداخت جایزه", callback_data='confirm_reward_payment')],
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]
+                ]),
                 parse_mode=ParseMode.HTML
             )
         
         elif data == 'confirm_reward_payment' and user_id == ADMIN_ID:
             await query.edit_message_text(
                 "💰 **تایید پرداخت جایزه**\n\nلطفا پس از واریز جایزه به برندگان، دکمه زیر را بزنید:",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ همه برندگان دریافت کردند", callback_data='mark_all_paid')], [InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]]),
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("✅ همه برندگان دریافت کردند", callback_data='mark_all_paid')],
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]
+                ]),
                 parse_mode=ParseMode.MARKDOWN
             )
         
@@ -2092,15 +2219,24 @@ class YouTubeEarningBot:
             
             text = f"📊 **آمار دیتابیس و کش**\n\n🗄️ **ساختار:**\n• تعداد شاردها: {stats['shard_count']}\n• کل کاربران: {stats['total_users']:,}\n• کل لینک‌ها: {stats['total_links']:,}\n• کل تراکنش‌ها: {stats['total_transactions']:,}\n\n💾 **کش:**\n• آیتم‌های کش: {stats['cache']['total_items']:,}\n• ظرفیت کش: {stats['cache']['max_size']:,}\n• نرخ موفقیت: {stats['cache']['hit_rate']:.2f}%\n• تعداد بازدید: {stats['cache']['hits']:,}\n• تعداد عدم موفقیت: {stats['cache']['misses']:,}"
             
-            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 بروزرسانی", callback_data='db_stats')], [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]]), parse_mode=ParseMode.MARKDOWN)
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 بروزرسانی", callback_data='db_stats')],
+                [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]
+            ]), parse_mode=ParseMode.MARKDOWN)
         
         elif data == 'make_paid' and user_id == ADMIN_ID:
             await self.db.set_system_setting('is_paid', '1')
-            await query.edit_message_text(texts['paid_mode'], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]]))
+            await query.edit_message_text(
+                texts['paid_mode'],
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]])
+            )
         
         elif data == 'make_free' and user_id == ADMIN_ID:
             await self.db.set_system_setting('is_paid', '0')
-            await query.edit_message_text(texts['free_mode'], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]]))
+            await query.edit_message_text(
+                texts['free_mode'],
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]])
+            )
         
         elif data == 'broadcast' and user_id == ADMIN_ID:
             await query.edit_message_text("📢 لطفا پیام خود را ارسال کنید (متن، عکس یا ویدیو):", parse_mode=ParseMode.HTML)
@@ -2119,7 +2255,10 @@ class YouTubeEarningBot:
             
             buttons = []
             for tx in pending_txs[:10]:
-                buttons.append([InlineKeyboardButton(f"✅ {tx['first_name']}", callback_data=f"approve_manual_{tx['tx_hash']}"), InlineKeyboardButton(f"❌ {tx['first_name']}", callback_data=f"reject_manual_{tx['tx_hash']}")])
+                buttons.append([
+                    InlineKeyboardButton(f"✅ {tx['first_name']}", callback_data=f"approve_manual_{tx['tx_hash']}"),
+                    InlineKeyboardButton(f"❌ {tx['first_name']}", callback_data=f"reject_manual_{tx['tx_hash']}")
+                ])
             buttons.append([InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')])
             
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode=ParseMode.MARKDOWN)
@@ -2142,10 +2281,16 @@ class YouTubeEarningBot:
                     if result:
                         await self.db.update_user_subscription(result['user_id'])
                         await context.bot.send_message(result['user_id'], "✅ اشتراک شما فعال شد! 🎉")
-                await query.edit_message_text(f"✅ تراکنش {tx_hash[:20]}... تایید شد", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='verify_payments')]]))
+                await query.edit_message_text(
+                    f"✅ تراکنش {tx_hash[:20]}... تایید شد",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='verify_payments')]])
+                )
             else:
                 await self.db.verify_transaction(tx_hash, 'rejected')
-                await query.edit_message_text(f"❌ تراکنش {tx_hash[:20]}... رد شد", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='verify_payments')]]))
+                await query.edit_message_text(
+                    f"❌ تراکنش {tx_hash[:20]}... رد شد",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='verify_payments')]])
+                )
         
         elif data == 'back':
             texts = self.get_texts(lang)
@@ -2200,11 +2345,21 @@ class YouTubeEarningBot:
                         except:
                             pass
                     
-                    await update.message.reply_text(f"✅ **چالش رفرال شروع شد!**\n\n📅 مدت: {duration} روز\n🎁 جایزه: {reward} USDT\n👥 برندگان: {top_users} نفر\n\n📢 پیام به کاربران ارسال شد.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]]), parse_mode=ParseMode.MARKDOWN)
+                    await update.message.reply_text(
+                        f"✅ **چالش رفرال شروع شد!**\n\n📅 مدت: {duration} روز\n🎁 جایزه: {reward} USDT\n👥 برندگان: {top_users} نفر\n\n📢 پیام به کاربران ارسال شد.",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]]),
+                        parse_mode=ParseMode.MARKDOWN
+                    )
                 else:
-                    await update.message.reply_text(f"❌ {msg}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]]))
+                    await update.message.reply_text(
+                        f"❌ {msg}",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
+                    )
             except ValueError:
-                await update.message.reply_text(TEXTS['fa']['invalid_duration'], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]]))
+                await update.message.reply_text(
+                    TEXTS['fa']['invalid_duration'],
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
+                )
             
             self.user_states[user_id] = None
         
@@ -2220,9 +2375,16 @@ class YouTubeEarningBot:
                     raise ValueError
                 
                 await self.db.set_system_setting('challenge_reward', str(amount))
-                await update.message.reply_text(TEXTS['fa']['challenge_reward_set'].format(amount=amount), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]]), parse_mode=ParseMode.HTML)
+                await update.message.reply_text(
+                    TEXTS['fa']['challenge_reward_set'].format(amount=amount),
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]]),
+                    parse_mode=ParseMode.HTML
+                )
             except ValueError:
-                await update.message.reply_text("❌ لطفا یک عدد معتبر وارد کنید", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]]))
+                await update.message.reply_text(
+                    "❌ لطفا یک عدد معتبر وارد کنید",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
+                )
             
             self.user_states[user_id] = None
         
@@ -2238,9 +2400,16 @@ class YouTubeEarningBot:
                     raise ValueError
                 
                 await self.db.set_system_setting('challenge_top_users', str(count))
-                await update.message.reply_text(TEXTS['fa']['challenge_top_users_set'].format(count=count), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]]), parse_mode=ParseMode.HTML)
+                await update.message.reply_text(
+                    TEXTS['fa']['challenge_top_users_set'].format(count=count),
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]]),
+                    parse_mode=ParseMode.HTML
+                )
             except ValueError:
-                await update.message.reply_text("❌ لطفا یک عدد معتبر وارد کنید", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]]))
+                await update.message.reply_text(
+                    "❌ لطفا یک عدد معتبر وارد کنید",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
+                )
             
             self.user_states[user_id] = None
         
@@ -2256,12 +2425,23 @@ class YouTubeEarningBot:
             
             if success:
                 await self.db.save_api_key(text.strip(), f"اضافه شده در {datetime.now()}")
-                await update.message.reply_text(f"✅ **کلید جدید با موفقیت ثبت شد!**\n\n🔑 کلید: `{text.strip()[:20]}...`\n📊 وضعیت: فعال", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_keys')]]), parse_mode=ParseMode.MARKDOWN)
+                await update.message.reply_text(
+                    f"✅ **کلید جدید با موفقیت ثبت شد!**\n\n🔑 کلید: `{text.strip()[:20]}...`\n📊 وضعیت: فعال",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_keys')]]),
+                    parse_mode=ParseMode.MARKDOWN
+                )
                 
                 stats = await self.tron_api.get_api_stats()
-                await update.message.reply_text(f"📊 **آمار کلیدها:**\n📌 کل کلیدها: {stats['total_keys']}\n✅ کلیدهای فعال: {stats['active_keys']}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_keys')]]), parse_mode=ParseMode.MARKDOWN)
+                await update.message.reply_text(
+                    f"📊 **آمار کلیدها:**\n📌 کل کلیدها: {stats['total_keys']}\n✅ کلیدهای فعال: {stats['active_keys']}",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_keys')]]),
+                    parse_mode=ParseMode.MARKDOWN
+                )
             else:
-                await update.message.reply_text(f"❌ **خطا:** {message}\n\nلطفا کلید معتبر دیگری ارسال کنید.", parse_mode=ParseMode.MARKDOWN)
+                await update.message.reply_text(
+                    f"❌ **خطا:** {message}\n\nلطفا کلید معتبر دیگری ارسال کنید.",
+                    parse_mode=ParseMode.MARKDOWN
+                )
                 return
             
             self.user_states[user_id] = None
@@ -2273,7 +2453,10 @@ class YouTubeEarningBot:
                 return
             
             success, message = await self.tron_api.toggle_api_key(text.strip())
-            await update.message.reply_text(message, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_keys')]]))
+            await update.message.reply_text(
+                message,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_keys')]])
+            )
             self.user_states[user_id] = None
         
         elif state == 'waiting_for_delete_key' and user_id == ADMIN_ID:
@@ -2283,7 +2466,10 @@ class YouTubeEarningBot:
                 return
             
             success, message = await self.tron_api.remove_api_key(text.strip())
-            await update.message.reply_text(message, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_keys')]]))
+            await update.message.reply_text(
+                message,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_keys')]])
+            )
             self.user_states[user_id] = None
         
         elif state == 'waiting_for_source_address':
@@ -2298,7 +2484,10 @@ class YouTubeEarningBot:
             
             await update.message.reply_text(
                 texts['source_address_saved'].format(wallet=OWNER_WALLET),
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ پرداخت کردم", callback_data='confirm_payment')], [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]]),
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("✅ پرداخت کردم", callback_data='confirm_payment')],
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
+                ]),
                 parse_mode=ParseMode.HTML
             )
             self.user_states[user_id] = None
@@ -2314,8 +2503,33 @@ class YouTubeEarningBot:
                 self.user_states[user_id] = None
                 return
             
-            await update.message.reply_text(msg)
-            await update.message.reply_text("✅ لینک شما ثبت شد!\n\n📌 لطفا ۵ لینک دیگران را بازدید و لایک کنید")
+            # ===== بعد از ثبت لینک، لینک‌های دیگه رو نمایش بده =====
+            links = await self.db.distribute_links(user_id, DAILY_INTERACTIONS_REQUIRED)
+            
+            if links:
+                link_text = ""
+                for i, link in enumerate(links, 1):
+                    link_text += f"{i}. 🎬 {link['video_url']}\n   👤 {link.get('first_name', 'کاربر')}\n\n"
+                
+                await update.message.reply_text(
+                    texts['link_registered'].format(count=len(links)),
+                    parse_mode=ParseMode.HTML
+                )
+                
+                await update.message.reply_text(
+                    texts['interaction_prompt'].format(count=len(links), links=link_text),
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("✅ همه را بازدید و لایک کردم", callback_data=f"viewed_all_{links[0]['id']}")],
+                        [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
+                    ]),
+                    parse_mode=ParseMode.HTML
+                )
+            else:
+                await update.message.reply_text(
+                    "✅ لینک شما ثبت شد!\n\n📌 در حال حاضر هیچ لینکی برای بازدید وجود ندارد.",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='back')]])
+                )
+            
             self.user_states[user_id] = None
         
         elif state == 'waiting_for_manual_hash':
