@@ -50,7 +50,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ==================== تنظیمات اصلی ====================
-BOT_TOKEN = "7780798170:AAHTDl295s15_RwhfhjGentSLZzye3keJP0"
+BOT_TOKEN = "8991812542:AAHtoXClDy_CHFqRCVmALJVpXWgT7bG1cdY"
 ADMIN_ID = 327855654
 OWNER_WALLET = "TV61aTh98MGqmteYzda5AaBzdXgGqreG6A"
 
@@ -518,6 +518,7 @@ class DistributedUltraCache:
             'ttl': self.ttl
         }
 
+
 # ==================== دیتابیس فوق‌مقیاس با ۱۰۰۰ شارد ====================
 class UltraScalableDatabase:
     def __init__(self, db_path="bot_database.db", shard_count=1000):
@@ -921,7 +922,7 @@ class UltraScalableDatabase:
             return links
     
     async def distribute_links(self, user_id: int, count: int = DAILY_INTERACTIONS_REQUIRED) -> List[Dict]:
-        """توزیع عادلانه لینک‌ها بین کاربران - هر تعداد لینک که هست رو می‌فرسته"""
+        """توزیع همه لینک‌ها بین کاربران - حتماً تا ۵ لینک نمایش داده بشه"""
         today = datetime.now().date().isoformat()
         cache_key = f"distribute_{user_id}_{today}"
         cached = await self.cache.get(cache_key)
@@ -935,67 +936,48 @@ class UltraScalableDatabase:
             
             cursor = conn.cursor()
             
-            # ===== ۱. دریافت لینک‌های فعال از کاربران دیگه که امروز دیده نشدن =====
+            # ===== دریافت همه لینک‌های فعال از کاربران دیگر =====
             cursor.execute("""
                 SELECT yl.*, u.username, u.first_name,
-                       COUNT(DISTINCT ld.user_id) as today_views
+                       CASE WHEN ld.id IS NOT NULL THEN 1 ELSE 0 END as already_viewed
                 FROM youtube_links yl
                 JOIN users u ON yl.user_id = u.user_id
-                LEFT JOIN link_distribution ld ON yl.id = ld.link_id AND DATE(ld.assigned_at) = ?
+                LEFT JOIN link_distribution ld ON yl.id = ld.link_id 
+                    AND ld.user_id = ? 
+                    AND DATE(ld.assigned_at) = ?
                 WHERE yl.user_id != ? 
                   AND yl.is_active = 1
-                  AND yl.id NOT IN (
-                      SELECT link_id FROM link_distribution 
-                      WHERE user_id = ? AND DATE(assigned_at) = ?
-                  )
                 GROUP BY yl.id
-                ORDER BY today_views ASC, yl.views_count ASC, yl.created_at ASC
+                ORDER BY already_viewed ASC, yl.views_count ASC, yl.created_at ASC
                 LIMIT ?
-            """, (today, user_id, user_id, today, actual_count * 3))
+            """, (user_id, today, user_id, actual_count * 5))
             
-            links = [dict(row) for row in cursor.fetchall()]
+            all_links = [dict(row) for row in cursor.fetchall()]
+            
+            # ===== اگر هیچ لینکی وجود نداشت =====
+            if not all_links:
+                logger.info(f"⚠️ هیچ لینکی برای کاربر {user_id} وجود ندارد")
+                return []
+            
+            # ===== انتخاب لینک‌ها با اولویت کاربران مختلف =====
             selected_links = []
             used_users = set()
             
-            # انتخاب لینک‌ها با اولویت کاربران مختلف
-            for link in links:
+            # اول لینک‌هایی که امروز دیده نشدن از کاربران مختلف
+            for link in all_links:
                 if link['user_id'] not in used_users and len(selected_links) < actual_count:
                     selected_links.append(link)
                     used_users.add(link['user_id'])
             
-            # ===== ۲. اگر لینک کافی نبود، از لینک‌های دیگه (تکراری) استفاده کن =====
+            # ===== اگر باز هم لینک کافی نبود، از بقیه لینک‌ها استفاده کن =====
             if len(selected_links) < actual_count:
-                cursor.execute("""
-                    SELECT yl.*, u.username, u.first_name, 999999 as today_views
-                    FROM youtube_links yl
-                    JOIN users u ON yl.user_id = u.user_id
-                    WHERE yl.user_id != ? 
-                      AND yl.is_active = 1
-                      AND yl.id NOT IN (SELECT link_id FROM link_distribution WHERE user_id = ? AND DATE(assigned_at) = ?)
-                    ORDER BY yl.views_count ASC, yl.created_at ASC
-                    LIMIT ?
-                """, (user_id, user_id, today, actual_count - len(selected_links)))
-                
-                for row in cursor.fetchall():
-                    if len(selected_links) < actual_count:
-                        selected_links.append(dict(row))
+                for link in all_links:
+                    if len(selected_links) >= actual_count:
+                        break
+                    if link not in selected_links:
+                        selected_links.append(link)
             
-            # ===== ۳. اگر باز هم لینک کافی نبود، از هر لینکی استفاده کن (حتی اگه امروز دیده شده) =====
-            if len(selected_links) < actual_count:
-                cursor.execute("""
-                    SELECT yl.*, u.username, u.first_name, 999999 as today_views
-                    FROM youtube_links yl
-                    JOIN users u ON yl.user_id = u.user_id
-                    WHERE yl.user_id != ? AND yl.is_active = 1
-                    ORDER BY yl.views_count ASC, yl.created_at ASC
-                    LIMIT ?
-                """, (user_id, actual_count - len(selected_links)))
-                
-                for row in cursor.fetchall():
-                    if len(selected_links) < actual_count:
-                        selected_links.append(dict(row))
-            
-            # ===== ۴. ثبت لینک‌های توزیع شده =====
+            # ===== ثبت لینک‌های توزیع شده در دیتابیس =====
             for link in selected_links:
                 cursor.execute("""
                     INSERT OR IGNORE INTO link_distribution (user_id, link_id, assigned_at)
@@ -1106,6 +1088,7 @@ class UltraScalableDatabase:
         return all_txs
     
     async def get_all_active_users(self) -> List[int]:
+        """دریافت لیست تمام کاربران فعال برای ارسال پیام همگانی"""
         all_users = []
         for shard_idx in range(self.shard_count):
             shard_path = self._get_shard_path(shard_idx)
@@ -1113,10 +1096,12 @@ class UltraScalableDatabase:
                 with sqlite3.connect(shard_path, timeout=10) as conn:
                     conn.row_factory = sqlite3.Row
                     cursor = conn.cursor()
-                    cursor.execute("SELECT user_id FROM users WHERE is_subscribed = 1")
+                    cursor.execute("SELECT user_id FROM users")
                     all_users.extend([row['user_id'] for row in cursor.fetchall()])
-            except:
-                pass
+            except Exception as e:
+                logger.error(f"خطا در دریافت کاربران از شارد {shard_idx}: {e}")
+        
+        logger.info(f"📊 تعداد کل کاربران دریافت شده: {len(all_users)}")
         return all_users
     
     async def get_system_setting(self, key: str) -> Optional[str]:
@@ -1341,6 +1326,7 @@ class UltraScalableDatabase:
             pass
         return False
 
+
 # ==================== مدیریت کلیدهای API ====================
 class AdvancedAPIManager:
     def __init__(self, api_keys: List[str]):
@@ -1489,6 +1475,7 @@ class AdvancedAPIManager:
                 stats['keys'][key] = key_stats
             return stats
 
+
 # ==================== API ترون ====================
 class TronAPI:
     def __init__(self, api_keys: List[str]):
@@ -1615,6 +1602,7 @@ class TronAPI:
         for session in self.sessions.values():
             await session.close()
         self.sessions.clear()
+
 
 # ==================== کلاس اصلی ربات ====================
 class YouTubeEarningBot:
@@ -1909,38 +1897,11 @@ class YouTubeEarningBot:
                     )
                     return
             
-            # ===== همیشه لینک‌ها رو توزیع کن و به کاربر نمایش بده =====
-            links = await self.db.distribute_links(user_id, DAILY_INTERACTIONS_REQUIRED)
-            
-            # ثبت لینک کاربر
             await query.edit_message_text(
                 texts['register_link_prompt'].format(required_ref=MAX_YOUTUBE_LINKS_PER_DAY),
                 parse_mode=ParseMode.HTML
             )
             self.user_states[user_id] = 'waiting_for_link'
-        
-        elif data == 'confirm_link_registered':
-            # ===== بعد از ثبت لینک، لینک‌های دیگه رو نمایش بده =====
-            links = await self.db.distribute_links(user_id, DAILY_INTERACTIONS_REQUIRED)
-            
-            if links:
-                link_text = ""
-                for i, link in enumerate(links, 1):
-                    link_text += f"{i}. 🎬 {link['video_url']}\n   👤 {link.get('first_name', 'کاربر')}\n\n"
-                
-                await query.edit_message_text(
-                    texts['interaction_prompt'].format(count=len(links), links=link_text),
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("✅ همه را بازدید و لایک کردم", callback_data=f"viewed_all_{links[0]['id']}")],
-                        [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
-                    ]),
-                    parse_mode=ParseMode.HTML
-                )
-            else:
-                await query.edit_message_text(
-                    "✅ لینک شما ثبت شد!\n\n📌 در حال حاضر هیچ لینکی برای بازدید وجود ندارد.",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='back')]])
-                )
         
         elif data.startswith('viewed_all_'):
             link_id = int(data.split('_')[2])
@@ -2239,14 +2200,22 @@ class YouTubeEarningBot:
             )
         
         elif data == 'broadcast' and user_id == ADMIN_ID:
-            await query.edit_message_text("📢 لطفا پیام خود را ارسال کنید (متن، عکس یا ویدیو):", parse_mode=ParseMode.HTML)
+            await query.edit_message_text(
+                "📢 **ارسال پیام همگانی**\n\n"
+                "لطفا پیام خود را ارسال کنید (متن، عکس یا ویدیو):\n\n"
+                "⚠️ پیام به **همه کاربران** ربات ارسال خواهد شد.",
+                parse_mode=ParseMode.HTML
+            )
             self.user_states[user_id] = 'waiting_for_broadcast'
         
         elif data == 'verify_payments' and user_id == ADMIN_ID:
             pending_txs = await self.db.get_pending_manual_transactions()
             
             if not pending_txs:
-                await query.edit_message_text("✅ هیچ پرداخت در انتظار تاییدی وجود ندارد", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]]))
+                await query.edit_message_text(
+                    "✅ هیچ پرداخت در انتظار تاییدی وجود ندارد",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]])
+                )
                 return
             
             text = "📋 **پرداخت‌های نیازمند بررسی:**\n\n"
@@ -2503,7 +2472,11 @@ class YouTubeEarningBot:
                 self.user_states[user_id] = None
                 return
             
-            # ===== بعد از ثبت لینک، لینک‌های دیگه رو نمایش بده =====
+            # ===== حذف کش توزیع لینک =====
+            today = datetime.now().date().isoformat()
+            await self.db.cache.delete(f"distribute_{user_id}_{today}")
+            
+            # ===== نمایش لینک‌های دیگران =====
             links = await self.db.distribute_links(user_id, DAILY_INTERACTIONS_REQUIRED)
             
             if links:
@@ -2551,26 +2524,67 @@ class YouTubeEarningBot:
             self.user_states[user_id] = None
         
         elif state == 'waiting_for_broadcast' and user_id == ADMIN_ID:
-            await update.message.reply_text("⏳ در حال ارسال...")
+            await update.message.reply_text("⏳ در حال ارسال پیام همگانی...")
             
+            # دریافت همه کاربران
             users = await self.db.get_all_active_users()
+            
+            if not users:
+                await update.message.reply_text(
+                    "❌ هیچ کاربری برای ارسال پیام وجود ندارد!",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]])
+                )
+                self.user_states[user_id] = None
+                return
+            
+            await update.message.reply_text(f"📊 تعداد کل کاربران: {len(users)} نفر\n⏳ در حال ارسال...")
+            
             success_count = 0
+            fail_count = 0
             
             for i, uid in enumerate(users):
                 try:
                     if update.message.photo:
-                        await context.bot.send_photo(uid, update.message.photo[-1].file_id, caption=update.message.caption or "")
+                        await context.bot.send_photo(
+                            uid, 
+                            update.message.photo[-1].file_id, 
+                            caption=update.message.caption or ""
+                        )
                     elif update.message.video:
-                        await context.bot.send_video(uid, update.message.video.file_id, caption=update.message.caption or "")
+                        await context.bot.send_video(
+                            uid, 
+                            update.message.video.file_id, 
+                            caption=update.message.caption or ""
+                        )
                     else:
-                        await context.bot.send_message(uid, update.message.text or "", parse_mode=ParseMode.HTML)
+                        await context.bot.send_message(
+                            uid, 
+                            update.message.text or "", 
+                            parse_mode=ParseMode.HTML
+                        )
                     success_count += 1
-                    if i % 50 == 0:
-                        await asyncio.sleep(0.5)
-                except:
-                    pass
+                    
+                    # تاخیر برای جلوگیری از محدودیت
+                    if i % 30 == 0 and i > 0:
+                        await asyncio.sleep(1)
+                        
+                except Exception as e:
+                    logger.error(f"خطا در ارسال به {uid}: {e}")
+                    fail_count += 1
+                
+                # گزارش هر ۱۰۰ نفر
+                if (i + 1) % 100 == 0:
+                    await update.message.reply_text(f"📊 {i+1}/{len(users)} ارسال شد...")
             
-            await update.message.reply_text(f"✅ ارسال شد به {success_count} نفر")
+            await update.message.reply_text(
+                f"✅ **پیام همگانی با موفقیت ارسال شد!**\n\n"
+                f"👤 موفق: {success_count} نفر\n"
+                f"❌ ناموفق: {fail_count} نفر\n"
+                f"📊 مجموع: {len(users)} نفر",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]])
+            )
+            
+            logger.info(f"📢 پیام همگانی ارسال شد: {success_count} موفق، {fail_count} ناموفق")
             self.user_states[user_id] = None
         
         else:
@@ -2590,7 +2604,12 @@ class YouTubeEarningBot:
                     
                     await context.bot.send_message(
                         ADMIN_ID,
-                        f"💰 **درخواست دریافت جایزه**\n\n👤 {update.effective_user.first_name}\n🆔 {user_id}\n🔗 آدرس: `{address}`\n💰 مبلغ: {winner['reward_amount']} USDT\n\n📌 برای تایید پرداخت به پنل مدیریت بروید.",
+                        f"💰 **درخواست دریافت جایزه**\n\n"
+                        f"👤 {update.effective_user.first_name}\n"
+                        f"🆔 {user_id}\n"
+                        f"🔗 آدرس: `{address}`\n"
+                        f"💰 مبلغ: {winner['reward_amount']} USDT\n\n"
+                        f"📌 برای تایید پرداخت به پنل مدیریت بروید.",
                         parse_mode=ParseMode.MARKDOWN
                     )
                 else:
@@ -2598,6 +2617,7 @@ class YouTubeEarningBot:
                 return
             
             await update.message.reply_text("برای شروع /start را بزنید")
+
 
 # ==================== اجرای ربات ====================
 async def main():
@@ -2623,6 +2643,7 @@ async def main():
         await application.updater.stop()
         await application.stop()
         await bot.tron_api.close()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
