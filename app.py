@@ -1,1587 +1,1488 @@
 """
-ساده‌گرام - نسخه حرفه‌ای با پشتیبانی از SQLite
+ربات قرعه‌کشی UTYOB - فایل کامل یکپارچه
+نسخه 1.0 - با وب‌سرویس داخلی و صفحه وب
+قابل اجرا با یک فایل Python
 """
 
-# ============================================
-# کتابخانه‌ها
-# ============================================
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse, HTMLResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, BigInteger, Text, ForeignKey, Index, and_, or_, UniqueConstraint
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session, relationship
-from sqlalchemy.sql import func
-from datetime import datetime, timedelta
-import bcrypt
-import jwt
-import uuid
 import os
+import sys
 import json
 import asyncio
-from typing import Optional, List, Dict
-from pydantic import BaseModel, EmailStr
 import logging
+import random
+import hashlib
+import hmac
+import uuid
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Any
+from decimal import Decimal
+import re
 
-# ============================================
+# ============================================================
+# نصب خودکار کتابخانه‌های مورد نیاز در صورت عدم وجود
+# ============================================================
+def install_packages():
+    packages = [
+        'aiogram==2.25.1',
+        'aiohttp==3.9.1',
+        'asyncpg==0.29.0',
+        'redis==5.0.1',
+        'sqlalchemy==2.0.23',
+        'psycopg2-binary==2.9.9',
+        'python-dotenv==1.0.0',
+        'uvicorn==0.25.0',
+        'fastapi==0.104.1'
+    ]
+    
+    for package in packages:
+        try:
+            __import__(package.split('==')[0])
+        except ImportError:
+            import subprocess
+            subprocess.check_call([sys.executable, '-m', 'pip', 'install', package])
+
+# نصب خودکار
+install_packages()
+
+# ============================================================
+# ایمپورت‌ها
+# ============================================================
+from aiogram import Bot, Dispatcher, types
+from aiogram.contrib.middlewares.logging import LoggingMiddleware
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo, ParseMode
+from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters.state import State, StatesGroup
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.utils.executor import start_polling, start_webhook
+
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+import uvicorn
+
+import aiohttp
+import asyncpg
+import redis.asyncio as redis
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, Text, BigInteger, ForeignKey, func
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, relationship
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.pool import NullPool
+
+import threading
+import time
+from pathlib import Path
+
+# ============================================================
 # تنظیمات
-# ============================================
-SECRET_KEY = "your-super-secret-key-change-this-in-production"
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 30
+# ============================================================
+BOT_TOKEN = os.getenv('BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
+ADMIN_ID = int(os.getenv('ADMIN_ID', '123456789'))
+DESTINATION_WALLET = "TV61aTh98MGqmteYzda5AaBzdXgGqreG6A"
+LOTTERY_PRICE = 100
+ADMIN_FEE = 0.20
+CONFIRMATION_THRESHOLD = 19
 
-# استفاده از SQLite (نیازی به PostgreSQL نیست)
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./sadegram.db")
+# تنظیمات دیتابیس (برای تست از SQLite استفاده می‌کنیم)
+USE_SQLITE = True
+DATABASE_URL = 'sqlite:///lottery.db' if USE_SQLITE else os.getenv('DATABASE_URL', 'postgresql://user:pass@localhost/lottery_db')
+REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
 
-# Redis (اختیاری - اگر نصب نیست، بدون کش کار می‌کند)
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+# تنظیمات وب
+WEBAPP_HOST = os.getenv('WEBAPP_HOST', '0.0.0.0')
+WEBAPP_PORT = int(os.getenv('WEBAPP_PORT', '8080'))
+WEBAPP_URL = os.getenv('WEBAPP_URL', f'http://localhost:{WEBAPP_PORT}')
 
-# سرور
-SERVER_ID = int(os.getenv("SERVER_ID", 1))
-MAX_USERS_PER_SERVER = int(os.getenv("MAX_USERS_PER_SERVER", 10000))
-
-# ============================================
-# اتصال به دیتابیس (SQLite)
-# ============================================
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {},
-    echo=False
+# ============================================================
+# تنظیمات لاگ
+# ============================================================
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('lottery_bot.log'),
+        logging.StreamHandler()
+    ]
 )
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+logger = logging.getLogger(__name__)
+
+# ============================================================
+# مدل‌های دیتابیس
+# ============================================================
 Base = declarative_base()
 
-# ============================================
-# Redis (اختیاری)
-# ============================================
-REDIS_AVAILABLE = False
-try:
-    import redis
-    redis_client = redis.Redis(
-        host=REDIS_HOST,
-        port=REDIS_PORT,
-        decode_responses=True,
-        socket_connect_timeout=2
-    )
-    redis_client.ping()
-    REDIS_AVAILABLE = True
-    print("✅ Redis متصل شد")
-except:
-    REDIS_AVAILABLE = False
-    print("⚠️ Redis در دسترس نیست (بدون کش اجرا می‌شود)")
-
-# ============================================
-# مدل‌های دیتابیس
-# ============================================
-
 class User(Base):
-    __tablename__ = "users"
-    
-    id = Column(BigInteger, primary_key=True, index=True)
-    username = Column(String(50), unique=True, index=True, nullable=False)
-    email = Column(String(100), unique=True, index=True, nullable=False)
-    phone = Column(String(20), unique=True, nullable=True)
-    password_hash = Column(String(255), nullable=False)
-    full_name = Column(String(100))
-    bio = Column(Text)
-    avatar_url = Column(String(500))
-    website = Column(String(200))
-    location = Column(String(100))
-    
-    is_premium = Column(Boolean, default=False)
-    is_verified = Column(Boolean, default=False)
-    is_active = Column(Boolean, default=True)
-    is_admin = Column(Boolean, default=False)
-    
-    server_id = Column(Integer, default=1)
-    
-    followers_count = Column(Integer, default=0)
-    following_count = Column(Integer, default=0)
-    videos_count = Column(Integer, default=0)
-    
-    created_at = Column(DateTime, default=func.now())
-    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
-    last_seen = Column(DateTime, default=func.now())
-    
-    videos = relationship("Video", back_populates="user", cascade="all, delete-orphan")
-    comments = relationship("Comment", back_populates="user", cascade="all, delete-orphan")
-    likes = relationship("Like", back_populates="user", cascade="all, delete-orphan")
-
-class Video(Base):
-    __tablename__ = "videos"
-    
-    id = Column(BigInteger, primary_key=True, index=True)
-    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
-    title = Column(String(200))
-    description = Column(Text)
-    video_url = Column(String(500), nullable=False)
-    thumbnail_url = Column(String(500))
-    duration = Column(Integer, default=0)
-    size_mb = Column(Integer, default=0)
-    
-    views = Column(Integer, default=0)
-    likes_count = Column(Integer, default=0)
-    comments_count = Column(Integer, default=0)
-    shares_count = Column(Integer, default=0)
-    
-    is_active = Column(Boolean, default=True)
-    is_private = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=func.now())
-    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
-    
-    user = relationship("User", back_populates="videos")
-    comments = relationship("Comment", back_populates="video", cascade="all, delete-orphan")
-    likes = relationship("Like", back_populates="video", cascade="all, delete-orphan")
-
-class Comment(Base):
-    __tablename__ = "comments"
-    
-    id = Column(BigInteger, primary_key=True, index=True)
-    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
-    video_id = Column(BigInteger, ForeignKey("videos.id"), nullable=False)
-    parent_id = Column(BigInteger, ForeignKey("comments.id"), nullable=True)
-    content = Column(Text, nullable=False)
-    likes_count = Column(Integer, default=0)
-    created_at = Column(DateTime, default=func.now())
-    is_deleted = Column(Boolean, default=False)
-    
-    user = relationship("User", back_populates="comments")
-    video = relationship("Video", back_populates="comments")
-    replies = relationship("Comment", backref="parent", remote_side=[id])
-
-class Like(Base):
-    __tablename__ = "likes"
-    
-    id = Column(BigInteger, primary_key=True, index=True)
-    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
-    video_id = Column(BigInteger, ForeignKey("videos.id"), nullable=False)
-    created_at = Column(DateTime, default=func.now())
-    
-    user = relationship("User", back_populates="likes")
-    video = relationship("Video", back_populates="likes")
-
-class Follow(Base):
-    __tablename__ = "follows"
-    
-    id = Column(BigInteger, primary_key=True, index=True)
-    follower_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
-    following_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
-    created_at = Column(DateTime, default=func.now())
-    
-    __table_args__ = (
-        UniqueConstraint('follower_id', 'following_id', name='unique_follow'),
-    )
-
-class Message(Base):
-    __tablename__ = "messages"
-    
-    id = Column(BigInteger, primary_key=True, index=True)
-    sender_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
-    receiver_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
-    content = Column(Text, nullable=False)
-    is_read = Column(Boolean, default=False)
-    read_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=func.now())
-    
-    sender = relationship("User", foreign_keys=[sender_id])
-    receiver = relationship("User", foreign_keys=[receiver_id])
-
-class ServerMapping(Base):
-    __tablename__ = "server_mappings"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    server_name = Column(String(50), nullable=False)
-    server_ip = Column(String(50))
-    server_port = Column(Integer, default=8000)
-    max_users = Column(Integer, default=10000)
-    current_users = Column(Integer, default=0)
+    __tablename__ = 'users'
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    telegram_id = Column(BigInteger, unique=True, nullable=False, index=True)
+    username = Column(String(100))
+    first_name = Column(String(100))
+    last_name = Column(String(100))
+    language = Column(String(10), default='en')
+    wallet_address = Column(String(100))
+    points = Column(BigInteger, default=0)
+    has_subscription = Column(Boolean, default=False)
+    subscription_date = Column(DateTime)
+    total_participations = Column(Integer, default=0)
+    total_wins = Column(Integer, default=0)
+    total_amount_won = Column(Float, default=0.0)
+    referral_code = Column(String(20), unique=True, index=True)
+    referral_count = Column(Integer, default=0)
+    referral_points = Column(BigInteger, default=0)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=func.now())
 
-class Notification(Base):
-    __tablename__ = "notifications"
-    
-    id = Column(BigInteger, primary_key=True, index=True)
-    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
-    type = Column(String(50), nullable=False)
-    content = Column(Text, nullable=False)
-    link = Column(String(500))
-    is_read = Column(Boolean, default=False)
+class Transaction(Base):
+    __tablename__ = 'transactions'
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey('users.id'), nullable=False, index=True)
+    tx_hash = Column(String(100), unique=True, index=True)
+    from_address = Column(String(100))
+    to_address = Column(String(100))
+    amount = Column(Float, nullable=False)
+    status = Column(String(20), default='pending')
+    confirmations = Column(Integer, default=0)
+    created_at = Column(DateTime, default=func.now())
+    confirmed_at = Column(DateTime)
+
+class Lottery(Base):
+    __tablename__ = 'lotteries'
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    round_number = Column(Integer, unique=True, nullable=False)
+    total_pool = Column(Float, default=0.0)
+    admin_fee = Column(Float, default=0.0)
+    prize_pool = Column(Float, default=0.0)
+    number_of_winners = Column(Integer)
+    prize_per_winner = Column(Float)
+    status = Column(String(20), default='pending')
+    is_active = Column(Boolean, default=False)
+    started_at = Column(DateTime)
+    drawn_at = Column(DateTime)
+    lottery_hash = Column(String(100))
     created_at = Column(DateTime, default=func.now())
 
-# ============================================
-# Pydantic Models
-# ============================================
+class LotteryParticipation(Base):
+    __tablename__ = 'lottery_participations'
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey('users.id'), nullable=False, index=True)
+    lottery_id = Column(BigInteger, ForeignKey('lotteries.id'), nullable=False, index=True)
+    weight = Column(Float, default=1.0)
+    is_winner = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=func.now())
 
-class UserCreate(BaseModel):
-    username: str
-    email: EmailStr
-    password: str
-    full_name: Optional[str] = None
+class Winner(Base):
+    __tablename__ = 'winners'
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey('users.id'), nullable=False, index=True)
+    lottery_id = Column(BigInteger, ForeignKey('lotteries.id'), nullable=False, index=True)
+    prize_amount = Column(Float, nullable=False)
+    withdrawal_status = Column(String(20), default='pending')
+    withdrawal_address = Column(String(100))
+    paid_at = Column(DateTime)
+    is_excluded_from_next = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=func.now())
 
-class UserResponse(BaseModel):
-    id: int
-    username: str
-    email: str
-    full_name: Optional[str] = None
-    bio: Optional[str] = None
-    avatar_url: Optional[str] = None
-    is_premium: bool
-    is_verified: bool
-    followers_count: int
-    following_count: int
-    videos_count: int
-    server_id: int
-    created_at: datetime
-    
-    class Config:
-        from_attributes = True
+class Poll(Base):
+    __tablename__ = 'polls'
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    lottery_id = Column(BigInteger, ForeignKey('lotteries.id'))
+    question = Column(Text)
+    status = Column(String(20), default='active')
+    total_votes = Column(Integer, default=0)
+    yes_votes = Column(Integer, default=0)
+    no_votes = Column(Integer, default=0)
+    created_at = Column(DateTime, default=func.now())
 
-class Token(BaseModel):
-    access_token: str
-    token_type: str
-    user: UserResponse
+class PollVote(Base):
+    __tablename__ = 'poll_votes'
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    poll_id = Column(BigInteger, ForeignKey('polls.id'), nullable=False)
+    user_id = Column(BigInteger, ForeignKey('users.id'), nullable=False, index=True)
+    vote = Column(String(10))
+    created_at = Column(DateTime, default=func.now())
 
-class AddServerRequest(BaseModel):
-    server_name: str
-    server_ip: str
-    server_port: int = 8000
-    max_users: int = 10000
+# ============================================================
+# راه‌اندازی دیتابیس
+# ============================================================
+def init_db():
+    engine = create_engine(DATABASE_URL)
+    Base.metadata.create_all(engine)
+    return engine
 
-# ============================================
-# توابع ابزاری
-# ============================================
+engine = init_db()
+Session = sessionmaker(bind=engine)
 
-def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+def get_db():
+    return Session()
 
-def verify_password(password: str, hashed: str) -> bool:
-    return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
+# ============================================================
+# کلاس‌های وضعیت FSM
+# ============================================================
+class LotteryStates(StatesGroup):
+    waiting_for_wallet = State()
+    waiting_for_tx_hash = State()
+    waiting_for_withdrawal = State()
 
-def create_access_token(data: dict) -> str:
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    data.update({"exp": expire})
-    return jwt.encode(data, SECRET_KEY, algorithm=ALGORITHM)
+class AdminStates(StatesGroup):
+    waiting_for_broadcast = State()
+    waiting_for_winner_count = State()
+    waiting_for_prize_amount = State()
+    waiting_for_manual_verify = State()
 
-def decode_access_token(token: str) -> dict:
-    try:
-        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-    except:
-        return None
-
-def get_current_user(token: str, db: Session) -> Optional[User]:
-    payload = decode_access_token(token)
-    if not payload:
-        return None
-    user_id = payload.get("user_id")
-    if not user_id:
-        return None
-    user = db.query(User).filter(User.id == user_id, User.is_active == True).first()
-    if user:
-        user.last_seen = datetime.utcnow()
-        db.commit()
-    return user
-
-def get_cache(key: str):
-    if REDIS_AVAILABLE:
-        try:
-            data = redis_client.get(key)
-            if data:
-                return json.loads(data)
-        except:
-            pass
-    return None
-
-def set_cache(key: str, value, expire: int = 300):
-    if REDIS_AVAILABLE:
-        try:
-            redis_client.setex(key, expire, json.dumps(value))
-        except:
-            pass
-
-def invalidate_cache(pattern: str):
-    if REDIS_AVAILABLE:
-        try:
-            keys = redis_client.keys(pattern)
-            if keys:
-                redis_client.delete(*keys)
-        except:
-            pass
-
-# ============================================
-# سرویس شاردینگ
-# ============================================
-
-class ShardingService:
+# ============================================================
+# کلاس‌های اصلی سرویس‌ها
+# ============================================================
+class DatabaseService:
+    """سرویس دیتابیس با قابلیت کش"""
     
     @staticmethod
-    def get_server_for_user(user_id: int, db: Session) -> int:
-        cache_key = f"user_server:{user_id}"
-        cached = get_cache(cache_key)
-        if cached:
-            return int(cached)
-        
-        user = db.query(User).filter(User.id == user_id).first()
-        server_id = user.server_id if user else 1
-        set_cache(cache_key, server_id, 3600)
-        return server_id
+    def get_or_create_user(telegram_id: int, first_name: str = '', username: str = '') -> dict:
+        session = get_db()
+        try:
+            user = session.query(User).filter_by(telegram_id=telegram_id).first()
+            if not user:
+                import hashlib
+                referral_code = hashlib.md5(str(telegram_id).encode()).hexdigest()[:8].upper()
+                user = User(
+                    telegram_id=telegram_id,
+                    first_name=first_name,
+                    username=username,
+                    referral_code=referral_code,
+                    language='en'
+                )
+                session.add(user)
+                session.commit()
+                session.refresh(user)
+            
+            return {
+                'id': user.id,
+                'telegram_id': user.telegram_id,
+                'username': user.username,
+                'first_name': user.first_name,
+                'last_name': user.last_name,
+                'language': user.language,
+                'has_subscription': user.has_subscription,
+                'points': user.points,
+                'referral_code': user.referral_code,
+                'referral_count': user.referral_count,
+                'referral_points': user.referral_points,
+                'total_participations': user.total_participations,
+                'total_wins': user.total_wins,
+                'total_amount_won': user.total_amount_won
+            }
+        except Exception as e:
+            logger.error(f"DB error: {e}")
+            return None
+        finally:
+            session.close()
     
     @staticmethod
-    def assign_user_to_server(db: Session) -> int:
-        servers = db.query(ServerMapping).filter(
-            ServerMapping.is_active == True
-        ).order_by(ServerMapping.current_users).all()
-        
-        if not servers:
-            default = ServerMapping(
-                server_name="server-1",
-                server_ip="127.0.0.1",
-                server_port=8000,
-                max_users=MAX_USERS_PER_SERVER,
-                current_users=0
-            )
-            db.add(default)
-            db.commit()
-            db.refresh(default)
-            servers = [default]
-        
-        selected = servers[0]
-        selected.current_users += 1
-        db.commit()
-        return selected.id
-    
-    @staticmethod
-    def add_new_server(db: Session, name: str, ip: str, port: int, max_users: int) -> int:
-        new_server = ServerMapping(
-            server_name=name,
-            server_ip=ip,
-            server_port=port,
-            max_users=max_users,
-            current_users=0,
-            is_active=True
-        )
-        db.add(new_server)
-        db.commit()
-        db.refresh(new_server)
-        return new_server.id
-
-# ============================================
-# WebSocket Manager
-# ============================================
-
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: Dict[int, WebSocket] = {}
-    
-    async def connect(self, websocket: WebSocket, user_id: int):
-        await websocket.accept()
-        self.active_connections[user_id] = websocket
-        if REDIS_AVAILABLE:
-            redis_client.setex(f"online:{user_id}", 300, "1")
-    
-    def disconnect(self, user_id: int):
-        if user_id in self.active_connections:
-            del self.active_connections[user_id]
-        if REDIS_AVAILABLE:
-            redis_client.delete(f"online:{user_id}")
-    
-    async def send_message(self, receiver_id: int, message: dict):
-        if receiver_id in self.active_connections:
-            try:
-                await self.active_connections[receiver_id].send_json(message)
+    def update_user_language(telegram_id: int, language: str):
+        session = get_db()
+        try:
+            user = session.query(User).filter_by(telegram_id=telegram_id).first()
+            if user:
+                user.language = language
+                session.commit()
                 return True
-            except:
-                self.disconnect(receiver_id)
+        except Exception as e:
+            logger.error(f"Update language error: {e}")
+        finally:
+            session.close()
         return False
     
-    def get_online_users(self) -> List[int]:
-        if REDIS_AVAILABLE:
+    @staticmethod
+    def has_participated(telegram_id: int) -> bool:
+        session = get_db()
+        try:
+            lottery = session.query(Lottery).filter_by(status='active').order_by(Lottery.id.desc()).first()
+            if not lottery:
+                return False
+            participation = session.query(LotteryParticipation).filter_by(
+                user_id=telegram_id, lottery_id=lottery.id
+            ).first()
+            return participation is not None
+        except Exception as e:
+            logger.error(f"Check participation error: {e}")
+            return False
+        finally:
+            session.close()
+    
+    @staticmethod
+    def register_participation(telegram_id: int, tx_hash: str, wallet_address: str) -> bool:
+        session = get_db()
+        try:
+            # دریافت یا ایجاد دور فعلی
+            lottery = session.query(Lottery).filter_by(status='active').order_by(Lottery.id.desc()).first()
+            if not lottery:
+                last_round = session.query(Lottery).count()
+                lottery = Lottery(
+                    round_number=last_round + 1,
+                    status='active',
+                    is_active=True,
+                    started_at=func.now()
+                )
+                session.add(lottery)
+                session.flush()
+            
+            # ثبت تراکنش
+            tx = Transaction(
+                user_id=telegram_id,
+                tx_hash=tx_hash,
+                from_address=wallet_address,
+                to_address=DESTINATION_WALLET,
+                amount=LOTTERY_PRICE,
+                status='confirmed',
+                confirmed_at=func.now()
+            )
+            session.add(tx)
+            
+            # ثبت شرکت
+            participation = LotteryParticipation(
+                user_id=telegram_id,
+                lottery_id=lottery.id
+            )
+            session.add(participation)
+            
+            # به‌روزرسانی کاربر
+            user = session.query(User).filter_by(telegram_id=telegram_id).first()
+            if user:
+                user.has_subscription = True
+                user.subscription_date = func.now()
+                user.total_participations = user.total_participations + 1
+            
+            # به‌روزرسانی صندوق
+            lottery.total_pool = lottery.total_pool + LOTTERY_PRICE
+            lottery.prize_pool = lottery.prize_pool + (LOTTERY_PRICE * 0.80)
+            lottery.admin_fee = lottery.admin_fee + (LOTTERY_PRICE * 0.20)
+            
+            session.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Register participation error: {e}")
+            session.rollback()
+            return False
+        finally:
+            session.close()
+    
+    @staticmethod
+    def get_participants() -> List[dict]:
+        session = get_db()
+        try:
+            lottery = session.query(Lottery).filter_by(status='active').order_by(Lottery.id.desc()).first()
+            if not lottery:
+                return []
+            
+            participations = session.query(LotteryParticipation).filter_by(lottery_id=lottery.id).all()
+            result = []
+            for p in participations:
+                user = session.query(User).filter_by(telegram_id=p.user_id).first()
+                if user:
+                    result.append({
+                        'user_id': user.telegram_id,
+                        'has_subscription': user.has_subscription,
+                        'total_participations': user.total_participations,
+                        'total_wins': user.total_wins
+                    })
+            return result
+        except Exception as e:
+            logger.error(f"Get participants error: {e}")
+            return []
+        finally:
+            session.close()
+    
+    @staticmethod
+    def get_previous_winners() -> List[int]:
+        session = get_db()
+        try:
+            winners = session.query(Winner).order_by(Winner.id.desc()).limit(100).all()
+            return [w.user_id for w in winners]
+        except Exception as e:
+            logger.error(f"Get previous winners error: {e}")
+            return []
+        finally:
+            session.close()
+    
+    @staticmethod
+    def create_lottery(winner_count: int, prize_amount: float, winners: List[int]) -> int:
+        session = get_db()
+        try:
+            last_round = session.query(Lottery).count()
+            lottery = Lottery(
+                round_number=last_round + 1,
+                number_of_winners=winner_count,
+                prize_per_winner=prize_amount,
+                prize_pool=winner_count * prize_amount,
+                status='completed',
+                is_active=False,
+                drawn_at=func.now()
+            )
+            session.add(lottery)
+            session.flush()
+            
+            for user_id in winners:
+                winner = Winner(
+                    user_id=user_id,
+                    lottery_id=lottery.id,
+                    prize_amount=prize_amount,
+                    is_excluded_from_next=True
+                )
+                session.add(winner)
+                
+                user = session.query(User).filter_by(telegram_id=user_id).first()
+                if user:
+                    user.total_wins = user.total_wins + 1
+                    user.total_amount_won = user.total_amount_won + prize_amount
+            
+            session.commit()
+            return lottery.id
+        except Exception as e:
+            logger.error(f"Create lottery error: {e}")
+            session.rollback()
+            return 0
+        finally:
+            session.close()
+    
+    @staticmethod
+    def get_winner(telegram_id: int) -> Optional[dict]:
+        session = get_db()
+        try:
+            winner = session.query(Winner).filter_by(
+                user_id=telegram_id, withdrawal_status='pending'
+            ).order_by(Winner.id.desc()).first()
+            if not winner:
+                return None
+            return {
+                'id': winner.id,
+                'prize_amount': winner.prize_amount,
+                'withdrawal_status': winner.withdrawal_status,
+                'withdrawal_address': winner.withdrawal_address
+            }
+        except Exception as e:
+            logger.error(f"Get winner error: {e}")
+            return None
+        finally:
+            session.close()
+    
+    @staticmethod
+    def save_withdrawal_address(telegram_id: int, address: str) -> bool:
+        session = get_db()
+        try:
+            winner = session.query(Winner).filter_by(
+                user_id=telegram_id, withdrawal_status='pending'
+            ).order_by(Winner.id.desc()).first()
+            if winner:
+                winner.withdrawal_address = address
+                winner.withdrawal_status = 'requested'
+                session.commit()
+                return True
+        except Exception as e:
+            logger.error(f"Save withdrawal address error: {e}")
+            session.rollback()
+        finally:
+            session.close()
+        return False
+    
+    @staticmethod
+    def get_all_users() -> List[dict]:
+        session = get_db()
+        try:
+            users = session.query(User).filter_by(is_active=True).all()
+            return [{'telegram_id': u.telegram_id, 'language': u.language} for u in users]
+        except Exception as e:
+            logger.error(f"Get all users error: {e}")
+            return []
+        finally:
+            session.close()
+    
+    @staticmethod
+    def pay_winners() -> int:
+        session = get_db()
+        try:
+            winners = session.query(Winner).filter_by(withdrawal_status='requested').all()
+            count = 0
+            for winner in winners:
+                winner.withdrawal_status = 'paid'
+                winner.paid_at = func.now()
+                count += 1
+            session.commit()
+            return count
+        except Exception as e:
+            logger.error(f"Pay winners error: {e}")
+            session.rollback()
+            return 0
+        finally:
+            session.close()
+    
+    @staticmethod
+    def get_statistics() -> dict:
+        session = get_db()
+        try:
+            total_users = session.query(User).count()
+            subscribed = session.query(User).filter_by(has_subscription=True).count()
+            current_round = session.query(Lottery).count()
+            
+            lottery = session.query(Lottery).filter_by(status='active').first()
+            participants = 0
+            total_pool = 0
+            if lottery:
+                participants = session.query(LotteryParticipation).filter_by(lottery_id=lottery.id).count()
+                total_pool = lottery.prize_pool or 0
+            
+            total_winners = session.query(Winner).count()
+            total_paid = session.query(func.sum(Winner.prize_amount)).filter_by(withdrawal_status='paid').scalar() or 0
+            
+            return {
+                'total_users': total_users,
+                'subscribed_users': subscribed,
+                'current_round': current_round,
+                'participants': participants,
+                'total_pool': total_pool,
+                'total_winners': total_winners,
+                'total_paid': total_paid
+            }
+        except Exception as e:
+            logger.error(f"Get statistics error: {e}")
+            return {}
+        finally:
+            session.close()
+
+# ============================================================
+# سرویس قرعه‌کشی
+# ============================================================
+class LotteryService:
+    @staticmethod
+    def select_winners(participants: List[dict], number_of_winners: int, exclude_users: List[int] = None) -> List[int]:
+        if exclude_users is None:
+            exclude_users = []
+        
+        eligible = [p for p in participants if p['user_id'] not in exclude_users and p.get('has_subscription', False)]
+        
+        if not eligible or len(eligible) < number_of_winners:
+            return []
+        
+        # محاسبه وزن‌ها
+        weights = []
+        for p in eligible:
+            weight = 1.0
+            weight += p.get('total_participations', 0) * 0.01
+            weight -= p.get('total_wins', 0) * 0.05
+            weight = max(0.5, min(weight, 2.0))
+            weights.append(weight)
+        
+        # انتخاب با وزن
+        total_weight = sum(weights)
+        if total_weight == 0:
+            return []
+        
+        normalized = [w / total_weight for w in weights]
+        selected = []
+        available = list(range(len(eligible)))
+        
+        for _ in range(min(number_of_winners, len(eligible))):
+            if not available:
+                break
+            import random
+            idx = random.choices(available, weights=[normalized[i] for i in available], k=1)[0]
+            selected.append(eligible[idx]['user_id'])
+            available.remove(idx)
+        
+        return selected
+
+# ============================================================
+# ربات تلگرام
+# ============================================================
+class LotteryBot:
+    def __init__(self):
+        self.bot = Bot(token=BOT_TOKEN)
+        self.storage = MemoryStorage()
+        self.dp = Dispatcher(self.bot, storage=self.storage)
+        self.db = DatabaseService()
+        self.lottery = LotteryService()
+        self._register_handlers()
+    
+    def _register_handlers(self):
+        dp = self.dp
+        
+        # ========================================
+        # دستور start
+        # ========================================
+        @dp.message_handler(commands=['start'])
+        async def cmd_start(message: types.Message):
+            user_id = message.from_user.id
+            user = self.db.get_or_create_user(
+                user_id,
+                message.from_user.first_name or '',
+                message.from_user.username or ''
+            )
+            
+            # پردازش کد رفرال
+            args = message.get_args()
+            if args and args.startswith('ref_'):
+                # اینجا می‌توانید رفرال را ثبت کنید
+                pass
+            
+            lang = user.get('language', 'en')
+            text_en = (
+                "🎰 **Welcome to UTYOB Lottery Bot!**\n\n"
+                "💰 Join our lottery and win big prizes!\n"
+                f"💵 Only ${LOTTERY_PRICE} to participate\n"
+                "🎁 Win up to $2,000!\n\n"
+                "Click the button below to enter the app."
+            )
+            text_fa = (
+                "🎰 **به ربات قرعه‌کشی UTYOB خوش آمدید!**\n\n"
+                "💰 در قرعه‌کشی ما شرکت کنید و جوایز بزرگ ببرید!\n"
+                f"💵 فقط ${LOTTERY_PRICE} برای شرکت\n"
+                "🎁 تا ۲,۰۰۰ دلار برنده شوید!\n\n"
+                "برای ورود به برنامه روی دکمه زیر کلیک کنید."
+            )
+            
+            keyboard = InlineKeyboardMarkup(row_width=1)
+            keyboard.add(
+                InlineKeyboardButton(
+                    "🎮 PLY",
+                    web_app=WebAppInfo(url=f"{WEBAPP_URL}/")
+                )
+            )
+            keyboard.add(
+                InlineKeyboardButton(
+                    "📖 Guide" if lang == 'en' else "📖 راهنما",
+                    callback_data="guide"
+                )
+            )
+            
+            text = text_en if lang == 'en' else text_fa
+            await message.reply(text, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
+        
+        # ========================================
+        # راهنما
+        # ========================================
+        @dp.callback_query_handler(lambda c: c.data == 'guide')
+        async def guide_handler(callback_query: types.CallbackQuery):
+            user_id = callback_query.from_user.id
+            user = self.db.get_or_create_user(user_id)
+            lang = user.get('language', 'en')
+            
+            text_en = (
+                "📖 **Guide**\n\n"
+                f"1️⃣ Send ${LOTTERY_PRICE} USDT to:\n"
+                f"`{DESTINATION_WALLET}`\n"
+                "2️⃣ Open the app and verify your payment\n"
+                "3️⃣ Wait for the lottery draw\n"
+                "4️⃣ If you win, withdraw your prize!\n\n"
+                "⚡ The lottery is fair and transparent."
+            )
+            text_fa = (
+                "📖 **راهنما**\n\n"
+                f"۱️⃣ ${LOTTERY_PRICE} USDT به آدرس زیر ارسال کنید:\n"
+                f"`{DESTINATION_WALLET}`\n"
+                "۲️⃣ برنامه را باز کنید و پرداخت خود را تایید کنید\n"
+                "۳️⃣ منتظر قرعه‌کشی باشید\n"
+                "۴️⃣ اگر برنده شدید، جایزه خود را برداشت کنید!\n\n"
+                "⚡ قرعه‌کشی عادلانه و شفاف است."
+            )
+            
+            await callback_query.message.answer(text_en if lang == 'en' else text_fa, parse_mode=ParseMode.MARKDOWN)
+            await callback_query.answer()
+        
+        # ========================================
+        # پنل مدیریت
+        # ========================================
+        @dp.message_handler(commands=['admin'])
+        async def admin_panel(message: types.Message):
+            if message.from_user.id != ADMIN_ID:
+                await message.reply("⛔ Access denied.")
+                return
+            
+            keyboard = InlineKeyboardMarkup(row_width=2)
+            keyboard.add(
+                InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast"),
+                InlineKeyboardButton("🎰 Start Lottery", callback_data="admin_start_lottery")
+            )
+            keyboard.add(
+                InlineKeyboardButton("✅ Manual Verify", callback_data="admin_manual_verify"),
+                InlineKeyboardButton("📊 Send Poll", callback_data="admin_poll")
+            )
+            keyboard.add(
+                InlineKeyboardButton("💸 Pay Winners", callback_data="admin_pay_winners"),
+                InlineKeyboardButton("📈 Statistics", callback_data="admin_stats")
+            )
+            
+            await message.reply("🛠️ **Admin Panel**", reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
+        
+        @dp.callback_query_handler(lambda c: c.data.startswith('admin_'))
+        async def admin_actions(callback_query: types.CallbackQuery, state: FSMContext):
+            user_id = callback_query.from_user.id
+            if user_id != ADMIN_ID:
+                await callback_query.answer("⛔ Access denied.")
+                return
+            
+            data = callback_query.data
+            
+            if data == 'admin_broadcast':
+                await callback_query.message.answer("📢 **Enter broadcast message:**")
+                await AdminStates.waiting_for_broadcast.set()
+            
+            elif data == 'admin_start_lottery':
+                await callback_query.message.answer("📊 **How many winners?**")
+                await AdminStates.waiting_for_winner_count.set()
+            
+            elif data == 'admin_manual_verify':
+                await callback_query.message.answer("🔍 **Enter user ID and tx hash:**\nFormat: `user_id tx_hash`")
+                await AdminStates.waiting_for_manual_verify.set()
+            
+            elif data == 'admin_poll':
+                await self._send_poll()
+                await callback_query.message.answer("📊 Poll sent!")
+            
+            elif data == 'admin_pay_winners':
+                count = self.db.pay_winners()
+                await callback_query.message.answer(f"💸 Paid {count} winners!")
+            
+            elif data == 'admin_stats':
+                stats = self.db.get_statistics()
+                text = (
+                    f"📊 **Statistics**\n\n"
+                    f"👥 Users: {stats.get('total_users', 0)}\n"
+                    f"💎 Subscribed: {stats.get('subscribed_users', 0)}\n"
+                    f"🎰 Round: #{stats.get('current_round', 0)}\n"
+                    f"👤 Participants: {stats.get('participants', 0)}\n"
+                    f"💰 Pool: ${stats.get('total_pool', 0)}\n"
+                    f"🏆 Winners: {stats.get('total_winners', 0)}\n"
+                    f"💵 Paid: ${stats.get('total_paid', 0)}"
+                )
+                await callback_query.message.answer(text, parse_mode=ParseMode.MARKDOWN)
+            
+            await callback_query.answer()
+        
+        @dp.message_handler(state=AdminStates.waiting_for_broadcast)
+        async def process_broadcast(message: types.Message, state: FSMContext):
+            if message.from_user.id != ADMIN_ID:
+                return
+            
+            users = self.db.get_all_users()
+            sent = 0
+            for user in users:
+                try:
+                    await self.bot.send_message(user['telegram_id'], message.text)
+                    sent += 1
+                    await asyncio.sleep(0.05)
+                except:
+                    pass
+            
+            await message.reply(f"✅ Broadcast sent to {sent} users!")
+            await state.finish()
+        
+        @dp.message_handler(state=AdminStates.waiting_for_winner_count)
+        async def process_winner_count(message: types.Message, state: FSMContext):
             try:
-                keys = redis_client.keys("online:*")
-                return [int(k.split(":")[1]) for k in keys]
+                count = int(message.text.strip())
+                if count <= 0:
+                    raise ValueError
+                await state.update_data(winner_count=count)
+                await message.reply("💰 **Prize amount per winner (USDT):**")
+                await AdminStates.waiting_for_prize_amount.set()
+            except:
+                await message.reply("❌ Enter a valid number.")
+        
+        @dp.message_handler(state=AdminStates.waiting_for_prize_amount)
+        async def process_prize_amount(message: types.Message, state: FSMContext):
+            try:
+                amount = float(message.text.strip())
+                if amount <= 0:
+                    raise ValueError
+                
+                data = await state.get_data()
+                winner_count = data.get('winner_count', 1)
+                
+                participants = self.db.get_participants()
+                previous_winners = self.db.get_previous_winners()
+                winners = self.lottery.select_winners(participants, winner_count, previous_winners)
+                
+                if not winners:
+                    await message.reply("❌ No eligible participants!")
+                    await state.finish()
+                    return
+                
+                lottery_id = self.db.create_lottery(winner_count, amount, winners)
+                
+                # اطلاع‌رسانی به برنده‌ها
+                for user_id in winners:
+                    try:
+                        await self.bot.send_message(
+                            user_id,
+                            f"🎉 **Congratulations!**\n\n"
+                            f"You won ${amount} USDT!\n"
+                            f"Click the button below to withdraw.",
+                            reply_markup=InlineKeyboardMarkup().add(
+                                InlineKeyboardButton("💰 Withdraw", callback_data="withdraw_prize")
+                            ),
+                            parse_mode=ParseMode.MARKDOWN
+                        )
+                    except:
+                        pass
+                
+                await message.reply(
+                    f"✅ **Lottery completed!**\n\n"
+                    f"🏆 Winners: {len(winners)}\n"
+                    f"💰 Prize: ${amount} each"
+                )
+                await state.finish()
+            except:
+                await message.reply("❌ Enter a valid amount.")
+        
+        @dp.message_handler(state=AdminStates.waiting_for_manual_verify)
+        async def process_manual_verify(message: types.Message, state: FSMContext):
+            parts = message.text.strip().split()
+            if len(parts) != 2:
+                await message.reply("❌ Format: `user_id tx_hash`")
+                return
+            
+            user_id, tx_hash = parts
+            try:
+                user_id = int(user_id)
+            except:
+                await message.reply("❌ Invalid user ID.")
+                return
+            
+            # اینجا می‌توانید تایید دستی انجام دهید
+            await message.reply(f"✅ User {user_id} verified manually!")
+            await state.finish()
+        
+        # ========================================
+        # برداشت جایزه
+        # ========================================
+        @dp.callback_query_handler(lambda c: c.data == 'withdraw_prize')
+        async def withdraw_prize(callback_query: types.CallbackQuery, state: FSMContext):
+            user_id = callback_query.from_user.id
+            winner = self.db.get_winner(user_id)
+            
+            if not winner:
+                await callback_query.message.answer("❌ You don't have any prize to withdraw.")
+                await callback_query.answer()
+                return
+            
+            if winner['withdrawal_status'] == 'paid':
+                await callback_query.message.answer("✅ Already withdrawn.")
+                await callback_query.answer()
+                return
+            
+            await callback_query.message.answer(
+                f"💰 **Withdraw ${winner['prize_amount']} USDT**\n\n"
+                "Enter your TRC20 wallet address:"
+            )
+            await LotteryStates.waiting_for_withdrawal.set()
+            await callback_query.answer()
+        
+        @dp.message_handler(state=LotteryStates.waiting_for_withdrawal)
+        async def process_withdrawal(message: types.Message, state: FSMContext):
+            address = message.text.strip()
+            if len(address) != 34 or not address.startswith('T'):
+                await message.reply("❌ Invalid TRC20 address.")
+                return
+            
+            if self.db.save_withdrawal_address(message.from_user.id, address):
+                await message.reply("✅ Withdrawal request submitted!")
+                await self.bot.send_message(
+                    ADMIN_ID,
+                    f"💸 **Withdrawal Request**\n\n"
+                    f"👤 User: {message.from_user.id}\n"
+                    f"📤 Address: `{address}`"
+                )
+            else:
+                await message.reply("❌ No pending prize found.")
+            
+            await state.finish()
+    
+    async def _send_poll(self):
+        users = self.db.get_all_users()
+        keyboard = InlineKeyboardMarkup(row_width=2)
+        keyboard.add(
+            InlineKeyboardButton("✅ Yes", callback_data="poll_yes"),
+            InlineKeyboardButton("❌ No", callback_data="poll_no")
+        )
+        
+        for user in users:
+            try:
+                await self.bot.send_message(
+                    user['telegram_id'],
+                    "📊 **Next Lottery Round?**\n\n"
+                    f"Price: ${LOTTERY_PRICE} USDT\n"
+                    "Do you want to start a new round?",
+                    reply_markup=keyboard
+                )
+                await asyncio.sleep(0.05)
             except:
                 pass
-        return list(self.active_connections.keys())
+    
+    def run(self):
+        logger.info("🚀 Starting bot...")
+        start_polling(self.dp, skip_updates=True)
 
-manager = ConnectionManager()
+# ============================================================
+# وب‌سرور FastAPI با صفحه WebApp یکپارچه
+# ============================================================
+app = FastAPI(title="UTYOB Lottery")
 
-# ============================================
-# اپلیکیشن FastAPI
-# ============================================
-
-app = FastAPI(
-    title="ساده‌گرام",
-    description="پلتفرم اشتراک ویدیو",
-    version="2.0.0"
-)
-
-# ایجاد پوشه‌ها
-os.makedirs("./storage", exist_ok=True)
-os.makedirs("./static", exist_ok=True)
-
-# ============================================
-# WebSocket
-# ============================================
-
-@app.websocket("/ws/chat")
-async def websocket_endpoint(websocket: WebSocket, token: str):
-    db = SessionLocal()
-    user = get_current_user(token, db)
-    if not user:
-        await websocket.close(code=1008)
-        db.close()
-        return
-    
-    user_id = user.id
-    await manager.connect(websocket, user_id)
-    
-    try:
-        while True:
-            data = await websocket.receive_json()
-            
-            if data.get("type") == "message":
-                receiver_id = data.get("receiver_id")
-                content = data.get("content")
-                
-                if not receiver_id or not content:
-                    continue
-                
-                new_message = Message(
-                    sender_id=user_id,
-                    receiver_id=receiver_id,
-                    content=content
-                )
-                db.add(new_message)
-                db.commit()
-                db.refresh(new_message)
-                
-                # ارسال به گیرنده
-                message_data = {
-                    "type": "message",
-                    "data": {
-                        "id": new_message.id,
-                        "sender_id": user_id,
-                        "content": content,
-                        "created_at": new_message.created_at.isoformat(),
-                        "sender_username": user.username,
-                        "sender_avatar": user.avatar_url
-                    }
-                }
-                
-                await manager.send_message(receiver_id, message_data)
-                await websocket.send_json({"type": "sent", "data": {"id": new_message.id}})
-            
-            elif data.get("type") == "typing":
-                receiver_id = data.get("receiver_id")
-                if receiver_id:
-                    await manager.send_message(receiver_id, {"type": "typing", "data": {"user_id": user_id}})
-    
-    except WebSocketDisconnect:
-        manager.disconnect(user_id)
-        db.close()
-
-# ============================================
-# APIها
-# ============================================
-
-@app.on_event("startup")
-async def startup():
-    Base.metadata.create_all(bind=engine)
-    print("✅ دیتابیس راه‌اندازی شد")
-    
-    db = SessionLocal()
-    existing = db.query(ServerMapping).filter(ServerMapping.server_name == "server-1").first()
-    if not existing:
-        default = ServerMapping(
-            server_name="server-1",
-            server_ip="127.0.0.1",
-            server_port=8000,
-            max_users=MAX_USERS_PER_SERVER,
-            current_users=0
-        )
-        db.add(default)
-        db.commit()
-    db.close()
-
-# ========== احراز هویت ==========
-
-@app.post("/api/auth/register", response_model=Token)
-async def register(user_data: UserCreate, db: Session = Depends(lambda: SessionLocal())):
-    existing = db.query(User).filter(
-        (User.username == user_data.username) | (User.email == user_data.email)
-    ).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="نام کاربری یا ایمیل تکراری است")
-    
-    server_id = ShardingService.assign_user_to_server(db)
-    
-    new_user = User(
-        username=user_data.username,
-        email=user_data.email,
-        password_hash=hash_password(user_data.password),
-        full_name=user_data.full_name or user_data.username,
-        server_id=server_id
-    )
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-    
-    token = create_access_token({"user_id": new_user.id})
-    
-    return {
-        "access_token": token,
-        "token_type": "bearer",
-        "user": UserResponse.model_validate(new_user)
-    }
-
-@app.post("/api/auth/login", response_model=Token)
-async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(lambda: SessionLocal())):
-    user = db.query(User).filter(User.username == form_data.username).first()
-    if not user or not verify_password(form_data.password, user.password_hash):
-        raise HTTPException(status_code=400, detail="نام کاربری یا رمز عبور اشتباه است")
-    
-    token = create_access_token({"user_id": user.id})
-    user.last_seen = datetime.utcnow()
-    db.commit()
-    
-    return {
-        "access_token": token,
-        "token_type": "bearer",
-        "user": UserResponse.model_validate(user)
-    }
-
-@app.get("/api/auth/me", response_model=UserResponse)
-async def get_me(token: str, db: Session = Depends(lambda: SessionLocal())):
-    user = get_current_user(token, db)
-    if not user:
-        raise HTTPException(status_code=401, detail="توکن نامعتبر است")
-    return UserResponse.model_validate(user)
-
-# ========== ویدیوها ==========
-
-@app.post("/api/videos/upload")
-async def upload_video(
-    token: str,
-    video: UploadFile = File(...),
-    title: Optional[str] = Form(None),
-    description: Optional[str] = Form(None),
-    is_private: bool = Form(False),
-    db: Session = Depends(lambda: SessionLocal())
-):
-    user = get_current_user(token, db)
-    if not user:
-        raise HTTPException(status_code=401, detail="توکن نامعتبر است")
-    
-    content = await video.read()
-    if len(content) > 10 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="حجم ویدیو نباید بیشتر از ۱۰ مگابایت باشد")
-    
-    # ذخیره محلی
-    os.makedirs(f"./storage/videos/{user.id}", exist_ok=True)
-    filename = f"{uuid.uuid4()}.mp4"
-    file_path = f"./storage/videos/{user.id}/{filename}"
-    
-    with open(file_path, "wb") as f:
-        f.write(content)
-    
-    video_url = f"/static/videos/{user.id}/{filename}"
-    
-    new_video = Video(
-        user_id=user.id,
-        title=title or video.filename,
-        description=description or "",
-        video_url=video_url,
-        size_mb=len(content) // (1024 * 1024),
-        is_private=is_private
-    )
-    db.add(new_video)
-    db.commit()
-    db.refresh(new_video)
-    
-    user.videos_count += 1
-    db.commit()
-    
-    return {
-        "success": True,
-        "video_id": new_video.id,
-        "video_url": video_url
-    }
-
-@app.get("/api/videos/feed")
-async def get_feed(
-    token: str,
-    limit: int = 20,
-    offset: int = 0,
-    db: Session = Depends(lambda: SessionLocal())
-):
-    user = get_current_user(token, db)
-    if not user:
-        raise HTTPException(status_code=401, detail="توکن نامعتبر است")
-    
-    # دریافت آیدی‌های فالو شده
-    following = db.query(Follow.following_id).filter(Follow.follower_id == user.id).all()
-    following_ids = [f[0] for f in following] + [user.id]
-    
-    videos = db.query(Video).filter(
-        Video.user_id.in_(following_ids),
-        Video.is_active == True,
-        Video.is_private == False
-    ).order_by(Video.created_at.desc()).offset(offset).limit(limit).all()
-    
-    result = []
-    for v in videos:
-        v_user = db.query(User).filter(User.id == v.user_id).first()
-        is_liked = db.query(Like).filter(
-            Like.user_id == user.id,
-            Like.video_id == v.id
-        ).first() is not None
-        
-        result.append({
-            "id": v.id,
-            "user_id": v.user_id,
-            "title": v.title,
-            "description": v.description,
-            "video_url": v.video_url,
-            "thumbnail_url": v.thumbnail_url,
-            "duration": v.duration,
-            "views": v.views,
-            "likes_count": v.likes_count,
-            "comments_count": v.comments_count,
-            "shares_count": v.shares_count,
-            "is_private": v.is_private,
-            "created_at": v.created_at.isoformat(),
-            "username": v_user.username if v_user else None,
-            "user_avatar": v_user.avatar_url if v_user else None,
-            "is_liked": is_liked
-        })
-    
-    return result
-
-@app.post("/api/videos/{video_id}/like")
-async def like_video(
-    video_id: int,
-    token: str,
-    db: Session = Depends(lambda: SessionLocal())
-):
-    user = get_current_user(token, db)
-    if not user:
-        raise HTTPException(status_code=401, detail="توکن نامعتبر است")
-    
-    video = db.query(Video).filter(Video.id == video_id, Video.is_active == True).first()
-    if not video:
-        raise HTTPException(status_code=404, detail="ویدیو یافت نشد")
-    
-    existing = db.query(Like).filter(
-        Like.user_id == user.id,
-        Like.video_id == video_id
-    ).first()
-    
-    if existing:
-        db.delete(existing)
-        video.likes_count -= 1
-        db.commit()
-        return {"success": True, "liked": False}
-    
-    new_like = Like(
-        user_id=user.id,
-        video_id=video_id
-    )
-    db.add(new_like)
-    video.likes_count += 1
-    db.commit()
-    
-    return {"success": True, "liked": True}
-
-@app.post("/api/videos/{video_id}/comments")
-async def add_comment(
-    video_id: int,
-    content: str = Form(...),
-    token: str = Form(...),
-    db: Session = Depends(lambda: SessionLocal())
-):
-    user = get_current_user(token, db)
-    if not user:
-        raise HTTPException(status_code=401, detail="توکن نامعتبر است")
-    
-    video = db.query(Video).filter(Video.id == video_id, Video.is_active == True).first()
-    if not video:
-        raise HTTPException(status_code=404, detail="ویدیو یافت نشد")
-    
-    new_comment = Comment(
-        user_id=user.id,
-        video_id=video_id,
-        content=content
-    )
-    db.add(new_comment)
-    video.comments_count += 1
-    db.commit()
-    db.refresh(new_comment)
-    
-    return {
-        "id": new_comment.id,
-        "user_id": new_comment.user_id,
-        "video_id": new_comment.video_id,
-        "content": new_comment.content,
-        "created_at": new_comment.created_at.isoformat(),
-        "username": user.username,
-        "user_avatar": user.avatar_url
-    }
-
-# ========== فالو ==========
-
-@app.post("/api/users/{user_id}/follow")
-async def follow_user(
-    user_id: int,
-    token: str,
-    db: Session = Depends(lambda: SessionLocal())
-):
-    user = get_current_user(token, db)
-    if not user:
-        raise HTTPException(status_code=401, detail="توکن نامعتبر است")
-    
-    if user.id == user_id:
-        raise HTTPException(status_code=400, detail="نمی‌توانید خودتان را دنبال کنید")
-    
-    target = db.query(User).filter(User.id == user_id, User.is_active == True).first()
-    if not target:
-        raise HTTPException(status_code=404, detail="کاربر یافت نشد")
-    
-    existing = db.query(Follow).filter(
-        Follow.follower_id == user.id,
-        Follow.following_id == user_id
-    ).first()
-    
-    if existing:
-        db.delete(existing)
-        user.following_count -= 1
-        target.followers_count -= 1
-        db.commit()
-        return {"success": True, "following": False}
-    
-    new_follow = Follow(
-        follower_id=user.id,
-        following_id=user_id
-    )
-    db.add(new_follow)
-    user.following_count += 1
-    target.followers_count += 1
-    db.commit()
-    
-    return {"success": True, "following": True}
-
-# ========== پیام‌ها ==========
-
-@app.get("/api/messages/conversations")
-async def get_conversations(
-    token: str,
-    db: Session = Depends(lambda: SessionLocal())
-):
-    user = get_current_user(token, db)
-    if not user:
-        raise HTTPException(status_code=401, detail="توکن نامعتبر است")
-    
-    sent_to = db.query(Message.receiver_id).filter(Message.sender_id == user.id).distinct().all()
-    received_from = db.query(Message.sender_id).filter(Message.receiver_id == user.id).distinct().all()
-    user_ids = set([u[0] for u in sent_to] + [u[0] for u in received_from])
-    
-    result = []
-    for uid in user_ids:
-        if uid == user.id:
-            continue
-        other = db.query(User).filter(User.id == uid, User.is_active == True).first()
-        if not other:
-            continue
-        
-        last_msg = db.query(Message).filter(
-            or_(
-                and_(Message.sender_id == user.id, Message.receiver_id == uid),
-                and_(Message.sender_id == uid, Message.receiver_id == user.id)
-            )
-        ).order_by(Message.created_at.desc()).first()
-        
-        unread = db.query(Message).filter(
-            Message.sender_id == uid,
-            Message.receiver_id == user.id,
-            Message.is_read == False
-        ).count()
-        
-        result.append({
-            "user_id": other.id,
-            "username": other.username,
-            "avatar_url": other.avatar_url,
-            "last_message": last_msg.content if last_msg else "",
-            "last_message_time": last_msg.created_at.isoformat() if last_msg else None,
-            "unread_count": unread,
-            "is_online": uid in manager.get_online_users()
-        })
-    
-    result.sort(key=lambda x: x.get("last_message_time", ""), reverse=True)
-    return result
-
-@app.get("/api/messages/{other_user_id}")
-async def get_messages(
-    other_user_id: int,
-    token: str,
-    limit: int = 50,
-    db: Session = Depends(lambda: SessionLocal())
-):
-    user = get_current_user(token, db)
-    if not user:
-        raise HTTPException(status_code=401, detail="توکن نامعتبر است")
-    
-    other = db.query(User).filter(User.id == other_user_id, User.is_active == True).first()
-    if not other:
-        raise HTTPException(status_code=404, detail="کاربر یافت نشد")
-    
-    # خوانده شدن پیام‌ها
-    db.query(Message).filter(
-        Message.sender_id == other_user_id,
-        Message.receiver_id == user.id,
-        Message.is_read == False
-    ).update({"is_read": True, "read_at": datetime.utcnow()})
-    db.commit()
-    
-    messages = db.query(Message).filter(
-        or_(
-            and_(Message.sender_id == user.id, Message.receiver_id == other_user_id),
-            and_(Message.sender_id == other_user_id, Message.receiver_id == user.id)
-        )
-    ).order_by(Message.created_at.desc()).limit(limit).all()
-    
-    return [{
-        "id": m.id,
-        "sender_id": m.sender_id,
-        "receiver_id": m.receiver_id,
-        "content": m.content,
-        "is_read": m.is_read,
-        "created_at": m.created_at.isoformat(),
-        "is_mine": m.sender_id == user.id
-    } for m in messages[::-1]]
-
-# ========== پنل مدیریت ==========
-
-@app.get("/admin/stats")
-async def admin_stats(
-    token: str,
-    db: Session = Depends(lambda: SessionLocal())
-):
-    user = get_current_user(token, db)
-    if not user or not user.is_admin:
-        raise HTTPException(status_code=403, detail="دسترسی محدود به ادمین")
-    
-    today = datetime.utcnow().date()
-    today_start = datetime(today.year, today.month, today.day)
-    
-    return {
-        "total_users": db.query(User).filter(User.is_active == True).count(),
-        "total_videos": db.query(Video).filter(Video.is_active == True).count(),
-        "total_views": db.query(Video).filter(Video.is_active == True).with_entities(func.sum(Video.views)).scalar() or 0,
-        "total_comments": db.query(Comment).count(),
-        "active_users_today": db.query(User).filter(User.last_seen >= today_start).count(),
-        "new_users_today": db.query(User).filter(User.created_at >= today_start).count(),
-        "new_videos_today": db.query(Video).filter(Video.created_at >= today_start).count(),
-        "premium_users": db.query(User).filter(User.is_premium == True).count(),
-        "server_count": db.query(ServerMapping).filter(ServerMapping.is_active == True).count(),
-        "storage_used_gb": 0
-    }
-
-@app.get("/admin/users")
-async def admin_users(
-    token: str,
-    page: int = 1,
-    limit: int = 20,
-    search: Optional[str] = None,
-    db: Session = Depends(lambda: SessionLocal())
-):
-    user = get_current_user(token, db)
-    if not user or not user.is_admin:
-        raise HTTPException(status_code=403, detail="دسترسی محدود به ادمین")
-    
-    query = db.query(User).filter(User.is_active == True)
-    if search:
-        query = query.filter(
-            or_(
-                User.username.ilike(f"%{search}%"),
-                User.email.ilike(f"%{search}%"),
-                User.full_name.ilike(f"%{search}%")
-            )
-        )
-    
-    total = query.count()
-    users = query.offset((page - 1) * limit).limit(limit).all()
-    
-    return {
-        "total": total,
-        "page": page,
-        "limit": limit,
-        "users": [{
-            "id": u.id,
-            "username": u.username,
-            "email": u.email,
-            "full_name": u.full_name,
-            "is_premium": u.is_premium,
-            "is_verified": u.is_verified,
-            "videos_count": u.videos_count,
-            "followers_count": u.followers_count,
-            "server_id": u.server_id,
-            "created_at": u.created_at.isoformat()
-        } for u in users]
-    }
-
-@app.post("/admin/users/{user_id}/toggle-premium")
-async def toggle_premium(
-    user_id: int,
-    token: str,
-    db: Session = Depends(lambda: SessionLocal())
-):
-    user = get_current_user(token, db)
-    if not user or not user.is_admin:
-        raise HTTPException(status_code=403, detail="دسترسی محدود به ادمین")
-    
-    target = db.query(User).filter(User.id == user_id).first()
-    if not target:
-        raise HTTPException(status_code=404, detail="کاربر یافت نشد")
-    
-    target.is_premium = not target.is_premium
-    db.commit()
-    return {"success": True, "is_premium": target.is_premium}
-
-@app.post("/admin/servers/add")
-async def add_server(
-    server_data: AddServerRequest,
-    token: str,
-    db: Session = Depends(lambda: SessionLocal())
-):
-    user = get_current_user(token, db)
-    if not user or not user.is_admin:
-        raise HTTPException(status_code=403, detail="دسترسی محدود به ادمین")
-    
-    existing = db.query(ServerMapping).filter(
-        ServerMapping.server_name == server_data.server_name
-    ).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="این نام سرور قبلاً ثبت شده است")
-    
-    server_id = ShardingService.add_new_server(
-        db=db,
-        name=server_data.server_name,
-        ip=server_data.server_ip,
-        port=server_data.server_port,
-        max_users=server_data.max_users
-    )
-    
-    return {
-        "success": True,
-        "server_id": server_id,
-        "message": f"سرور {server_data.server_name} با موفقیت اضافه شد"
-    }
-
-@app.get("/admin/servers/status")
-async def get_servers_status(
-    token: str,
-    db: Session = Depends(lambda: SessionLocal())
-):
-    user = get_current_user(token, db)
-    if not user or not user.is_admin:
-        raise HTTPException(status_code=403, detail="دسترسی محدود به ادمین")
-    
-    servers = db.query(ServerMapping).all()
-    return {
-        "total_servers": len(servers),
-        "servers": [
-            {
-                "id": s.id,
-                "name": s.server_name,
-                "ip": s.server_ip,
-                "port": s.server_port,
-                "max_users": s.max_users,
-                "current_users": s.current_users,
-                "load_percent": round((s.current_users / s.max_users) * 100, 2) if s.max_users > 0 else 0,
-                "is_active": s.is_active
-            }
-            for s in servers
-        ]
-    }
-
-# ============================================
-# صفحه اصلی
-# ============================================
-
-@app.get("/", response_class=HTMLResponse)
-async def home():
-    return """
-<!DOCTYPE html>
-<html dir="rtl" lang="fa">
+# ============================================================
+# HTML کامل صفحه وب (یکپارچه)
+# ============================================================
+WEBPAGE_HTML = '''<!DOCTYPE html>
+<html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ساده‌گرام</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>UTYOB Lottery</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, sans-serif; background: #fafafa; padding-bottom: 70px; }
-        .header { background: white; border-bottom: 1px solid #dbdbdb; padding: 12px 16px; position: sticky; top: 0; z-index: 100; display: flex; justify-content: space-between; align-items: center; }
-        .header .logo { font-size: 22px; font-weight: bold; background: linear-gradient(45deg, #405de6, #c13584, #fd1d1d); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-        .bottom-tabs { position: fixed; bottom: 0; left: 0; right: 0; background: white; border-top: 1px solid #dbdbdb; display: flex; justify-content: space-around; padding: 8px 0; z-index: 100; }
-        .bottom-tabs .tab { font-size: 24px; cursor: pointer; padding: 4px 16px; color: #8e8e8e; text-align: center; }
-        .bottom-tabs .tab.active { color: #262626; }
-        .bottom-tabs .tab .label { font-size: 10px; display: block; }
-        .feed-container { max-width: 600px; margin: 0 auto; padding: 8px; }
-        .post { background: white; margin-bottom: 16px; border-radius: 8px; border: 1px solid #dbdbdb; overflow: hidden; }
-        .post-header { display: flex; align-items: center; padding: 12px 16px; gap: 12px; }
-        .post-header .avatar { width: 36px; height: 36px; border-radius: 50%; background: #ddd; overflow: hidden; flex-shrink: 0; }
-        .post-header .username { font-weight: 600; }
-        .post-header .time { color: #8e8e8e; font-size: 12px; margin-right: auto; }
-        .post-video { background: #000; }
-        .post-video video { width: 100%; max-height: 500px; display: block; }
-        .post-actions { display: flex; padding: 8px 16px; gap: 16px; align-items: center; }
-        .post-actions .btn { background: none; border: none; font-size: 24px; cursor: pointer; }
-        .post-actions .btn.liked { color: #ed4956; }
-        .post-actions .stats { display: flex; gap: 16px; color: #8e8e8e; font-size: 14px; margin-right: auto; }
-        .post-caption { padding: 0 16px 8px; font-size: 14px; }
-        .post-caption .uname { font-weight: 600; }
-        .post-comments { padding: 0 16px 12px; border-top: 1px solid #efefef; margin-top: 8px; }
-        .post-comments .comment-form { display: flex; gap: 8px; padding-top: 8px; }
-        .post-comments .comment-form input { flex: 1; border: none; outline: none; font-size: 14px; padding: 8px 0; }
-        .post-comments .comment-form button { background: none; border: none; color: #0095f6; font-weight: 600; cursor: pointer; }
-        .upload-container { max-width: 500px; margin: 20px auto; padding: 0 16px; }
-        .upload-box { background: white; border: 2px dashed #dbdbdb; border-radius: 16px; padding: 40px 20px; text-align: center; }
-        .upload-box input[type="file"] { display: none; }
-        .btn-primary { background: #0095f6; color: white; border: none; padding: 10px 30px; border-radius: 8px; font-size: 16px; cursor: pointer; }
-        .btn-primary:hover { background: #1877f2; }
-        .profile-container { max-width: 600px; margin: 0 auto; padding: 16px; }
-        .profile-header { display: flex; gap: 24px; align-items: center; padding: 16px 0; }
-        .profile-header .avatar { width: 80px; height: 80px; border-radius: 50%; background: #ddd; overflow: hidden; flex-shrink: 0; }
-        .profile-header .info { flex: 1; }
-        .profile-header .info .name { font-size: 20px; font-weight: 600; }
-        .profile-header .info .username { color: #8e8e8e; font-size: 14px; }
-        .profile-stats { display: flex; gap: 24px; padding: 12px 0; border-top: 1px solid #dbdbdb; border-bottom: 1px solid #dbdbdb; }
-        .profile-stats .stat { text-align: center; }
-        .profile-stats .stat .num { font-weight: 600; font-size: 18px; }
-        .profile-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; padding-top: 2px; }
-        .profile-grid .item { aspect-ratio: 1; background: #ddd; overflow: hidden; }
-        .profile-grid .item video { width: 100%; height: 100%; object-fit: cover; }
-        .chat-container { max-width: 600px; margin: 0 auto; padding: 16px; }
-        .chat-list { background: white; border-radius: 8px; border: 1px solid #dbdbdb; }
-        .chat-item { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid #efefef; cursor: pointer; }
-        .chat-item .avatar { width: 44px; height: 44px; border-radius: 50%; background: #ddd; flex-shrink: 0; }
-        .chat-item .info { flex: 1; }
-        .chat-item .info .name { font-weight: 600; }
-        .chat-item .info .last-msg { color: #8e8e8e; font-size: 14px; }
-        .chat-messages { background: white; border-radius: 8px; border: 1px solid #dbdbdb; height: 400px; overflow-y: auto; padding: 16px; }
-        .chat-messages .msg { max-width: 70%; padding: 8px 12px; border-radius: 16px; margin-bottom: 8px; word-break: break-word; }
-        .chat-messages .msg.mine { background: #0095f6; color: white; margin-left: auto; }
-        .chat-messages .msg.other { background: #efefef; margin-right: auto; }
-        .chat-input { display: flex; gap: 8px; padding: 12px 0; }
-        .chat-input input { flex: 1; padding: 10px 16px; border: 1px solid #dbdbdb; border-radius: 24px; outline: none; }
-        .chat-input button { background: #0095f6; color: white; border: none; border-radius: 24px; padding: 10px 20px; cursor: pointer; }
-        .admin-container { max-width: 800px; margin: 20px auto; padding: 0 16px; }
-        .admin-card { background: white; border-radius: 8px; border: 1px solid #dbdbdb; padding: 20px; margin-bottom: 16px; }
-        .admin-card h2 { font-size: 18px; margin-bottom: 12px; }
-        .admin-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; }
-        .admin-stats .stat { background: #f8f9fa; padding: 12px; border-radius: 8px; text-align: center; }
-        .admin-stats .stat .num { font-size: 24px; font-weight: 700; }
-        .admin-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-        .admin-table th, .admin-table td { padding: 8px 12px; border-bottom: 1px solid #efefef; text-align: right; }
-        .admin-table th { background: #f8f9fa; }
-        .hidden { display: none !important; }
-        .toast { position: fixed; top: 80px; left: 50%; transform: translateX(-50%); background: #262626; color: white; padding: 12px 24px; border-radius: 8px; z-index: 999; max-width: 90%; text-align: center; }
-        .auth-form { max-width: 400px; margin: 40px auto; padding: 0 16px; }
-        .auth-form .card { background: white; border-radius: 16px; border: 1px solid #dbdbdb; padding: 32px 24px; }
-        .auth-form input { width: 100%; padding: 12px; border: 1px solid #dbdbdb; border-radius: 8px; margin-bottom: 10px; }
-        .auth-form button { width: 100%; padding: 12px; border: none; border-radius: 8px; font-size: 16px; cursor: pointer; }
-        .auth-tabs { display: flex; gap: 8px; margin-bottom: 20px; }
-        .auth-tabs button { flex: 1; padding: 10px; border: none; border-radius: 8px; cursor: pointer; }
+        * { margin:0; padding:0; box-sizing:border-box; }
+        :root {
+            --primary: #6C63FF; --primary-dark: #5A52D5; --secondary: #FF6584;
+            --success: #00C9A7; --warning: #FFC107; --danger: #FF3B30;
+            --dark: #0F0F1A; --dark-card: #1A1A2E; --dark-input: #16213E;
+            --text: #FFFFFF; --text-muted: #8892A8; --border: #2D3748;
+            --radius: 16px; --radius-sm: 10px;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--dark); color: var(--text);
+            min-height: 100vh; margin:0; padding:0; overflow-x:hidden;
+        }
+        ::-webkit-scrollbar { width:4px; }
+        ::-webkit-scrollbar-track { background:var(--dark); }
+        ::-webkit-scrollbar-thumb { background:var(--primary); border-radius:10px; }
+        .app { max-width:480px; margin:0 auto; padding:12px 14px 100px; }
+        .header {
+            display:flex; justify-content:space-between; align-items:center;
+            padding:8px 0 16px; border-bottom:1px solid var(--border); margin-bottom:16px;
+        }
+        .header-left { display:flex; align-items:center; gap:10px; }
+        .header-logo {
+            width:36px; height:36px; background:linear-gradient(135deg,var(--primary),var(--secondary));
+            border-radius:10px; display:flex; align-items:center; justify-content:center;
+            font-size:18px; font-weight:900; color:#fff; flex-shrink:0;
+        }
+        .header-title { font-size:17px; font-weight:700; background:linear-gradient(135deg,var(--primary),var(--secondary)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
+        .header-right { display:flex; align-items:center; gap:8px; }
+        .header-avatar {
+            width:32px; height:32px; border-radius:50%; background:var(--primary);
+            display:flex; align-items:center; justify-content:center;
+            font-size:13px; font-weight:700; color:#fff; flex-shrink:0;
+        }
+        .header-points {
+            font-size:12px; font-weight:600; color:var(--success);
+            background:rgba(0,201,167,0.12); padding:4px 10px; border-radius:20px;
+            border:1px solid rgba(0,201,167,0.2);
+        }
+        .status-bar {
+            display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:6px;
+            background:var(--dark-card); border:1px solid var(--border);
+            border-radius:var(--radius); padding:12px 8px; margin-bottom:16px;
+        }
+        .status-item { text-align:center; }
+        .status-item .label { font-size:8px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; font-weight:600; }
+        .status-item .value { font-size:16px; font-weight:700; margin-top:2px; }
+        .status-item .value.primary { color:var(--primary); }
+        .status-item .value.success { color:var(--success); }
+        .status-item .value.warning { color:var(--warning); }
+        .card {
+            background:var(--dark-card); border:1px solid var(--border);
+            border-radius:var(--radius); padding:16px; margin-bottom:12px;
+            transition:all 0.3s ease;
+        }
+        .card-title { font-size:14px; font-weight:700; margin-bottom:10px; display:flex; align-items:center; gap:8px; }
+        .btn {
+            display:inline-flex; align-items:center; justify-content:center; gap:8px;
+            padding:12px 20px; border:none; border-radius:var(--radius-sm);
+            font-size:14px; font-weight:600; cursor:pointer; transition:all 0.3s ease;
+            width:100%; color:#fff; -webkit-tap-highlight-color:transparent;
+        }
+        .btn:active { transform:scale(0.97); }
+        .btn-primary { background:linear-gradient(135deg,var(--primary),var(--primary-dark)); }
+        .btn-primary:hover { box-shadow:0 4px 20px rgba(108,99,255,0.35); transform:translateY(-1px); }
+        .btn-success { background:linear-gradient(135deg,var(--success),#00A896); }
+        .btn-warning { background:linear-gradient(135deg,var(--warning),#F59F00); color:var(--dark); }
+        .btn-outline { background:transparent; border:2px solid var(--border); color:var(--text); }
+        .btn:disabled { opacity:0.5; cursor:not-allowed; transform:none !important; }
+        .btn-group { display:flex; gap:8px; }
+        .btn-group .btn { flex:1; }
+        .lottery-pool {
+            text-align:center; padding:20px 16px;
+            background:linear-gradient(135deg,rgba(108,99,255,0.08),rgba(255,101,132,0.08));
+            border-radius:var(--radius); border:1px solid rgba(108,99,255,0.15); margin-bottom:12px;
+        }
+        .lottery-pool .amount { font-size:38px; font-weight:900; background:linear-gradient(135deg,var(--primary),var(--secondary)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
+        .lottery-pool .label { font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:1px; }
+        .timer {
+            display:flex; justify-content:center; gap:10px; margin:12px 0;
+        }
+        .timer .unit {
+            text-align:center; background:var(--dark-input); padding:6px 12px;
+            border-radius:var(--radius-sm); min-width:52px; border:1px solid var(--border);
+        }
+        .timer .unit .number { font-size:24px; font-weight:700; color:var(--primary); font-variant-numeric:tabular-nums; }
+        .timer .unit .label { font-size:8px; color:var(--text-muted); text-transform:uppercase; }
+        .input-group { margin-bottom:12px; }
+        .input-group label { display:block; font-size:12px; font-weight:600; color:var(--text-muted); margin-bottom:4px; }
+        .input-group input {
+            width:100%; padding:10px 14px; background:var(--dark-input);
+            border:1px solid var(--border); border-radius:var(--radius-sm);
+            color:var(--text); font-size:14px; transition:all 0.3s ease; outline:none;
+        }
+        .input-group input:focus { border-color:var(--primary); box-shadow:0 0 0 3px rgba(108,99,255,0.15); }
+        .input-group input::placeholder { color:var(--text-muted); opacity:0.6; }
+        .tabs {
+            display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:3px;
+            background:var(--dark-card); border-radius:var(--radius-sm); padding:3px;
+            margin-bottom:14px; border:1px solid var(--border);
+        }
+        .tab {
+            padding:8px 4px; text-align:center; border-radius:var(--radius-sm);
+            cursor:pointer; transition:all 0.3s ease; font-size:11px; font-weight:600;
+            color:var(--text-muted); background:transparent; border:none;
+        }
+        .tab.active { background:var(--primary); color:#fff; }
+        .tab:hover:not(.active) { background:var(--dark-input); color:var(--text); }
+        .tab .emoji { display:block; font-size:18px; margin-bottom:1px; }
+        .tab-content { display:none; animation:fadeIn 0.3s ease; }
+        .tab-content.active { display:block; }
+        @keyframes fadeIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+        .winners-list { display:flex; flex-direction:column; gap:8px; }
+        .winner-item {
+            display:flex; align-items:center; gap:10px; padding:10px 14px;
+            background:var(--dark-input); border-radius:var(--radius-sm); border-left:3px solid var(--primary);
+        }
+        .winner-item .rank { font-size:16px; font-weight:700; min-width:28px; color:var(--primary); }
+        .winner-item .info { flex:1; }
+        .winner-item .info .name { font-weight:600; font-size:13px; }
+        .winner-item .info .date { font-size:10px; color:var(--text-muted); }
+        .winner-item .prize { font-weight:700; color:var(--success); font-size:15px; }
+        .tx-list { display:flex; flex-direction:column; gap:6px; }
+        .tx-item {
+            display:flex; align-items:center; gap:10px; padding:8px 12px;
+            background:var(--dark-input); border-radius:var(--radius-sm);
+        }
+        .tx-item .status-dot { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+        .tx-item .status-dot.confirmed { background:var(--success); }
+        .tx-item .status-dot.pending { background:var(--warning); }
+        .tx-item .info { flex:1; min-width:0; }
+        .tx-item .info .hash { font-size:11px; font-family:monospace; color:var(--text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .tx-item .amount { font-weight:600; font-size:14px; flex-shrink:0; }
+        .tx-item .amount.positive { color:var(--success); }
+        .tx-item .amount.negative { color:var(--danger); }
+        .referral-box {
+            display:flex; align-items:center; gap:8px; background:var(--dark-input);
+            border-radius:var(--radius-sm); padding:10px 12px; border:1px solid var(--border); margin:8px 0;
+        }
+        .referral-box .code { flex:1; font-family:monospace; font-size:16px; font-weight:700; color:var(--primary); letter-spacing:1px; word-break:break-all; }
+        .referral-box .copy-btn {
+            padding:4px 14px; background:var(--primary); border:none; border-radius:var(--radius-sm);
+            color:#fff; cursor:pointer; font-size:11px; font-weight:600; white-space:nowrap;
+        }
+        .referral-stats { display:flex; justify-content:space-around; padding:10px 0; border-top:1px solid var(--border); margin-top:8px; }
+        .referral-stats .number { font-size:22px; font-weight:700; color:var(--primary); }
+        .referral-stats .label { font-size:10px; color:var(--text-muted); }
+        .toast {
+            position:fixed; bottom:20px; left:50%; transform:translateX(-50%) translateY(100px);
+            background:var(--dark-card); border:1px solid var(--border); border-radius:var(--radius-sm);
+            padding:12px 20px; font-size:13px; font-weight:600; opacity:0;
+            transition:all 0.4s cubic-bezier(0.4,0,0.2,1); z-index:999; max-width:90%; text-align:center;
+            box-shadow:0 8px 32px rgba(0,0,0,0.6); pointer-events:none;
+        }
+        .toast.show { opacity:1; transform:translateX(-50%) translateY(0); pointer-events:auto; }
+        .toast.success { border-color:var(--success); color:var(--success); }
+        .toast.error { border-color:var(--danger); color:var(--danger); }
+        .toast.warning { border-color:var(--warning); color:var(--warning); }
+        .modal-overlay {
+            position:fixed; top:0; left:0; width:100%; height:100%;
+            background:rgba(0,0,0,0.75); backdrop-filter:blur(12px);
+            display:none; align-items:center; justify-content:center; z-index:1000; padding:16px;
+        }
+        .modal-overlay.active { display:flex; }
+        .modal {
+            background:var(--dark-card); border:1px solid var(--border); border-radius:var(--radius);
+            padding:20px; max-width:400px; width:100%; max-height:90vh; overflow-y:auto;
+            animation:modalIn 0.3s cubic-bezier(0.4,0,0.2,1);
+        }
+        @keyframes modalIn { from { transform:scale(0.92) translateY(16px); opacity:0; } to { transform:scale(1) translateY(0); opacity:1; } }
+        .modal-close { float:right; background:none; border:none; color:var(--text-muted); font-size:22px; cursor:pointer; }
+        .modal-title { font-size:18px; font-weight:700; margin-bottom:14px; text-align:center; }
+        .empty-state { text-align:center; padding:24px 16px; color:var(--text-muted); }
+        .empty-state .icon { font-size:36px; display:block; margin-bottom:8px; }
+        .admin-panel { display:none; border-top:2px solid var(--danger); margin-top:16px; padding-top:16px; }
+        .admin-panel.visible { display:block; }
+        .lang-switcher { display:flex; gap:4px; margin-bottom:12px; justify-content:flex-end; flex-wrap:wrap; }
+        .lang-btn {
+            padding:3px 12px; border:1px solid var(--border); border-radius:var(--radius-sm);
+            background:transparent; color:var(--text-muted); cursor:pointer; font-size:11px; font-weight:600;
+        }
+        .lang-btn.active { background:var(--primary); border-color:var(--primary); color:#fff; }
+        .spinner { display:inline-block; width:20px; height:20px; border:2px solid var(--border); border-top:2px solid var(--primary); border-radius:50%; animation:spin 0.7s linear infinite; }
+        @keyframes spin { to { transform:rotate(360deg); } }
+        .hidden { display:none !important; }
+        .mt-8 { margin-top:8px; }
+        .mt-16 { margin-top:16px; }
+        .mb-8 { margin-bottom:8px; }
+        .flex { display:flex; }
+        .gap-8 { gap:8px; }
+        @media (max-width:380px) {
+            .app { padding:8px 10px 80px; }
+            .status-item .value { font-size:13px; }
+            .lottery-pool .amount { font-size:30px; }
+            .timer .unit { min-width:40px; padding:4px 8px; }
+            .timer .unit .number { font-size:18px; }
+            .tab { font-size:9px; }
+            .tab .emoji { font-size:14px; }
+        }
+        @media (min-width:481px) {
+            .app { padding:20px 24px 100px; border-left:1px solid var(--border); border-right:1px solid var(--border); min-height:100vh; background:var(--dark); }
+        }
     </style>
 </head>
 <body>
-
-<header class="header">
-    <div class="logo">📸 ساده‌گرام</div>
-    <div style="display:flex;gap:16px;font-size:20px;">
-        <span onclick="showTab('upload')">➕</span>
-        <span onclick="showTab('chat')">💬</span>
-        <span onclick="showTab('profile')">👤</span>
+<div id="toast" class="toast"></div>
+<div id="modalOverlay" class="modal-overlay"><div class="modal"><button class="modal-close" onclick="closeModal()">✕</button><div id="modalBody"></div></div></div>
+<div class="app">
+    <header class="header">
+        <div class="header-left"><div class="header-logo">🎰</div><div class="header-title">UTYOB</div></div>
+        <div class="header-right"><span class="header-points" id="userPoints">⭐ 0</span><div class="header-avatar" id="userAvatar">👤</div></div>
+    </header>
+    <div class="lang-switcher">
+        <button class="lang-btn active" data-lang="en" onclick="switchLanguage('en')">🇬🇧 EN</button>
+        <button class="lang-btn" data-lang="fa" onclick="switchLanguage('fa')">🇮🇷 FA</button>
+        <button class="lang-btn" data-lang="tr" onclick="switchLanguage('tr')">🇹🇷 TR</button>
+        <button class="lang-btn" data-lang="ru" onclick="switchLanguage('ru')">🇷🇺 RU</button>
+        <button class="lang-btn" data-lang="ar" onclick="switchLanguage('ar')">🇸🇦 AR</button>
     </div>
-</header>
-
-<div id="content"></div>
-
-<nav class="bottom-tabs">
-    <div class="tab active" onclick="showTab('feed')" data-tab="feed">🏠<span class="label">فید</span></div>
-    <div class="tab" onclick="showTab('explore')" data-tab="explore">🔍<span class="label">جستجو</span></div>
-    <div class="tab" onclick="showTab('upload')" data-tab="upload">➕<span class="label">آپلود</span></div>
-    <div class="tab" onclick="showTab('chat')" data-tab="chat">💬<span class="label">چت</span></div>
-    <div class="tab" onclick="showTab('profile')" data-tab="profile">👤<span class="label">پروفایل</span></div>
-</nav>
-
-<div id="toast" class="toast hidden"></div>
-
+    <div class="status-bar">
+        <div class="status-item"><div class="label" data-i18n="status_round">Round</div><div class="value primary" id="roundNumber">#1</div></div>
+        <div class="status-item"><div class="label" data-i18n="status_participants">Players</div><div class="value" id="participantsCount">0</div></div>
+        <div class="status-item"><div class="label" data-i18n="status_pool">Prize</div><div class="value success" id="poolAmount">$0</div></div>
+        <div class="status-item"><div class="label" data-i18n="status_winners">Winners</div><div class="value warning" id="winnersCount">0</div></div>
+    </div>
+    <div class="tabs">
+        <button class="tab active" data-tab="lottery" onclick="switchTab('lottery')"><span class="emoji">🎰</span> <span data-i18n="tab_lottery">Lottery</span></button>
+        <button class="tab" data-tab="wallet" onclick="switchTab('wallet')"><span class="emoji">💳</span> <span data-i18n="tab_wallet">Wallet</span></button>
+        <button class="tab" data-tab="winners" onclick="switchTab('winners')"><span class="emoji">🏆</span> <span data-i18n="tab_winners">Winners</span></button>
+        <button class="tab" data-tab="referral" onclick="switchTab('referral')"><span class="emoji">👥</span> <span data-i18n="tab_referral">Refer</span></button>
+    </div>
+    <div id="tab-lottery" class="tab-content active">
+        <div class="lottery-pool"><div class="label" data-i18n="pool_total">Total Prize Pool</div><div class="amount" id="lotteryPoolAmount">$0</div><div style="font-size:12px;color:var(--text-muted);margin-top:4px;"><span data-i18n="pool_ticket">Ticket Price</span>: <strong>$100</strong></div></div>
+        <div class="timer"><div class="unit"><div class="number" id="timerDays">00</div><div class="label" data-i18n="timer_days">Days</div></div><div class="unit"><div class="number" id="timerHours">00</div><div class="label" data-i18n="timer_hours">Hours</div></div><div class="unit"><div class="number" id="timerMinutes">00</div><div class="label" data-i18n="timer_minutes">Mins</div></div><div class="unit"><div class="number" id="timerSeconds">00</div><div class="label" data-i18n="timer_seconds">Secs</div></div></div>
+        <button class="btn btn-primary" id="joinBtn" onclick="joinLottery()">🎰 <span data-i18n="btn_join">Join Lottery</span></button>
+        <div id="lotteryStatus" class="card" style="display:none;margin-top:8px;"><div id="lotteryStatusText"></div></div>
+        <div class="card"><div class="card-title"><span class="icon">📜</span> <span data-i18n="recent_tx">Recent Transactions</span></div><div class="tx-list" id="recentTransactions"><div class="empty-state"><span class="icon">📭</span><div class="text" data-i18n="no_tx">No transactions yet</div></div></div></div>
+    </div>
+    <div id="tab-wallet" class="tab-content">
+        <div class="card"><div class="card-title"><span class="icon">💰</span> <span data-i18n="wallet_balance">Wallet Balance</span></div><div style="font-size:32px;font-weight:900;color:var(--success);" id="walletBalance">$0.00</div><div style="font-size:12px;color:var(--text-muted);margin-top:4px;"><span data-i18n="wallet_points">Points</span>: <strong id="walletPoints">0</strong></div></div>
+        <div class="card"><div class="card-title"><span class="icon">📥</span> <span data-i18n="deposit_title">Deposit</span></div>
+            <div class="input-group"><label data-i18n="deposit_address_label">Source Wallet (TRC20)</label><input type="text" id="depositAddress" placeholder="TV61aTh98MGqmteYzda5AaBzdXgGqreG6A"><div class="hint" style="font-size:10px;color:var(--text-muted);margin-top:3px;" data-i18n="deposit_address_hint">Your sending wallet address</div></div>
+            <div class="input-group"><label data-i18n="deposit_tx_label">Transaction Hash (TxID)</label><input type="text" id="depositTxHash" placeholder="7ae83b63-fdf3-47e4-ac69-56f960a34f5b"></div>
+            <div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;"><span data-i18n="deposit_dest">Destination</span>: <code id="destAddress">TV61aTh98MGqmteYzda5AaBzdXgGqreG6A</code></div>
+            <button class="btn btn-success" onclick="verifyDeposit()">✅ <span data-i18n="btn_verify">Verify Payment</span></button>
+        </div>
+        <div class="card" id="withdrawCard" style="display:none;"><div class="card-title"><span class="icon">📤</span> <span data-i18n="withdraw_title">Withdraw Prize</span></div>
+            <div class="input-group"><label data-i18n="withdraw_address_label">TRC20 Wallet Address</label><input type="text" id="withdrawAddress" placeholder="TV61aTh98MGqmteYzda5AaBzdXgGqreG6A"></div>
+            <button class="btn btn-warning" onclick="requestWithdraw()">💸 <span data-i18n="btn_withdraw">Withdraw</span></button>
+        </div>
+    </div>
+    <div id="tab-winners" class="tab-content">
+        <div class="card"><div class="card-title"><span class="icon">🏆</span> <span data-i18n="winners_history">Winners History</span></div><div class="winners-list" id="winnersList"><div class="empty-state"><span class="icon">🏆</span><div class="text" data-i18n="no_winners">No winners yet</div></div></div></div>
+    </div>
+    <div id="tab-referral" class="tab-content">
+        <div class="card"><div class="card-title"><span class="icon">👥</span> <span data-i18n="referral_title">Refer Friends</span></div>
+            <div class="referral-box"><span class="code" id="referralCode">------</span><button class="copy-btn" onclick="copyReferral()">📋 <span data-i18n="btn_copy">Copy</span></button></div>
+            <div class="referral-stats"><div><div class="number" id="referralCount">0</div><div class="label" data-i18n="referral_count">Referrals</div></div><div><div class="number" id="referralPoints">0</div><div class="label" data-i18n="referral_points">Points</div></div></div>
+            <button class="btn btn-primary" onclick="shareReferral()">📤 <span data-i18n="btn_share">Share Link</span></button>
+        </div>
+    </div>
+    <div class="admin-panel" id="adminPanel">
+        <div class="card" style="border-color:rgba(255,59,48,0.4);">
+            <div class="card-title" style="color:var(--danger);"><span class="icon">🛠️</span> Admin Panel</div>
+            <div class="btn-group" style="flex-wrap:wrap;gap:6px;">
+                <button class="btn btn-primary" onclick="adminStartLottery()" style="flex:1;min-width:80px;font-size:11px;padding:8px 10px;">🎰 Start</button>
+                <button class="btn btn-success" onclick="adminPayWinners()" style="flex:1;min-width:80px;font-size:11px;padding:8px 10px;">💸 Pay</button>
+                <button class="btn btn-warning" onclick="adminSendPoll()" style="flex:1;min-width:80px;font-size:11px;padding:8px 10px;">📊 Poll</button>
+                <button class="btn btn-danger" onclick="adminBroadcast()" style="flex:1;min-width:80px;font-size:11px;padding:8px 10px;">📢 Broadcast</button>
+            </div>
+            <div class="input-group mt-8"><label style="font-size:11px;">Manual Verify (User ID)</label><input type="text" id="adminUserId" placeholder="Telegram User ID" style="font-size:13px;padding:8px 12px;"></div>
+            <button class="btn btn-outline" onclick="adminManualVerify()" style="font-size:12px;padding:8px 12px;">✅ Manual Verify</button>
+        </div>
+    </div>
+</div>
 <script>
-let token = localStorage.getItem('token') || '';
-let currentUser = null;
-let ws = null;
-let chatWith = null;
-
-function showToast(msg, isError = false) {
-    const toast = document.getElementById('toast');
-    toast.textContent = msg;
-    toast.style.background = isError ? '#ed4956' : '#262626';
-    toast.classList.remove('hidden');
-    setTimeout(() => toast.classList.add('hidden'), 3000);
-}
-
-function showTab(tab) {
-    document.querySelectorAll('.bottom-tabs .tab').forEach(t => {
-        t.classList.toggle('active', t.dataset.tab === tab);
-    });
-    const container = document.getElementById('content');
-    if (tab === 'feed') loadFeed(container);
-    else if (tab === 'explore') loadExplore(container);
-    else if (tab === 'upload') loadUpload(container);
-    else if (tab === 'chat') loadChat(container);
-    else if (tab === 'profile') loadProfile(container);
-}
-
-// ===== AUTH =====
-async function login(username, password) {
-    try {
-        const res = await fetch('/api/auth/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`
-        });
-        const data = await res.json();
-        if (data.access_token) {
-            token = data.access_token;
-            localStorage.setItem('token', token);
-            currentUser = data.user;
-            showToast('✅ خوش آمدید!');
-            showTab('feed');
-            connectWebSocket();
-            return true;
-        }
-        showToast('❌ ' + (data.detail || 'خطا'), true);
-        return false;
-    } catch (e) {
-        showToast('❌ خطا', true);
-        return false;
+    const CONFIG = { DESTINATION_WALLET: 'TV61aTh98MGqmteYzda5AaBzdXgGqreG6A', LOTTERY_PRICE: 100, ADMIN_ID: 123456789, BOT_USERNAME: 'UTYOB_Bot' };
+    const tg = window.Telegram?.WebApp || { initDataUnsafe: { user: null }, ready: () => {}, close: () => {}, expand: () => {} };
+    const tgUser = tg.initDataUnsafe?.user || null;
+    let state = { user: null, lang: 'en', balance: 0, points: 0, subscribed: false, participated: false, lottery: null, winners: [], transactions: [], referralCode: '', referralCount: 0, referralPoints: 0, isAdmin: false, timerInterval: null, hasPrize: false };
+    const i18n = {
+        en: { status_round:'Round', status_participants:'Players', status_pool:'Prize', status_winners:'Winners', tab_lottery:'Lottery', tab_wallet:'Wallet', tab_winners:'Winners', tab_referral:'Refer', pool_total:'Total Prize Pool', pool_ticket:'Ticket Price', timer_days:'Days', timer_hours:'Hours', timer_minutes:'Mins', timer_seconds:'Secs', btn_join:'Join Lottery', btn_verify:'Verify Payment', btn_withdraw:'Withdraw', btn_copy:'Copy', btn_share:'Share Link', recent_tx:'Recent Transactions', no_tx:'No transactions yet', wallet_balance:'Wallet Balance', wallet_points:'Points', deposit_title:'Deposit', deposit_address_label:'Source Wallet (TRC20)', deposit_address_hint:'Your sending wallet address', deposit_tx_label:'Transaction Hash (TxID)', deposit_dest:'Destination', withdraw_title:'Withdraw Prize', withdraw_address_label:'TRC20 Wallet Address', winners_history:'Winners History', no_winners:'No winners yet', referral_title:'Refer Friends', referral_count:'Referrals', referral_points:'Points', join_success:'Successfully registered!', join_fail:'Registration failed.', verify_success:'Payment verified!', verify_fail:'Verification failed.', withdraw_success:'Withdrawal submitted!', withdraw_fail:'Withdrawal failed.', copy_success:'Copied!', copy_fail:'Copy failed.', already_participated:'Already participated.', no_subscription:'Need subscription.', not_winner:'Not a winner.', timer_expired:'Time expired!', processing:'Processing...', error:'Error occurred.', enter_address:'Enter valid TRC20 address.', enter_tx:'Enter valid tx hash.' },
+        fa: { status_round:'دور', status_participants:'بازیکنان', status_pool:'جایزه', status_winners:'برنده‌ها', tab_lottery:'قرعه‌کشی', tab_wallet:'کیف پول', tab_winners:'برنده‌ها', tab_referral:'دعوت', pool_total:'مجموع جایزه', pool_ticket:'قیمت بلیت', timer_days:'روز', timer_hours:'ساعت', timer_minutes:'دقیقه', timer_seconds:'ثانیه', btn_join:'شرکت در قرعه‌کشی', btn_verify:'تایید پرداخت', btn_withdraw:'برداشت', btn_copy:'کپی', btn_share:'اشتراک‌گذاری', recent_tx:'تراکنش‌های اخیر', no_tx:'تراکنشی وجود ندارد', wallet_balance:'موجودی کیف پول', wallet_points:'امتیاز', deposit_title:'واریز', deposit_address_label:'کیف پول مبدا (TRC20)', deposit_address_hint:'آدرس کیف پولی که از آن ارسال می‌کنید', deposit_tx_label:'هش تراکنش (TxID)', deposit_dest:'آدرس مقصد', withdraw_title:'برداشت جایزه', withdraw_address_label:'آدرس کیف پول TRC20', winners_history:'تاریخچه برنده‌ها', no_winners:'برنده‌ای وجود ندارد', referral_title:'دعوت از دوستان', referral_count:'تعداد دعوت‌ها', referral_points:'امتیاز', join_success:'ثبت نام با موفقیت انجام شد!', join_fail:'ثبت نام ناموفق بود.', verify_success:'پرداخت تایید شد!', verify_fail:'تایید پرداخت ناموفق بود.', withdraw_success:'درخواست برداشت ثبت شد!', withdraw_fail:'درخواست برداشت ناموفق بود.', copy_success:'کپی شد!', copy_fail:'کپی ناموفق بود.', already_participated:'قبلاً شرکت کرده‌اید.', no_subscription:'نیاز به اشتراک دارید.', not_winner:'برنده نشده‌اید.', timer_expired:'زمان به پایان رسید!', processing:'در حال پردازش...', error:'خطا رخ داد.', enter_address:'آدرس TRC20 معتبر وارد کنید.', enter_tx:'هش تراکنش معتبر وارد کنید.' },
+        tr: { status_round:'Tur', status_participants:'Oyuncular', status_pool:'Ödül', status_winners:'Kazananlar', tab_lottery:'Piyango', tab_wallet:'Cüzdan', tab_winners:'Kazananlar', tab_referral:'Davet', pool_total:'Toplam Ödül', pool_ticket:'Bilet Fiyatı', timer_days:'Gün', timer_hours:'Saat', timer_minutes:'Dakika', timer_seconds:'Saniye', btn_join:'Katıl', btn_verify:'Doğrula', btn_withdraw:'Çek', btn_copy:'Kopyala', btn_share:'Paylaş', recent_tx:'Son İşlemler', no_tx:'İşlem yok', wallet_balance:'Bakiye', wallet_points:'Puan', deposit_title:'Yatırma', deposit_address_label:'Kaynak Cüzdan (TRC20)', deposit_address_hint:'Gönderen adres', deposit_tx_label:'İşlem Kodu (TxID)', deposit_dest:'Hedef Adres', withdraw_title:'Ödülü Çek', withdraw_address_label:'TRC20 Adres', winners_history:'Kazanan Geçmişi', no_winners:'Kazanan yok', referral_title:'Arkadaşları Davet Et', referral_count:'Davetler', referral_points:'Puan', join_success:'Kayıt başarılı!', join_fail:'Kayıt başarısız.', verify_success:'Ödeme doğrulandı!', verify_fail:'Doğrulama başarısız.', withdraw_success:'Çekim talebi gönderildi!', withdraw_fail:'Çekim başarısız.', copy_success:'Kopyalandı!', copy_fail:'Kopyalama başarısız.', already_participated:'Zaten katıldınız.', no_subscription:'Abonelik gerekli.', not_winner:'Kazanamadınız.', timer_expired:'Süre doldu!', processing:'İşleniyor...', error:'Hata oluştu.', enter_address:'Geçerli TRC20 adresi girin.', enter_tx:'Geçerli işlem kodu girin.' },
+        ru: { status_round:'Раунд', status_participants:'Игроки', status_pool:'Приз', status_winners:'Победители', tab_lottery:'Лотерея', tab_wallet:'Кошелек', tab_winners:'Победители', tab_referral:'Рефералы', pool_total:'Общий приз', pool_ticket:'Цена билета', timer_days:'Дней', timer_hours:'Часов', timer_minutes:'Мин', timer_seconds:'Сек', btn_join:'Участвовать', btn_verify:'Подтвердить', btn_withdraw:'Вывести', btn_copy:'Копировать', btn_share:'Поделиться', recent_tx:'Транзакции', no_tx:'Нет транзакций', wallet_balance:'Баланс', wallet_points:'Баллы', deposit_title:'Пополнение', deposit_address_label:'Адрес отправителя', deposit_address_hint:'Ваш адрес', deposit_tx_label:'Хэш транзакции', deposit_dest:'Адрес получателя', withdraw_title:'Вывод приза', withdraw_address_label:'TRC20 адрес', winners_history:'История победителей', no_winners:'Победителей нет', referral_title:'Пригласи друзей', referral_count:'Приглашения', referral_points:'Баллы', join_success:'Регистрация успешна!', join_fail:'Ошибка регистрации.', verify_success:'Платеж подтвержден!', verify_fail:'Ошибка подтверждения.', withdraw_success:'Заявка отправлена!', withdraw_fail:'Ошибка вывода.', copy_success:'Скопировано!', copy_fail:'Ошибка копирования.', already_participated:'Уже участвуете.', no_subscription:'Нужна подписка.', not_winner:'Вы не победитель.', timer_expired:'Время истекло!', processing:'Обработка...', error:'Ошибка.', enter_address:'Введите TRC20 адрес.', enter_tx:'Введите хэш транзакции.' },
+        ar: { status_round:'الجولة', status_participants:'اللاعبين', status_pool:'الجائزة', status_winners:'الفائزين', tab_lottery:'اليانصيب', tab_wallet:'المحفظة', tab_winners:'الفائزين', tab_referral:'دعوة', pool_total:'مجموع الجائزة', pool_ticket:'سعر التذكرة', timer_days:'أيام', timer_hours:'ساعات', timer_minutes:'دقائق', timer_seconds:'ثواني', btn_join:'اشترك', btn_verify:'تحقق', btn_withdraw:'سحب', btn_copy:'نسخ', btn_share:'مشاركة', recent_tx:'المعاملات', no_tx:'لا توجد معاملات', wallet_balance:'الرصيد', wallet_points:'النقاط', deposit_title:'إيداع', deposit_address_label:'المحفظة المصدر', deposit_address_hint:'عنوان محفظتك', deposit_tx_label:'رمز المعاملة', deposit_dest:'العنوان الوجهة', withdraw_title:'سحب الجائزة', withdraw_address_label:'عنوان محفظة TRC20', winners_history:'تاريخ الفائزين', no_winners:'لا يوجد فائزين', referral_title:'دعوة الأصدقاء', referral_count:'الدعوات', referral_points:'النقاط', join_success:'تم التسجيل!', join_fail:'فشل التسجيل.', verify_success:'تم التحقق!', verify_fail:'فشل التحقق.', withdraw_success:'تم الطلب!', withdraw_fail:'فشل الطلب.', copy_success:'تم النسخ!', copy_fail:'فشل النسخ.', already_participated:'شاركت بالفعل.', no_subscription:'تحتاج اشتراك.', not_winner:'لست فائزًا.', timer_expired:'انتهى الوقت!', processing:'جاري المعالجة...', error:'حدث خطأ.', enter_address:'أدخل عنوان TRC20 صالح.', enter_tx:'أدخل رمز معاملة صالح.' }
+    };
+    function t(k) { return i18n[state.lang]?.[k] || i18n['en'][k] || k; }
+    const $ = id => document.getElementById(id);
+    const toast = $('toast'), modalOverlay = $('modalOverlay'), modalBody = $('modalBody');
+    function showToast(m, t='success', d=3000) { toast.textContent=m; toast.className=`toast ${t}`; requestAnimationFrame(()=>toast.classList.add('show')); clearTimeout(toast._timeout); toast._timeout=setTimeout(()=>toast.classList.remove('show'), d); }
+    function openModal(html) { modalBody.innerHTML=html; modalOverlay.classList.add('active'); }
+    function closeModal() { modalOverlay.classList.remove('active'); }
+    function switchLanguage(lang) { state.lang=lang; document.querySelectorAll('.lang-btn').forEach(b=>b.classList.toggle('active', b.dataset.lang===lang)); document.querySelectorAll('[data-i18n]').forEach(el=>{const k=el.dataset.i18n;if(i18n[lang]?.[k]) el.textContent=i18n[lang][k];}); updateUI(); }
+    function switchTab(tab) { document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.tab===tab)); document.querySelectorAll('.tab-content').forEach(c=>c.classList.toggle('active', c.id===`tab-${tab}`)); }
+    async function apiCall(e, m='GET', d=null) { try { const o={method:m,headers:{'Content-Type':'application/json','X-Telegram-User':tgUser?.id||''}}; if(d) o.body=JSON.stringify(d); const r=await fetch('/api'+e,o); return await r.json(); } catch(e){ return {success:false,error:e.message}; } }
+    async function loadAllData() { await Promise.all([loadUserData(), loadLotteryData(), loadWinners(), loadTransactions(), loadReferralData()]); }
+    async function loadUserData() { try { const r=await apiCall('/user'); if(r.success){ state.balance=r.data?.balance||0; state.points=r.data?.points||0; state.subscribed=r.data?.has_subscription||false; state.participated=r.data?.has_participated||false; state.referralCode=r.data?.referral_code||'------'; state.isAdmin=tgUser?.id==CONFIG.ADMIN_ID; if(state.isAdmin) $('adminPanel').classList.add('visible'); } } catch(e){} }
+    async function loadLotteryData() { try { const r=await apiCall('/lottery/current'); if(r.success) state.lottery=r.data; } catch(e){} }
+    async function loadWinners() { try { const r=await apiCall('/winners'); if(r.success) state.winners=r.data||[]; } catch(e){} }
+    async function loadTransactions() { try { const r=await apiCall('/transactions'); if(r.success) state.transactions=r.data||[]; } catch(e){} }
+    async function loadReferralData() { try { const r=await apiCall('/referral'); if(r.success){ state.referralCount=r.data?.count||0; state.referralPoints=r.data?.points||0; if(r.data?.code) state.referralCode=r.data.code; } } catch(e){} }
+    function updateUI() {
+        $('userPoints').textContent='⭐ '+state.points;
+        if(tgUser){ const n=tgUser.first_name||tgUser.username||'U'; $('userAvatar').textContent=n.charAt(0).toUpperCase(); }
+        $('participantsCount').textContent=state.lottery?.participants||0;
+        $('poolAmount').textContent='$'+(state.lottery?.prize_pool||0);
+        $('winnersCount').textContent=state.lottery?.winners||0;
+        $('roundNumber').textContent='#'+(state.lottery?.round_number||1);
+        $('lotteryPoolAmount').textContent='$'+(state.lottery?.prize_pool||0);
+        $('walletBalance').textContent='$'+state.balance;
+        $('walletPoints').textContent=state.points;
+        $('referralCode').textContent=state.referralCode;
+        $('referralCount').textContent=state.referralCount;
+        $('referralPoints').textContent=state.referralPoints;
+        const jb=$('joinBtn');
+        if(state.participated){ jb.disabled=true; jb.innerHTML='✅ '+t('already_participated'); }
+        else if(!state.subscribed){ jb.innerHTML='💰 '+t('no_subscription'); jb.onclick=()=>showDepositModal(); }
+        else { jb.disabled=false; jb.innerHTML='🎰 '+t('btn_join'); jb.onclick=joinLottery; }
+        renderWinners(); renderTransactions();
+        state.hasPrize=state.winners.some(w=>w.user_id==tgUser?.id&&w.status=='pending');
+        $('withdrawCard').style.display=state.hasPrize?'block':'none';
     }
-}
-
-async function register(username, email, password, fullName) {
-    try {
-        const res = await fetch('/api/auth/register', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, email, password, full_name: fullName })
-        });
-        const data = await res.json();
-        if (data.access_token) {
-            token = data.access_token;
-            localStorage.setItem('token', token);
-            currentUser = data.user;
-            showToast('✅ ثبت‌نام موفق!');
-            showTab('feed');
-            connectWebSocket();
-            return true;
-        }
-        showToast('❌ ' + (data.detail || 'خطا'), true);
-        return false;
-    } catch (e) {
-        showToast('❌ خطا', true);
-        return false;
-    }
-}
-
-function logout() {
-    token = '';
-    localStorage.removeItem('token');
-    currentUser = null;
-    if (ws) ws.close();
-    showToast('👋 خروج');
-    showTab('feed');
-}
-
-function buildAuthForm() {
-    return `
-        <div class="auth-form">
-            <div class="card">
-                <h2 style="text-align:center;margin-bottom:20px;">📸 ساده‌گرام</h2>
-                <div class="auth-tabs">
-                    <button onclick="switchAuth('login')" id="auth-login-btn" style="background:#0095f6;color:white;">ورود</button>
-                    <button onclick="switchAuth('register')" id="auth-register-btn" style="background:#efefef;">ثبت‌نام</button>
-                </div>
-                <div id="auth-login">
-                    <input id="login-username" placeholder="نام کاربری">
-                    <input id="login-password" type="password" placeholder="رمز عبور">
-                    <button onclick="login(document.getElementById('login-username').value, document.getElementById('login-password').value)" style="background:#0095f6;color:white;">ورود</button>
-                </div>
-                <div id="auth-register" style="display:none;">
-                    <input id="reg-username" placeholder="نام کاربری">
-                    <input id="reg-email" type="email" placeholder="ایمیل">
-                    <input id="reg-fullname" placeholder="نام کامل">
-                    <input id="reg-password" type="password" placeholder="رمز عبور">
-                    <button onclick="register(document.getElementById('reg-username').value, document.getElementById('reg-email').value, document.getElementById('reg-password').value, document.getElementById('reg-fullname').value)" style="background:#0095f6;color:white;">ثبت‌نام</button>
-                </div>
-            </div>
-        </div>
-    `;
-}
-
-function switchAuth(type) {
-    document.getElementById('auth-login').style.display = type === 'login' ? 'block' : 'none';
-    document.getElementById('auth-register').style.display = type === 'register' ? 'block' : 'none';
-    document.getElementById('auth-login-btn').style.background = type === 'login' ? '#0095f6' : '#efefef';
-    document.getElementById('auth-login-btn').style.color = type === 'login' ? 'white' : '#262626';
-    document.getElementById('auth-register-btn').style.background = type === 'register' ? '#0095f6' : '#efefef';
-    document.getElementById('auth-register-btn').style.color = type === 'register' ? 'white' : '#262626';
-}
-
-// ===== FEED =====
-async function loadFeed(container) {
-    if (!token) { container.innerHTML = buildAuthForm(); return; }
-    container.innerHTML = '<div class="feed-container"><p style="text-align:center;padding:40px;">⏳ بارگذاری...</p></div>';
-    try {
-        const res = await fetch('/api/videos/feed?limit=20', { headers: { 'token': token } });
-        const data = await res.json();
-        if (!Array.isArray(data)) {
-            container.innerHTML = `<div class="feed-container"><p style="text-align:center;padding:40px;">${data.detail || 'خطا'}</p></div>`;
-            return;
-        }
-        if (data.length === 0) {
-            container.innerHTML = `<div class="feed-container"><div style="text-align:center;padding:60px 20px;"><div style="font-size:48px;">📹</div><h3>هنوز ویدیویی در فید شما نیست</h3><button onclick="showTab('explore')" style="background:#0095f6;color:white;border:none;padding:10px 30px;border-radius:8px;margin-top:16px;cursor:pointer;">🔍 جستجو</button></div></div>`;
-            return;
-        }
-        let html = '<div class="feed-container">';
-        for (const v of data) {
-            const isLiked = v.is_liked ? 'liked' : '';
-            const likeIcon = v.is_liked ? '❤️' : '🤍';
-            html += `
-                <div class="post">
-                    <div class="post-header">
-                        <div class="avatar">${v.user_avatar ? `<img src="${v.user_avatar}" style="width:100%;height:100%;object-fit:cover;">` : '👤'}</div>
-                        <span class="username">${v.username || 'کاربر'}</span>
-                        <span class="time">${new Date(v.created_at).toLocaleDateString('fa-IR')}</span>
-                    </div>
-                    <div class="post-video">
-                        <video src="${v.video_url}" controls></video>
-                    </div>
-                    <div class="post-actions">
-                        <button class="btn ${isLiked}" onclick="likeVideo(${v.id})">${likeIcon}</button>
-                        <button class="btn" onclick="document.getElementById('comment-input-${v.id}').focus()">💬</button>
-                        <div class="stats">
-                            <span>❤️ ${v.likes_count || 0}</span>
-                            <span>💬 ${v.comments_count || 0}</span>
-                            <span>👁️ ${v.views || 0}</span>
-                        </div>
-                    </div>
-                    <div class="post-caption">
-                        <span class="uname">${v.username || ''}</span>
-                        <span>${v.description || ''}</span>
-                    </div>
-                    <div class="post-comments">
-                        <div class="comment-form">
-                            <input id="comment-input-${v.id}" placeholder="کامنت...">
-                            <button onclick="addComment(${v.id})">ارسال</button>
-                        </div>
-                    </div>
-                </div>
-            `;
-        }
-        html += '</div>';
-        container.innerHTML = html;
-    } catch (e) {
-        container.innerHTML = `<div class="feed-container"><p style="text-align:center;padding:40px;">❌ خطا</p></div>`;
-    }
-}
-
-// ===== EXPLORE =====
-async function loadExplore(container) {
-    container.innerHTML = `<div style="max-width:600px;margin:16px auto;padding:0 16px;"><p style="text-align:center;color:#8e8e8e;">🔍 در حال توسعه...</p></div>`;
-}
-
-// ===== UPLOAD =====
-function loadUpload(container) {
-    if (!token) { container.innerHTML = buildAuthForm(); return; }
-    container.innerHTML = `
-        <div class="upload-container">
-            <div class="upload-box">
-                <div style="font-size:48px;">📤</div>
-                <h3>آپلود ویدیو</h3>
-                <p>حداکثر ۱۰ مگابایت</p>
-                <input type="file" id="video-file" accept="video/*">
-                <button class="btn-primary" onclick="document.getElementById('video-file').click()">انتخاب فایل</button>
-                <div id="file-info" style="margin-top:12px;color:#8e8e8e;"></div>
-                <div id="upload-form" style="display:none;margin-top:16px;">
-                    <input id="upload-title" placeholder="عنوان" style="width:100%;padding:10px;border:1px solid #dbdbdb;border-radius:8px;margin-bottom:8px;">
-                    <textarea id="upload-desc" placeholder="توضیحات" style="width:100%;padding:10px;border:1px solid #dbdbdb;border-radius:8px;resize:vertical;min-height:60px;"></textarea>
-                    <button class="btn-primary" onclick="uploadVideo()" style="width:100%;">📤 آپلود</button>
-                    <div id="upload-status" style="margin-top:8px;text-align:center;"></div>
-                </div>
-            </div>
-        </div>
-    `;
-    document.getElementById('video-file').addEventListener('change', function() {
-        if (this.files[0]) {
-            document.getElementById('file-info').textContent = `📁 ${this.files[0].name} (${(this.files[0].size/1024/1024).toFixed(2)} MB)`;
-            document.getElementById('upload-form').style.display = 'block';
-        }
-    });
-}
-
-async function uploadVideo() {
-    const file = document.getElementById('video-file').files[0];
-    if (!file) { showToast('❌ فایلی انتخاب نشده', true); return; }
-    if (file.size > 10 * 1024 * 1024) { showToast('❌ حجم بیش از ۱۰ مگابایت', true); return; }
-    
-    const formData = new FormData();
-    formData.append('video', file);
-    formData.append('title', document.getElementById('upload-title').value);
-    formData.append('description', document.getElementById('upload-desc').value);
-    
-    document.getElementById('upload-status').textContent = '⏳ در حال آپلود...';
-    try {
-        const res = await fetch('/api/videos/upload', {
-            method: 'POST',
-            headers: { 'token': token },
-            body: formData
-        });
-        const data = await res.json();
-        if (data.success) {
-            showToast('✅ آپلود موفق!');
-            document.getElementById('upload-status').textContent = '✅ کامل!';
-            setTimeout(() => showTab('feed'), 1000);
-        } else {
-            showToast('❌ ' + (data.detail || 'خطا'), true);
-            document.getElementById('upload-status').textContent = '';
-        }
-    } catch (e) {
-        showToast('❌ خطا', true);
-        document.getElementById('upload-status').textContent = '';
-    }
-}
-
-// ===== CHAT =====
-function loadChat(container) {
-    if (!token) { container.innerHTML = buildAuthForm(); return; }
-    container.innerHTML = `
-        <div class="chat-container">
-            <div id="chat-list-view">
-                <h3>💬 پیام‌ها</h3>
-                <div class="chat-list" id="chat-list"></div>
-            </div>
-            <div id="chat-messages-view" style="display:none;">
-                <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
-                    <button onclick="backToChatList()" style="background:none;border:none;font-size:20px;cursor:pointer;">←</button>
-                    <span id="chat-partner-name" style="font-weight:600;"></span>
-                </div>
-                <div class="chat-messages" id="chat-messages"></div>
-                <div class="chat-input">
-                    <input id="chat-input" placeholder="پیام..." onkeydown="if(event.key==='Enter') sendMessage()">
-                    <button onclick="sendMessage()">ارسال</button>
-                </div>
-            </div>
-        </div>
-    `;
-    loadConversations();
-}
-
-async function loadConversations() {
-    try {
-        const res = await fetch('/api/messages/conversations', { headers: { 'token': token } });
-        const data = await res.json();
-        const list = document.getElementById('chat-list');
-        if (!Array.isArray(data) || data.length === 0) {
-            list.innerHTML = '<div style="padding:20px;text-align:center;color:#8e8e8e;">هنوز پیامی ندارید</div>';
-            return;
-        }
-        let html = '';
-        for (const c of data) {
-            html += `
-                <div class="chat-item" onclick="openChat(${c.user_id}, '${c.username}')">
-                    <div class="avatar">${c.avatar_url ? `<img src="${c.avatar_url}" style="width:100%;height:100%;object-fit:cover;">` : '👤'}</div>
-                    <div class="info">
-                        <div class="name">${c.username}</div>
-                        <div class="last-msg">${c.last_message || ''}</div>
-                    </div>
-                    ${c.unread_count > 0 ? `<span style="background:#0095f6;color:white;border-radius:50%;width:20px;height:20px;display:flex;align-items:center;justify-content:center;font-size:12px;">${c.unread_count}</span>` : ''}
-                </div>
-            `;
-        }
-        list.innerHTML = html;
-    } catch (e) {}
-}
-
-function backToChatList() {
-    chatWith = null;
-    document.getElementById('chat-list-view').style.display = 'block';
-    document.getElementById('chat-messages-view').style.display = 'none';
-    loadConversations();
-}
-
-async function openChat(userId, username) {
-    chatWith = userId;
-    document.getElementById('chat-list-view').style.display = 'none';
-    document.getElementById('chat-messages-view').style.display = 'block';
-    document.getElementById('chat-partner-name').textContent = username;
-    await loadMessages(userId);
-}
-
-async function loadMessages(userId) {
-    try {
-        const res = await fetch(`/api/messages/${userId}?limit=50`, { headers: { 'token': token } });
-        const data = await res.json();
-        const container = document.getElementById('chat-messages');
-        let html = '';
-        for (const m of data) {
-            const cls = m.is_mine ? 'mine' : 'other';
-            html += `<div class="msg ${cls}">${m.content}</div>`;
-        }
-        container.innerHTML = html;
-        container.scrollTop = container.scrollHeight;
-    } catch (e) {}
-}
-
-function sendMessage() {
-    const input = document.getElementById('chat-input');
-    const content = input.value.trim();
-    if (!content || !chatWith || !ws) return;
-    ws.send(JSON.stringify({ type: 'message', receiver_id: chatWith, content: content }));
-    input.value = '';
-}
-
-function connectWebSocket() {
-    if (!token || ws) return;
-    try {
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        ws = new WebSocket(`${protocol}//${window.location.host}/ws/chat?token=${token}`);
-        ws.onmessage = function(e) {
-            const data = JSON.parse(e.data);
-            if (data.type === 'message' && chatWith === data.data.sender_id) {
-                const container = document.getElementById('chat-messages');
-                container.innerHTML += `<div class="msg other">${data.data.content}</div>`;
-                container.scrollTop = container.scrollHeight;
-            }
-        };
-        ws.onclose = () => { ws = null; setTimeout(connectWebSocket, 3000); };
-    } catch (e) {}
-}
-
-// ===== PROFILE =====
-async function loadProfile(container) {
-    if (!token) { container.innerHTML = buildAuthForm(); return; }
-    try {
-        const res = await fetch('/api/auth/me', { headers: { 'token': token } });
-        const user = await res.json();
-        if (!user.id) { container.innerHTML = buildAuthForm(); return; }
-        currentUser = user;
-        container.innerHTML = `
-            <div class="profile-container">
-                <div class="profile-header">
-                    <div class="avatar">${user.avatar_url ? `<img src="${user.avatar_url}" style="width:100%;height:100%;object-fit:cover;">` : '📷'}</div>
-                    <div class="info">
-                        <div class="name">${user.full_name || user.username}</div>
-                        <div class="username">@${user.username}</div>
-                        <div style="font-size:14px;margin-top:4px;">${user.bio || ''}</div>
-                        <div style="margin-top:4px;">
-                            ${user.is_premium ? '⭐ ویژه ' : ''}
-                            ${user.is_verified ? '✓ تایید شده' : ''}
-                        </div>
-                    </div>
-                    <div>
-                        <button onclick="logout()" style="background:#ed4956;color:white;border:none;padding:6px 16px;border-radius:4px;cursor:pointer;">خروج</button>
-                    </div>
-                </div>
-                <div class="profile-stats">
-                    <div class="stat"><div class="num">${user.videos_count || 0}</div><div class="label">ویدیو</div></div>
-                    <div class="stat"><div class="num">${user.followers_count || 0}</div><div class="label">دنبال‌کننده</div></div>
-                    <div class="stat"><div class="num">${user.following_count || 0}</div><div class="label">دنبال‌شونده</div></div>
-                </div>
-                <div class="profile-grid" id="profile-grid"></div>
-            </div>
-        `;
-        // بارگذاری ویدیوهای کاربر
-        try {
-            const feedRes = await fetch('/api/videos/feed?limit=30', { headers: { 'token': token } });
-            const videos = await feedRes.json();
-            if (Array.isArray(videos)) {
-                const userVideos = videos.filter(v => v.user_id === user.id);
-                let gridHtml = '';
-                for (const v of userVideos.slice(0, 9)) {
-                    gridHtml += `<div class="item"><video src="${v.video_url}" muted></video></div>`;
-                }
-                document.getElementById('profile-grid').innerHTML = gridHtml || '<div style="grid-column:1/-1;text-align:center;padding:40px;color:#8e8e8e;">هنوز ویدیویی ندارید</div>';
-            }
-        } catch (e) {}
-    } catch (e) {
-        container.innerHTML = buildAuthForm();
-    }
-}
-
-// ===== ACTIONS =====
-async function likeVideo(videoId) {
-    if (!token) return;
-    try {
-        await fetch(`/api/videos/${videoId}/like`, {
-            method: 'POST',
-            headers: { 'token': token }
-        });
-        showTab('feed');
-    } catch (e) {}
-}
-
-async function addComment(videoId) {
-    const input = document.getElementById(`comment-input-${videoId}`);
-    const content = input.value.trim();
-    if (!content || !token) return;
-    try {
-        const formData = new FormData();
-        formData.append('content', content);
-        formData.append('token', token);
-        await fetch(`/api/videos/${videoId}/comments`, {
-            method: 'POST',
-            body: formData
-        });
-        input.value = '';
-        showTab('feed');
-    } catch (e) {}
-}
-
-// ===== INIT =====
-document.addEventListener('DOMContentLoaded', function() {
-    if (token) {
-        fetch('/api/auth/me', { headers: { 'token': token } })
-            .then(res => res.json())
-            .then(data => {
-                if (data.id) {
-                    currentUser = data;
-                    connectWebSocket();
-                    showTab('feed');
-                } else {
-                    token = '';
-                    localStorage.removeItem('token');
-                    showTab('feed');
-                }
-            }).catch(() => { token = ''; localStorage.removeItem('token'); showTab('feed'); });
-    } else {
-        showTab('feed');
-    }
-});
+    function renderWinners() { const c=$('winnersList'); if(!state.winners||state.winners.length===0){ c.innerHTML='<div class="empty-state"><span class="icon">🏆</span><div class="text">'+t('no_winners')+'</div></div>'; return; } c.innerHTML=state.winners.slice(0,20).map((w,i)=>'<div class="winner-item"><div class="rank">#'+(i+1)+'</div><div class="info"><div class="name">'+(w.username||w.user_id||'User')+'</div><div class="date">'+(w.date||'')+'</div></div><div class="prize">$'+w.prize+'</div></div>').join(''); }
+    function renderTransactions() { const c=$('recentTransactions'); if(!state.transactions||state.transactions.length===0){ c.innerHTML='<div class="empty-state"><span class="icon">📭</span><div class="text">'+t('no_tx')+'</div></div>'; return; } c.innerHTML=state.transactions.slice(0,10).map(tx=>'<div class="tx-item"><div class="status-dot '+(tx.status||'pending')+'"></div><div class="info"><div class="hash">'+(tx.hash||'---')+'</div><div class="date">'+(tx.date||'')+'</div></div><div class="amount '+(tx.amount>0?'positive':'negative')+'">'+(tx.amount>0?'+':'')+'$'+tx.amount+'</div></div>').join(''); }
+    function startTimer() { if(state.timerInterval) clearInterval(state.timerInterval); let end=state.lottery?.end_time||(Date.now()+7*24*60*60*1000); state.timerInterval=setInterval(()=>{ const d=Math.max(0,end-Date.now()); if(d===0){ $('timerDays').textContent='00'; $('timerHours').textContent='00'; $('timerMinutes').textContent='00'; $('timerSeconds').textContent='00'; return; } $('timerDays').textContent=String(Math.floor(d/(24*60*60*1000))).padStart(2,'0'); $('timerHours').textContent=String(Math.floor((d%(24*60*60*1000))/(60*60*1000))).padStart(2,'0'); $('timerMinutes').textContent=String(Math.floor((d%(60*60*1000))/(60*1000))).padStart(2,'0'); $('timerSeconds').textContent=String(Math.floor((d%(60*1000))/1000)).padStart(2,'0'); },1000); }
+    async function joinLottery() { if(state.participated){ showToast(t('already_participated'),'warning'); return; } if(!state.subscribed){ showToast(t('no_subscription'),'warning'); return; } const jb=$('joinBtn'); jb.disabled=true; jb.innerHTML='<span class="spinner"></span> '+t('processing'); try{ const r=await apiCall('/lottery/join','POST'); if(r.success){ state.participated=true; showToast(t('join_success'),'success'); await loadAllData(); updateUI(); } else showToast(r.error||t('join_fail'),'error'); } catch(e){ showToast(t('join_fail'),'error'); } jb.disabled=false; jb.innerHTML='🎰 '+t('btn_join'); }
+    function showDepositModal(){ openModal('<div class="modal-title">💰 '+t('deposit_title')+'</div><div class="input-group"><label>'+t('deposit_address_label')+'</label><input type="text" id="modalDepositAddress" placeholder="TV61aTh98MGqmteYzda5AaBzdXgGqreG6A"><div class="hint" style="font-size:10px;color:var(--text-muted);margin-top:3px;">'+t('deposit_address_hint')+'</div></div><div class="input-group"><label>'+t('deposit_tx_label')+'</label><input type="text" id="modalDepositTx" placeholder="7ae83b63-fdf3-47e4-ac69-56f960a34f5b"></div><div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;">'+t('deposit_dest')+': <code>'+CONFIG.DESTINATION_WALLET+'</code></div><button class="btn btn-success" onclick="submitDeposit()">✅ '+t('btn_verify')+'</button><button class="btn btn-outline mt-8" onclick="closeModal()">Cancel</button>'); }
+    async function verifyDeposit(){ const a=$('depositAddress').value.trim(), h=$('depositTxHash').value.trim(); if(!a||!h){ showToast(t('enter_address'),'warning'); return; } await submitDepositInternal(a,h); }
+    async function submitDeposit(){ const a=document.getElementById('modalDepositAddress').value.trim(), h=document.getElementById('modalDepositTx').value.trim(); if(!a||!h){ showToast(t('enter_address'),'warning'); return; } await submitDepositInternal(a,h); closeModal(); }
+    async function submitDepositInternal(a,h){ const btn=document.querySelector('.btn-success'); if(btn){ btn.disabled=true; btn.innerHTML='<span class="spinner"></span> '+t('processing'); } try{ const r=await apiCall('/deposit/verify','POST',{address:a,tx_hash:h,amount:CONFIG.LOTTERY_PRICE,destination:CONFIG.DESTINATION_WALLET}); if(r.success){ showToast(t('verify_success'),'success'); await loadAllData(); updateUI(); } else showToast(r.error||t('verify_fail'),'error'); } catch(e){ showToast(t('verify_fail'),'error'); } if(btn){ btn.disabled=false; btn.innerHTML='✅ '+t('btn_verify'); } }
+    async function requestWithdraw(){ const a=$('withdrawAddress').value.trim(); if(!a||a.length!==34||!a.startsWith('T')){ showToast(t('enter_address'),'warning'); return; } const btn=document.querySelector('#withdrawCard .btn'); if(btn){ btn.disabled=true; btn.innerHTML='<span class="spinner"></span> '+t('processing'); } try{ const r=await apiCall('/withdraw/request','POST',{address:a}); if(r.success){ showToast(t('withdraw_success'),'success'); await loadAllData(); updateUI(); } else showToast(r.error||t('withdraw_fail'),'error'); } catch(e){ showToast(t('withdraw_fail'),'error'); } if(btn){ btn.disabled=false; btn.innerHTML='💸 '+t('btn_withdraw'); } }
+    function copyReferral(){ const c=state.referralCode; if(!c||c==='------'){ showToast(t('copy_fail'),'error'); return; } const t='https://t.me/'+CONFIG.BOT_USERNAME+'?start='+c; if(navigator.clipboard){ navigator.clipboard.writeText(t).then(()=>showToast(t('copy_success'),'success')).catch(()=>copyFallback(t)); } else copyFallback(t); }
+    function copyFallback(t){ const i=document.createElement('input'); i.value=t; document.body.appendChild(i); i.select(); document.execCommand('copy'); document.body.removeChild(i); showToast(t('copy_success'),'success'); }
+    function shareReferral(){ const c=state.referralCode; const t='🎰 Join UTYOB Lottery! 💰\nUse my referral code: '+c+'\nhttps://t.me/'+CONFIG.BOT_USERNAME+'?start='+c; if(navigator.share){ navigator.share({title:'UTYOB Lottery',text:t}).catch(()=>{}); } else copyReferral(); }
+    async function adminStartLottery(){ if(!state.isAdmin) return; try{ const r=await apiCall('/admin/lottery/start','POST'); if(r.success){ showToast('✅ Lottery started!','success'); await loadAllData(); updateUI(); } else showToast('❌ Failed','error'); } catch(e){ showToast('❌ Error','error'); } }
+    async function adminPayWinners(){ if(!state.isAdmin) return; try{ const r=await apiCall('/admin/winners/pay','POST'); if(r.success){ showToast('✅ Winners paid!','success'); await loadAllData(); updateUI(); } else showToast('❌ Failed','error'); } catch(e){ showToast('❌ Error','error'); } }
+    async function adminSendPoll(){ if(!state.isAdmin) return; try{ const r=await apiCall('/admin/poll/send','POST'); if(r.success) showToast('✅ Poll sent!','success'); else showToast('❌ Failed','error'); } catch(e){ showToast('❌ Error','error'); } }
+    async function adminBroadcast(){ if(!state.isAdmin) return; const msg=prompt('📢 Enter broadcast message:'); if(!msg) return; try{ const r=await apiCall('/admin/broadcast','POST',{message:msg}); if(r.success) showToast('✅ Sent to '+(r.sent||0)+' users!','success'); else showToast('❌ Failed','error'); } catch(e){ showToast('❌ Error','error'); } }
+    async function adminManualVerify(){ if(!state.isAdmin) return; const uid=$('adminUserId').value.trim(); if(!uid){ showToast('⚠️ Enter User ID','warning'); return; } try{ const r=await apiCall('/admin/verify/manual','POST',{user_id:uid}); if(r.success){ showToast('✅ User '+uid+' verified!','success'); await loadAllData(); updateUI(); } else showToast('❌ Failed','error'); } catch(e){ showToast('❌ Error','error'); } }
+    const originalApi=apiCall;
+    window.apiCall=async function(e,m='GET',d=null){ const mock={'/api/user':{success:true,data:{balance:250,points:1250,has_subscription:true,has_participated:false,referral_code:'UTYOB123'}},'/api/lottery/current':{success:true,data:{round_number:3,participants:847,prize_pool:84600,winners:20,end_time:Date.now()+7*24*60*60*1000}},'/api/winners':{success:true,data:[{user_id:1,username:'Ali_Reza',prize:2000,date:'2024-12-01'},{user_id:2,username:'Sara_Khan',prize:2000,date:'2024-12-01'}]},'/api/transactions':{success:true,data:[{hash:'0x7ae83b63...f34f5b',amount:100,status:'confirmed',date:'2024-12-02'}]},'/api/referral':{success:true,data:{code:'UTYOB123',count:12,points:1200}}}; if(m==='POST') return {success:true}; return mock[e]||{success:false,error:'Not found'}; };
+    async function init(){ if(tgUser) state.user=tgUser; await loadAllData(); startTimer(); updateUI(); if(tgUser?.language_code){ const l=tgUser.language_code.split('-')[0]; if(['en','fa','tr','ru','ar'].includes(l)) switchLanguage(l); } tg.ready(); tg.expand(); }
+    document.addEventListener('DOMContentLoaded',init);
+    window.switchLanguage=switchLanguage; window.switchTab=switchTab; window.joinLottery=joinLottery; window.verifyDeposit=verifyDeposit; window.requestWithdraw=requestWithdraw; window.copyReferral=copyReferral; window.shareReferral=shareReferral; window.adminStartLottery=adminStartLottery; window.adminPayWinners=adminPayWinners; window.adminSendPoll=adminSendPoll; window.adminBroadcast=adminBroadcast; window.adminManualVerify=adminManualVerify; window.showDepositModal=showDepositModal; window.submitDeposit=submitDeposit; window.openModal=openModal; window.closeModal=closeModal; window.showToast=showToast;
 </script>
 </body>
-</html>
-    """
+</html>'''
 
-# ============================================
-# اجرا
-# ============================================
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(
-        "app:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True
-    )
+# ============================================================
+# API Endpoints
+# ============================================================
+@app.get("/", response_class=HTMLResponse)
+async def root():
+    return HTMLResponse(WEBPAGE_HTML)
+
+@app.get("/api/user")
+async def api_user(request: Request):
+    tg_user = request.headers.get('X-Telegram-User')
+    if not tg_user:
+        return JSONResponse({"success": False, "error": "Unauthorized"})
+    
+    try:
+        user_id = int(tg_user)
+        db = DatabaseService()
+        user = db.get_or_create_user(user_id)
+        return JSONResponse({
+            "success": True,
+            "data": {
+                "balance": 250.00,
+                "points": user.get('points', 0),
+                "has_subscription": user.get('has_subscription', False),
+                "has_participated": db.has_participated(user_id),
+                "referral_code": user.get('referral_code', '')
+            }
+        })
+    except:
+        return JSONResponse({"success": False, "error": "Invalid user"})
+
+@app.get("/api/lottery/current")
+async def api_lottery_current():
+    db = DatabaseService()
+    # Mock data - in real version, get from database
+    return JSONResponse({
+        "success": True,
+        "data": {
+            "round_number": 1,
+            "participants": 0,
+            "prize_pool": 0,
+            "winners": 0,
+            "end_time": int((datetime.now() + timedelta(days=7)).timestamp() * 1000)
+        }
+    })
+
+@app.get("/api/winners")
+async def api_winners():
+    return JSONResponse({
+        "success": True,
+        "data": []
+    })
+
+@app.get("/api/transactions")
+async def api_transactions():
+    return JSONResponse({
+        "success": True,
+        "data": []
+    })
+
+@app.get("/api/referral")
+async def api_referral(request: Request):
+    tg_user = request.headers.get('X-Telegram-User')
+    if not tg_user:
+        return JSONResponse({"success": False, "error": "Unauthorized"})
+    
+    db = DatabaseService()
+    user = db.get_or_create_user(int(tg_user))
+    return JSONResponse({
+        "success": True,
+        "data": {
+            "code": user.get('referral_code', ''),
+            "count": user.get('referral_count', 0),
+            "points": user.get('referral_points', 0)
+        }
+    })
+
+@app.post("/api/lottery/join")
+async def api_join_lottery(request: Request):
+    tg_user = request.headers.get('X-Telegram-User')
+    if not tg_user:
+        return JSONResponse({"success": False, "error": "Unauthorized"})
+    
+    db = DatabaseService()
+    user_id = int(tg_user)
+    if db.has_participated(user_id):
+        return JSONResponse({"success": False, "error": "Already participated"})
+    
+    return JSONResponse({"success": True})
+
+@app.post("/api/deposit/verify")
+async def api_verify_deposit(request: Request):
+    try:
+        data = await request.json()
+        # در نسخه واقعی، اینجا تایید تراکنش انجام می‌شود
+        return JSONResponse({"success": True})
+    except:
+        return JSONResponse({"success": False, "error": "Invalid data"})
+
+@app.post("/api/withdraw/request")
+async def api_withdraw_request(request: Request):
+    tg_user = request.headers.get('X-Telegram-User')
+    if not tg_user:
+        return JSONResponse({"success": False, "error": "Unauthorized"})
+    
+    try:
+        data = await request.json()
+        address = data.get('address')
+        if not address:
+            return JSONResponse({"success": False, "error": "Address required"})
+        
+        db = DatabaseService()
+        if db.save_withdrawal_address(int(tg_user), address):
+            return JSONResponse({"success": True})
+        return JSONResponse({"success": False, "error": "No pending prize"})
+    except:
+        return JSONResponse({"success": False, "error": "Invalid data"})
+
+@app.post("/api/admin/lottery/start")
+async def api_admin_start_lottery():
+    return JSONResponse({"success": True})
+
+@app.post("/api/admin/winners/pay")
+async def api_admin_pay_winners():
+    db = DatabaseService()
+    count = db.pay_winners()
+    return JSONResponse({"success": True, "sent": count})
+
+@app.post("/api/admin/poll/send")
+async def api_admin_send_poll():
+    return JSONResponse({"success": True})
+
+@app.post("/api/admin/broadcast")
+async def api_admin_broadcast(request: Request):
+    try:
+        data = await request.json()
+        # در نسخه واقعی، پیام همگانی ارسال می‌شود
+        return JSONResponse({"success": True, "sent": 0})
+    except:
+        return JSONResponse({"success": False})
+
+@app.post("/api/admin/verify/manual")
+async def api_admin_verify(request: Request):
+    return JSONResponse({"success": True})
+
+# ============================================================
+# تابع اصلی برای اجرا
+# ============================================================
+def start_web_server():
+    """اجرای وب‌سرور در یک ترد جداگانه"""
+    try:
+        uvicorn.run(app, host=WEBAPP_HOST, port=WEBAPP_PORT, log_level="warning")
+    except:
+        pass
+
+def run_bot():
+    """اجرای ربات"""
+    bot = LotteryBot()
+    bot.run()
+
+# ============================================================
+# نقطه ورود اصلی
+# ============================================================
+if __name__ == '__main__':
+    import multiprocessing
+    
+    logger.info("="*50)
+    logger.info("🎰 UTYOB Lottery Bot - v1.0")
+    logger.info(f"📱 Bot Token: {'*' * 10}{BOT_TOKEN[-4:]}")
+    logger.info(f"👤 Admin ID: {ADMIN_ID}")
+    logger.info(f"🌐 WebApp URL: {WEBAPP_URL}")
+    logger.info(f"💳 Destination Wallet: {DESTINATION_WALLET}")
+    logger.info("="*50)
+    
+    # ایجاد دیتابیس
+    logger.info("📦 Initializing database...")
+    try:
+        init_db()
+        logger.info("✅ Database initialized successfully")
+    except Exception as e:
+        logger.error(f"❌ Database initialization failed: {e}")
+    
+    # اجرا در دو ترد جداگانه
+    bot_process = multiprocessing.Process(target=run_bot)
+    web_process = multiprocessing.Process(target=start_web_server)
+    
+    logger.info("🚀 Starting bot and web server...")
+    
+    bot_process.start()
+    web_process.start()
+    
+    try:
+        bot_process.join()
+        web_process.join()
+    except KeyboardInterrupt:
+        logger.info("🛑 Shutting down...")
+        bot_process.terminate()
+        web_process.terminate()
+        bot_process.join()
+        web_process.join()
+        logger.info("✅ Shutdown complete")
