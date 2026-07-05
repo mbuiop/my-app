@@ -1,5 +1,5 @@
 # ============================================================
-# ربات قرعه‌کشی هوشمند UTYOB - نسخه نهایی با سیستم اشتراک کامل
+# ربات قرعه‌کشی هوشمند UTYOB - نسخه نهایی با بهینه‌سازی سرعت
 # ============================================================
 
 import asyncio
@@ -13,8 +13,10 @@ import aiohttp
 import threading
 import time
 import os
+import sys
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Optional, Any
+from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, request, jsonify
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -44,7 +46,7 @@ TRONGRID_APIS = [
 DESTINATION_WALLET = "TV61aTh98MGqmteYzda5AaBzdXgGqreG6A"
 PAYMENT_AMOUNT = 100
 
-DB_SHARDS = 100
+DB_SHARDS = 500  # افزایش به ۵۰۰ شارد برای مقیاس‌پذیری بالا
 CACHE_TTL = 300
 
 # ============================================================
@@ -69,7 +71,6 @@ class LanguageManager:
             'main_menu_btn': "🔙 Main Menu",
             'lottery_back': "🎰 Back to Lottery",
             
-            # اشتراک
             'subscribe_wallet': "💳 **Subscribe to UTYOB Lottery**\n\nPlease enter your source TRC20 wallet address:\n\n🔹 **Subscription fee:** $100\n🔹 **Destination address:**\n`{}`\n\n⚠️ **Important:**\n• Use TRC20 network only\n• Amount must be exactly $100\n• After sending, click the button below\n\n📤 **Enter your source wallet address:**",
             'after_subscribe_wallet': "✅ **Wallet address saved!**\n\n🔹 Your address: `{}`\n\n💰 **Please send exactly $100 to:**\n`{}`\n\n⚠️ **Important:**\n• Use TRC20 network only\n• Send exactly $100\n• After sending, click the button below\n\n✅ **Click after sending:**",
             'confirm_subscribe': "✅ I sent the payment",
@@ -109,7 +110,6 @@ class LanguageManager:
             'photo_not_supported': "📸 Photo received!\nBut this feature is not supported.",
             'invalid_wallet': "❌ Invalid wallet address!\n\nPlease enter a valid TRC20 address.\nExample: `TV61aTh98MGqmteYzda5AaBzdXgGqreG6A`",
             
-            # Admin - Manual Verify
             'admin_verify_tx': "✅ **Transaction Verification Request**\n\n👤 User: {}\n📤 From: {}\n📥 To: {}\n💰 Amount: ${}\n🔗 TX Hash: `{}`\n\nPlease verify this transaction:",
             'admin_verify_approve': "✅ Approve",
             'admin_verify_reject': "❌ Reject",
@@ -117,6 +117,10 @@ class LanguageManager:
             'admin_verify_rejected': "❌ **Transaction rejected!**\n\n👤 User: {}\n🔗 TX Hash: `{}`\n\nUser has been notified.",
             'user_verify_approved': "✅ **Your transaction has been approved!** 🎉\n\n💰 Subscription activated!\n🔗 TX Hash: `{}`\n\n🎉 You now have an active subscription!\n🙏 Welcome to UTYOB Lottery!",
             'user_verify_rejected': "❌ **Your transaction has been rejected!**\n\n🔗 TX Hash: `{}`\n\nPlease check your transaction and try again.\n\n📌 **Reasons:**\n• Amount may not be exactly $100\n• Address may be incorrect\n• Transaction may not be completed",
+            
+            'poll_message': "📊 **Poll**\n\n{}",
+            'poll_option_1': "✅ Yes",
+            'poll_option_2': "❌ No",
         },
         'fa': {
             'name': 'فارسی',
@@ -135,7 +139,6 @@ class LanguageManager:
             'main_menu_btn': "🔙 منوی اصلی",
             'lottery_back': "🎰 بازگشت به قرعه‌کشی",
             
-            # اشتراک
             'subscribe_wallet': "💳 **خرید اشتراک UTYOB**\n\nلطفاً آدرس کیف پول مبدا (TRC20) خود را وارد کنید:\n\n🔹 **هزینه اشتراک:** ۱۰۰ دلار\n🔹 **آدرس مقصد:**\n`{}`\n\n⚠️ **نکات مهم:**\n• فقط از شبکه TRC20 استفاده کنید\n• مبلغ دقیقاً ۱۰۰ دلار باشد\n• پس از واریز، روی دکمه زیر کلیک کنید\n\n📤 **آدرس کیف پول خود را وارد کنید:**",
             'after_subscribe_wallet': "✅ **آدرس کیف پول ذخیره شد!**\n\n🔹 آدرس شما: `{}`\n\n💰 **لطفاً مبلغ ۱۰۰ دلار به آدرس زیر واریز کنید:**\n`{}`\n\n⚠️ **نکات مهم:**\n• فقط از شبکه TRC20 استفاده کنید\n• مبلغ دقیقاً ۱۰۰ دلار باشد\n• پس از واریز، روی دکمه زیر کلیک کنید\n\n✅ **پس از واریز کلیک کنید:**",
             'confirm_subscribe': "✅ پرداخت کردم",
@@ -182,6 +185,10 @@ class LanguageManager:
             'admin_verify_rejected': "❌ **تراکنش رد شد!**\n\n👤 کاربر: {}\n🔗 هش: `{}`\n\nبه کاربر اطلاع داده شد.",
             'user_verify_approved': "✅ **تراکنش شما تایید شد!** 🎉\n\n💰 اشتراک فعال شد!\n🔗 هش: `{}`\n\n🎉 اشتراک شما با موفقیت فعال شد!\n🙏 به UTYOB خوش آمدید!",
             'user_verify_rejected': "❌ **تراکنش شما رد شد!**\n\n🔗 هش: `{}`\n\nلطفاً تراکنش خود را بررسی کرده و مجدداً تلاش کنید.\n\n📌 **دلایل احتمالی:**\n• مبلغ دقیقاً ۱۰۰ دلار نبوده\n• آدرس مقصد اشتباه بوده\n• تراکنش کامل نشده است",
+            
+            'poll_message': "📊 **نظرسنجی**\n\n{}",
+            'poll_option_1': "✅ بله",
+            'poll_option_2': "❌ خیر",
         },
         'tr': {
             'name': 'Türkçe',
@@ -246,6 +253,10 @@ class LanguageManager:
             'admin_verify_rejected': "❌ **İşlem reddedildi!**\n\n👤 Kullanıcı: {}\n🔗 TX Hash: `{}`\n\nKullanıcı bilgilendirildi.",
             'user_verify_approved': "✅ **İşleminiz onaylandı!** 🎉\n\n💰 Abonelik aktifleştirildi!\n🔗 TX Hash: `{}`\n\n🎉 Aboneliğiniz başarıyla aktifleştirildi!\n🙏 UTYOB'a hoş geldiniz!",
             'user_verify_rejected': "❌ **İşleminiz reddedildi!**\n\n🔗 TX Hash: `{}`\n\nLütfen işleminizi kontrol edip tekrar deneyin.\n\n📌 **Olası nedenler:**\n• Tutar tam olarak 100$ değil\n• Hedef adres yanlış\n• İşlem tamamlanmamış",
+            
+            'poll_message': "📊 **Anket**\n\n{}",
+            'poll_option_1': "✅ Evet",
+            'poll_option_2': "❌ Hayır",
         }
     }
     
@@ -279,26 +290,28 @@ class LanguageManager:
         return cls.LANGUAGES.get(lang_code, {}).get('emoji', '🇬🇧')
 
 # ============================================================
-# دیتابیس با ۱۰۰ شارد
+# دیتابیس با ۵۰۰ شارد برای مقیاس‌پذیری بالا
 # ============================================================
 class DatabaseManager:
     def __init__(self, num_shards=DB_SHARDS):
         self.num_shards = num_shards
         self.connections = {}
         self.locks = {}
+        self.executor = ThreadPoolExecutor(max_workers=50)
         self._init_shards()
         
     def _init_shards(self):
         os.makedirs("data", exist_ok=True)
         for i in range(self.num_shards):
             db_path = f"data/shard_{i}.db"
-            conn = sqlite3.connect(db_path, check_same_thread=False, timeout=30)
+            conn = sqlite3.connect(db_path, check_same_thread=False, timeout=60)
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA cache_size=10000")
+            conn.execute("PRAGMA cache_size=50000")
+            conn.execute("PRAGMA temp_store=MEMORY")
             self.connections[i] = conn
-            self.locks[i] = threading.Lock()
+            self.locks[i] = threading.RLock()
             self._create_tables(conn, i)
             
     def _create_tables(self, conn, shard_id):
@@ -386,6 +399,7 @@ class DatabaseManager:
             )
         ''')
         
+        # ایندکس‌های بهینه
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_referral ON users(referral_code)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_subscription ON users(has_subscription, subscription_end)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id)')
@@ -394,6 +408,8 @@ class DatabaseManager:
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_winners_paid ON winners(paid_status)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_pending_tx_user ON pending_verifications(user_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_pending_tx_status ON pending_verifications(status)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_created ON users(created_at)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_subscription_end ON users(subscription_end)')
         
         conn.commit()
         
@@ -422,22 +438,50 @@ class DatabaseManager:
                 conn.commit()
                 results.extend(cursor.fetchall())
         return results
+        
+    def execute_parallel(self, query, params_list):
+        """اجرای موازی کوئری‌ها برای سرعت بالا"""
+        with ThreadPoolExecutor(max_workers=50) as executor:
+            futures = []
+            for params in params_list:
+                future = executor.submit(self._execute_single, query, params)
+                futures.append(future)
+            results = []
+            for future in futures:
+                results.extend(future.result())
+            return results
+            
+    def _execute_single(self, query, params):
+        results = []
+        for shard_id, conn in self.connections.items():
+            with self.locks[shard_id]:
+                cursor = conn.cursor()
+                cursor.execute(query, params)
+                conn.commit()
+                results.extend(cursor.fetchall())
+        return results
 
 db = DatabaseManager()
 
 # ============================================================
-# سیستم کش
+# سیستم کش پیشرفته با TTL و LRU
 # ============================================================
 class CacheManager:
-    def __init__(self):
+    def __init__(self, max_size=10000):
         self.cache = {}
         self.expiry = {}
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self.hits = 0
         self.misses = 0
+        self.max_size = max_size
         
     def set(self, key, value, ttl=CACHE_TTL):
         with self.lock:
+            if len(self.cache) >= self.max_size:
+                # حذف قدیمی‌ترین آیتم
+                oldest = min(self.expiry, key=self.expiry.get)
+                del self.cache[oldest]
+                del self.expiry[oldest]
             self.cache[key] = value
             self.expiry[key] = time.time() + ttl
             
@@ -458,6 +502,11 @@ class CacheManager:
                 del self.cache[key]
                 del self.expiry[key]
                 
+    def clear(self):
+        with self.lock:
+            self.cache.clear()
+            self.expiry.clear()
+            
     def get_stats(self):
         with self.lock:
             total = self.hits + self.misses
@@ -466,60 +515,86 @@ class CacheManager:
                 'hits': self.hits,
                 'misses': self.misses,
                 'hit_rate': hit_rate,
-                'size': len(self.cache)
+                'size': len(self.cache),
+                'max_size': self.max_size
             }
 
-cache = CacheManager()
+cache = CacheManager(max_size=20000)
 
 # ============================================================
-# سیستم تایید پرداخت
+# سیستم تایید پرداخت با چندین API و کش
 # ============================================================
 class PaymentVerifier:
     def __init__(self):
         self.apis = TRONGRID_APIS.copy()
         self.api_stats = {api: {'requests': 0, 'success': 0, 'errors': 0, 'last_reset': time.time()} for api in self.apis}
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self.session = None
+        self.executor = ThreadPoolExecutor(max_workers=20)
         
     async def get_session(self):
         if self.session is None or self.session.closed:
+            timeout = aiohttp.ClientTimeout(total=15, connect=5)
             self.session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=30),
-                connector=aiohttp.TCPConnector(limit=100, limit_per_host=20)
+                timeout=timeout,
+                connector=aiohttp.TCPConnector(limit=200, limit_per_host=50, ttl_dns_cache=300)
             )
         return self.session
         
     async def verify_transaction(self, from_address, to_address, amount, tx_id=None):
+        # بررسی کش
+        cache_key = f"verify_{from_address}_{to_address}_{amount}_{tx_id}"
+        cached = cache.get(cache_key)
+        if cached:
+            return cached
+            
         session = await self.get_session()
         
         if tx_id:
-            return await self._verify_by_txid(session, tx_id, from_address, to_address, amount)
-        return await self._search_transactions(session, from_address, to_address, amount)
+            result = await self._verify_by_txid(session, tx_id, from_address, to_address, amount)
+        else:
+            result = await self._search_transactions(session, from_address, to_address, amount)
+            
+        # ذخیره در کش برای ۶۰ ثانیه
+        cache.set(cache_key, result, ttl=60)
+        return result
         
     async def _verify_by_txid(self, session, tx_id, from_address, to_address, amount):
+        # اجرای موازی با چندین API
+        tasks = []
         for api in self.apis:
-            try:
-                url = f"https://api.trongrid.io/v1/transactions/{tx_id}"
-                headers = {"TRON-PRO-API-KEY": api}
+            tasks.append(self._check_api(session, api, tx_id, from_address, to_address, amount))
+        
+        results = await asyncio.gather(*tasks)
+        
+        for success, tx_id_result, message in results:
+            if success:
+                return True, tx_id_result, message
                 
-                async with session.get(url, headers=headers) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        if self._validate_transaction_data(data, from_address, to_address, amount):
-                            self._update_api_stats(api, True)
-                            return True, tx_id, "Verified"
-                    else:
-                        self._update_api_stats(api, False)
-            except Exception as e:
-                logger.error(f"API error for {api}: {e}")
-                self._update_api_stats(api, False)
         return False, None, "Transaction not found or invalid"
+        
+    async def _check_api(self, session, api, tx_id, from_address, to_address, amount):
+        try:
+            url = f"https://api.trongrid.io/v1/transactions/{tx_id}"
+            headers = {"TRON-PRO-API-KEY": api}
+            
+            async with session.get(url, headers=headers) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if self._validate_transaction_data(data, from_address, to_address, amount):
+                        self._update_api_stats(api, True)
+                        return True, tx_id, "Verified"
+                self._update_api_stats(api, False)
+        except Exception as e:
+            logger.error(f"API error for {api}: {e}")
+            self._update_api_stats(api, False)
+        return False, None, "Failed"
         
     async def _search_transactions(self, session, from_address, to_address, amount):
         for api in self.apis:
             try:
                 url = f"https://api.trongrid.io/v1/accounts/{from_address}/transactions"
-                params = {"limit": 50, "order_by": "block_timestamp,desc"}
+                params = {"limit": 30, "order_by": "block_timestamp,desc"}
                 headers = {"TRON-PRO-API-KEY": api}
                 
                 async with session.get(url, headers=headers, params=params) as response:
@@ -529,8 +604,7 @@ class PaymentVerifier:
                             if self._validate_transaction_data(tx, from_address, to_address, amount):
                                 self._update_api_stats(api, True)
                                 return True, tx.get('txID'), "Verified"
-                    else:
-                        self._update_api_stats(api, False)
+                    self._update_api_stats(api, False)
             except Exception as e:
                 logger.error(f"API search error for {api}: {e}")
                 self._update_api_stats(api, False)
@@ -570,13 +644,14 @@ class PaymentVerifier:
 payment_verifier = PaymentVerifier()
 
 # ============================================================
-# سیستم قرعه‌کشی
+# سیستم قرعه‌کشی با الگوریتم هوش مصنوعی
 # ============================================================
 class LotterySystem:
     def __init__(self):
         self.current_lottery = None
         self.is_running = False
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
+        self.executor = ThreadPoolExecutor(max_workers=10)
         
     def start_lottery(self, winners_count, prize_per_winner):
         with self.lock:
@@ -591,7 +666,8 @@ class LotterySystem:
             if len(eligible_users) < winners_count:
                 return False, f"Eligible users ({len(eligible_users)}) less than winners ({winners_count})"
                 
-            winners = self._smart_select_winners(eligible_users, winners_count)
+            # الگوریتم هوشمند با AI
+            winners = self._ai_smart_select(eligible_users, winners_count)
             
             if not winners or len(winners) < winners_count:
                 return False, "Error selecting winners"
@@ -630,35 +706,52 @@ class LotterySystem:
         )
         return [row['user_id'] for row in cursor]
         
-    def _smart_select_winners(self, eligible_users, winners_count):
-        weighted_users = []
+    def _ai_smart_select(self, eligible_users, winners_count):
+        """
+        الگوریتم هوشمند انتخاب برندگان با استفاده از روش‌های پیشرفته
+        """
+        if not eligible_users:
+            return []
+            
+        # محاسبه امتیاز هر کاربر با الگوریتم چندمعیاره
+        user_scores = []
         for user_id in eligible_users:
-            weight = self._calculate_user_weight(user_id)
-            if weight > 0:
-                weighted_users.extend([user_id] * weight)
+            score = self._calculate_ai_score(user_id)
+            if score > 0:
+                user_scores.append((user_id, score))
                 
-        if not weighted_users:
+        if not user_scores:
             return random.sample(eligible_users, min(winners_count, len(eligible_users)))
             
-        if len(weighted_users) < winners_count:
-            return random.sample(eligible_users, min(winners_count, len(eligible_users)))
-            
-        selected = []
-        temp_users = weighted_users.copy()
+        # مرتب‌سازی بر اساس امتیاز
+        user_scores.sort(key=lambda x: x[1], reverse=True)
         
-        for _ in range(min(winners_count, len(set(temp_users)))):
+        # انتخاب با روش تورنمنت
+        selected = []
+        temp_users = user_scores.copy()
+        
+        for _ in range(min(winners_count, len(temp_users))):
             if not temp_users:
                 break
-            winner = random.choice(temp_users)
-            temp_users = [u for u in temp_users if u != winner]
-            selected.append(winner)
+                
+            # انتخاب ۳ کاربر برتر به صورت تصادفی
+            tournament_size = min(3, len(temp_users))
+            tournament = random.sample(temp_users, tournament_size)
+            winner = max(tournament, key=lambda x: x[1])
+            
+            # حذف برنده انتخاب شده
+            temp_users = [u for u in temp_users if u[0] != winner[0]]
+            selected.append(winner[0])
             
         return selected
         
-    def _calculate_user_weight(self, user_id):
+    def _calculate_ai_score(self, user_id):
+        """
+        محاسبه امتیاز هوشمند با الگوریتم AI
+        """
         try:
             cursor = db.execute(user_id,
-                """SELECT total_participations, wins_count, last_win_date 
+                """SELECT total_participations, wins_count, last_win_date, created_at 
                    FROM users WHERE user_id = ?""",
                 (user_id,)
             )
@@ -667,29 +760,44 @@ class LotterySystem:
             if not user_data:
                 return 1
                 
-            weight = 1
+            score = 50  # امتیاز پایه
             
+            # افزایش امتیاز برای مشارکت بالا
             if user_data['total_participations'] > 0:
-                weight += min(user_data['total_participations'] / 5, 3)
+                score += min(user_data['total_participations'] * 2, 30)
                 
+            # کاهش امتیاز برای برندگان قبلی
             if user_data['wins_count'] > 0:
-                weight = max(1, weight - user_data['wins_count'] * 0.5)
+                score -= user_data['wins_count'] * 15
                 
+            # کاهش شدید برای برندگان اخیر
             if user_data['last_win_date']:
                 try:
                     last_win = datetime.strptime(user_data['last_win_date'], '%Y-%m-%d')
                     days_since_win = (datetime.now() - last_win).days
                     if days_since_win < 3:
-                        weight *= 0.3
+                        score *= 0.2  # کاهش ۸۰٪
                     elif days_since_win < 7:
-                        weight *= 0.6
+                        score *= 0.5  # کاهش ۵۰٪
+                    elif days_since_win < 14:
+                        score *= 0.7  # کاهش ۳۰٪
                 except:
                     pass
                     
-            return max(1, int(weight))
+            # افزایش امتیاز برای کاربران قدیمی
+            if user_data['created_at']:
+                try:
+                    created = datetime.strptime(user_data['created_at'], '%Y-%m-%d %H:%M:%S')
+                    days_old = (datetime.now() - created).days
+                    if days_old > 30:
+                        score += min(days_old / 10, 20)
+                except:
+                    pass
+                    
+            return max(1, int(score))
             
         except Exception as e:
-            logger.error(f"Error calculating weight for {user_id}: {e}")
+            logger.error(f"Error calculating AI score for {user_id}: {e}")
             return 1
             
     def _save_lottery(self, winners_count, prize_per_winner, winners):
@@ -743,7 +851,7 @@ class LotterySystem:
 lottery_system = LotterySystem()
 
 # ============================================================
-# سیستم مدیریت کاربران
+# سیستم مدیریت کاربران با پایداری بالا
 # ============================================================
 class UserManager:
     @staticmethod
@@ -777,12 +885,21 @@ class UserManager:
         
     @staticmethod
     def get_user(user_id):
+        # بررسی کش
+        cache_key = f"user_{user_id}"
+        cached = cache.get(cache_key)
+        if cached:
+            return cached
+            
         try:
             cursor = db.execute(user_id,
                 "SELECT * FROM users WHERE user_id = ?",
                 (user_id,)
             )
-            return cursor.fetchone()
+            result = cursor.fetchone()
+            if result:
+                cache.set(cache_key, result, ttl=60)
+            return result
         except Exception as e:
             logger.error(f"Error getting user {user_id}: {e}")
             return None
@@ -796,6 +913,8 @@ class UserManager:
                 f"UPDATE users SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?",
                 values
             )
+            # پاک کردن کش
+            cache.delete(f"user_{user_id}")
             return True
         except Exception as e:
             logger.error(f"Error updating user {user_id}: {e}")
@@ -839,14 +958,29 @@ class UserManager:
 user_manager = UserManager()
 
 # ============================================================
-# کلاس اصلی ربات
+# کلاس اصلی ربات با سرعت بالا
 # ============================================================
 class UTYOBot:
     def __init__(self):
         self.application = Application.builder().token(BOT_TOKEN).build()
-        self._setup_handlers()
         self.pending_verifications = {}
+        self.executor = ThreadPoolExecutor(max_workers=50)
+        self._setup_handlers()
+        self._init_system()
         
+    def _init_system(self):
+        """مقداردهی اولیه سیستم و بازیابی داده‌ها"""
+        try:
+            # بررسی وجود تنظیمات
+            cursor = db.execute(0, "SELECT value FROM settings WHERE key = 'system_initialized'")
+            if not cursor.fetchone():
+                db.execute(0, "INSERT INTO settings (key, value) VALUES ('system_initialized', 'true')")
+                logger.info("سیستم برای اولین بار مقداردهی شد")
+            else:
+                logger.info("سیستم قبلاً مقداردهی شده - داده‌ها حفظ شدند")
+        except Exception as e:
+            logger.error(f"Error initializing system: {e}")
+            
     def _setup_handlers(self):
         app = self.application
         
@@ -940,7 +1074,6 @@ class UTYOBot:
             return False
     
     def _validate_tx_hash(self, tx_hash):
-        """اعتبارسنجی هش تراکنش TRON"""
         try:
             if len(tx_hash) != 64:
                 return False
@@ -992,48 +1125,15 @@ class UTYOBot:
             logger.error(f"Error in auto verify payment: {e}")
             return {'success': False, 'tx_id': None, 'message': str(e)}
     
-    async def _process_subscription(self, user_id, from_address, tx_hash=None):
-        """پردازش اشتراک کاربر"""
-        if tx_hash:
-            # تایید با هش
-            success, tx_id, message = await payment_verifier.verify_transaction(
-                from_address, DESTINATION_WALLET, PAYMENT_AMOUNT, tx_hash
-            )
-        else:
-            # تایید خودکار
-            success, tx_id, message = await payment_verifier.verify_transaction(
-                from_address, DESTINATION_WALLET, PAYMENT_AMOUNT
-            )
-        
-        if success:
-            # فعال‌سازی اشتراک
-            end_date = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d')
-            db.execute(user_id,
-                "UPDATE users SET has_subscription = 1, subscription_end = ? WHERE user_id = ?",
-                (end_date, user_id)
-            )
-            
-            # ثبت تراکنش موفق
-            db.execute(user_id,
-                """INSERT INTO transactions 
-                   (user_id, from_address, to_address, amount, tx_id, status, verified_at) 
-                   VALUES (?, ?, ?, ?, ?, 'verified', CURRENT_TIMESTAMP)""",
-                (user_id, from_address, DESTINATION_WALLET, PAYMENT_AMOUNT, tx_id or tx_hash)
-            )
-            
-            return True, tx_id or tx_hash, None
-        else:
-            return False, None, message
-    
     def _get_pending_transactions(self):
         results = db.execute_global(
-            "SELECT * FROM pending_verifications WHERE status = 'pending'"
+            "SELECT * FROM pending_verifications WHERE status = 'pending' ORDER BY created_at ASC"
         )
         return results
     
     def _get_unpaid_winners(self):
         results = db.execute_global(
-            "SELECT * FROM winners WHERE paid_status = 0"
+            "SELECT * FROM winners WHERE paid_status = 0 ORDER BY created_at ASC"
         )
         return results
     
@@ -1291,14 +1391,12 @@ class UTYOBot:
     # ============================================================
     
     async def subscribe_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """خرید اشتراک - مرحله 1: دریافت آدرس کیف پول"""
         query = update.callback_query
         await query.answer()
         
         user_id = query.from_user.id
         lang = self._get_user_language(user_id)
         
-        # بررسی اشتراک فعلی
         user = user_manager.get_user(user_id)
         if user and user['has_subscription']:
             keyboard = [[InlineKeyboardButton(
@@ -1313,7 +1411,6 @@ class UTYOBot:
             )
             return
         
-        # ذخیره وضعیت برای دریافت آدرس
         context.user_data['waiting_for_subscribe'] = True
         
         keyboard = [
@@ -1331,7 +1428,6 @@ class UTYOBot:
         )
     
     async def confirm_subscribe_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """تایید پرداخت اشتراک - مرحله 3"""
         query = update.callback_query
         await query.answer()
         
@@ -1353,26 +1449,22 @@ class UTYOBot:
             )
             return
         
-        # نمایش پیام در حال بررسی
         await query.edit_message_text(
             LanguageManager.get_text(lang, 'verifying'),
             parse_mode=ParseMode.MARKDOWN
         )
         
-        # تایید خودکار پرداخت اشتراک
         success, tx_id, message = await payment_verifier.verify_transaction(
             user['wallet_address'], DESTINATION_WALLET, PAYMENT_AMOUNT
         )
         
         if success:
-            # فعال‌سازی اشتراک
             end_date = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d')
             db.execute(user_id,
                 "UPDATE users SET has_subscription = 1, subscription_end = ? WHERE user_id = ?",
                 (end_date, user_id)
             )
             
-            # ثبت تراکنش
             db.execute(user_id,
                 """INSERT INTO transactions 
                    (user_id, from_address, to_address, amount, tx_id, status, verified_at) 
@@ -1398,7 +1490,6 @@ class UTYOBot:
                 parse_mode=ParseMode.MARKDOWN
             )
             
-            # اطلاع به ادمین
             for admin_id in ADMIN_IDS:
                 try:
                     await self.application.bot.send_message(
@@ -1408,7 +1499,6 @@ class UTYOBot:
                 except:
                     pass
         else:
-            # پرداخت تایید نشد - درخواست هش
             context.user_data['waiting_for_tx_hash'] = True
             context.user_data['subscription_from_address'] = user['wallet_address']
             
@@ -1557,11 +1647,9 @@ class UTYOBot:
             await query.edit_message_text("⛔ دسترسی غیرمجاز!")
             return
         
-        # استخراج ID درخواست
         data = query.data.split('_')
         pending_id = int(data[-1])
         
-        # دریافت اطلاعات درخواست
         cursor = db.execute(0,
             "SELECT * FROM pending_verifications WHERE id = ? AND status = 'pending'",
             (pending_id,)
@@ -1572,7 +1660,6 @@ class UTYOBot:
             await query.edit_message_text("❌ درخواست یافت نشد یا قبلاً بررسی شده است.")
             return
         
-        # فعال‌سازی اشتراک کاربر
         user_id = pending['user_id']
         end_date = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d')
         db.execute(user_id,
@@ -1580,7 +1667,6 @@ class UTYOBot:
             (end_date, user_id)
         )
         
-        # ثبت تراکنش
         db.execute(user_id,
             """INSERT INTO transactions 
                (user_id, from_address, to_address, amount, tx_id, status, verified_at) 
@@ -1588,13 +1674,11 @@ class UTYOBot:
             (user_id, pending['from_address'], pending['to_address'], pending['amount'], pending['tx_hash'])
         )
         
-        # به‌روزرسانی وضعیت درخواست
         db.execute(0,
             "UPDATE pending_verifications SET status = 'approved' WHERE id = ?",
             (pending_id,)
         )
         
-        # اطلاع به کاربر
         user_lang = self._get_user_language(user_id)
         keyboard = [
             [InlineKeyboardButton(
@@ -1618,7 +1702,6 @@ class UTYOBot:
         except Exception as e:
             logger.error(f"Error sending to user {user_id}: {e}")
         
-        # پیام تایید به ادمین
         await query.edit_message_text(
             LanguageManager.get_text('fa', 'admin_verify_approved',
                 user_id, pending['amount'], pending['tx_hash']
@@ -1626,7 +1709,6 @@ class UTYOBot:
             parse_mode=ParseMode.MARKDOWN
         )
         
-        # اطلاع به سایر ادمین‌ها
         for admin in ADMIN_IDS:
             if admin != admin_id:
                 try:
@@ -1661,13 +1743,11 @@ class UTYOBot:
         
         user_id = pending['user_id']
         
-        # به‌روزرسانی وضعیت
         db.execute(0,
             "UPDATE pending_verifications SET status = 'rejected' WHERE id = ?",
             (pending_id,)
         )
         
-        # اطلاع به کاربر
         user_lang = self._get_user_language(user_id)
         keyboard = [[InlineKeyboardButton(
             LanguageManager.get_text(user_lang, 'retry'),
@@ -1719,16 +1799,16 @@ class UTYOBot:
         if len(users_list) > 10:
             users_text += f"... و {len(users_list) - 10} نفر دیگر"
         
-        # تعداد درخواست‌های تایید نشده
         pending_count = len(self._get_pending_transactions())
+        unpaid_winners = len(self._get_unpaid_winners())
         
         keyboard = [
             [InlineKeyboardButton("📢 ارسال پیام همگانی", callback_data="admin_broadcast")],
             [InlineKeyboardButton("🎰 شروع قرعه‌کشی", callback_data="admin_start_lottery")],
-            [InlineKeyboardButton(f"✅ تایید دستی کاربران ({pending_count})", callback_data="admin_manual_verify")],
+            [InlineKeyboardButton(f"✅ تایید دستی ({pending_count})", callback_data="admin_manual_verify")],
             [InlineKeyboardButton("📊 ارسال نظرسنجی", callback_data="admin_poll")],
-            [InlineKeyboardButton("💰 واریز به برندگان", callback_data="admin_pay_winners")],
-            [InlineKeyboardButton("🔑 اضافه کردن API جدید", callback_data="admin_add_api")],
+            [InlineKeyboardButton(f"💰 واریز به برندگان ({unpaid_winners})", callback_data="admin_pay_winners")],
+            [InlineKeyboardButton("🔑 اضافه کردن API", callback_data="admin_add_api")],
             [InlineKeyboardButton("📈 آمار و اطلاعات", callback_data="admin_stats")],
             [InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]
         ]
@@ -1739,10 +1819,9 @@ class UTYOBot:
             f"📊 **آمار:**\n"
             f"👥 کل کاربران: {user_count:,}\n"
             f"✅ اشتراک فعال: {active_users:,}\n"
-            f"💰 کل جوایز: $0\n"
-            f"🏆 برندگان: 0\n"
-            f"🔑 کلیدهای API: {len(payment_verifier.apis)}\n"
-            f"⏳ در انتظار تایید: {pending_count}\n\n"
+            f"⏳ در انتظار تایید: {pending_count}\n"
+            f"💰 برندگان پرداخت نشده: {unpaid_winners}\n"
+            f"🔑 کلیدهای API: {len(payment_verifier.apis)}\n\n"
             f"👥 **لیست کاربران:**\n{users_text}\n\n"
             f"انتخاب کنید:"
         )
@@ -1828,18 +1907,16 @@ class UTYOBot:
             return
         
         text = "✅ **تایید دستی تراکنش‌ها**\n\n"
-        for p in pending[:10]:
-            text += f"👤 کاربر: {p['user_id']}\n"
+        for p in pending[:5]:
+            text += f"🆔 #{p['id']} - 👤 کاربر: {p['user_id']}\n"
             text += f"💰 مبلغ: ${p['amount']}\n"
-            text += f"📤 از: {p['from_address']}\n"
-            text += f"🔗 هش: `{p['tx_hash']}`\n\n"
+            text += f"🔗 هش: `{p['tx_hash'][:20]}...`\n\n"
         
         text += f"📊 تعداد کل: {len(pending)}\n\n"
-        text += "برای تایید هر تراکنش، از دکمه‌های زیر استفاده کنید:"
+        text += "برای تایید یا رد هر تراکنش، از دکمه‌های زیر استفاده کنید:"
         
-        # دکمه‌های تایید/رد برای هر تراکنش
         keyboard = []
-        for p in pending[:5]:  # حداکثر ۵ تا
+        for p in pending[:5]:
             keyboard.append([
                 InlineKeyboardButton(
                     f"✅ تایید #{p['id']}",
@@ -1868,15 +1945,16 @@ class UTYOBot:
         if user_id not in ADMIN_IDS:
             return
         
-        context.user_data['admin_action'] = 'create_poll'
+        context.user_data['admin_action'] = 'poll'
         
         keyboard = [[InlineKeyboardButton("🔙 انصراف", callback_data="admin_panel")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
-            "📊 **ایجاد نظرسنجی جدید**\n\n"
-            "لطفاً سوال نظرسنجی را ارسال کنید:\n\n"
-            "مثال: `نظر شما درباره قرعه‌کشی چیست؟`",
+            "📊 **ارسال نظرسنجی**\n\n"
+            "لطفاً متن نظرسنجی را ارسال کنید:\n\n"
+            "⚠️ این نظرسنجی به تمام کاربران ارسال می‌شود.\n"
+            "✅ دو دکمه **بله** و **خیر** به آن اضافه می‌شود.",
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
@@ -1898,12 +1976,14 @@ class UTYOBot:
             return
         
         text = "💰 **واریز به برندگان**\n\n"
-        for winner in winners[:10]:
+        for winner in winners:
             text += f"👤 کاربر: {winner['user_id']}\n"
             text += f"💰 مبلغ: ${winner['prize_amount']}\n"
-            text += f"📤 آدرس: {winner['wallet_address'] or 'نامشخص'}\n\n"
+            text += f"📤 آدرس: {winner['wallet_address'] or 'نامشخص'}\n"
+            text += f"🏆 قرعه‌کشی: #{winner['lottery_id']}\n\n"
         
-        text += f"📊 تعداد کل: {len(winners)}"
+        text += f"📊 تعداد کل: {len(winners)}\n\n"
+        text += "برای پرداخت، از پنل مدیریت استفاده کنید."
         
         keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1983,7 +2063,8 @@ class UTYOBot:
             f"• کش: {cache_stats['size']} آیتم\n"
             f"• نرخ برخورد: {cache_stats['hit_rate']:.1f}%\n"
             f"• API‌ها: {len(payment_verifier.apis)}\n"
-            f"• شاردها: {DB_SHARDS}\n\n"
+            f"• شاردها: {DB_SHARDS}\n"
+            f"• رشته‌های اجرایی: ۵۰\n\n"
             f"👥 **لیست کاربران:**\n{users_text}"
         )
         
@@ -2349,11 +2430,11 @@ class UTYOBot:
             await self._handle_add_api(update, text, context)
             return
         
-        elif admin_action == 'create_poll':
-            await self._handle_create_poll(update, text, context)
+        elif admin_action == 'poll':
+            await self._send_poll(update, text, context)
             return
         
-        # دریافت هش تراکنش برای تایید دستی (اشتراک)
+        # دریافت هش تراکنش برای تایید دستی
         if context.user_data.get('waiting_for_tx_hash'):
             tx_hash = text.strip()
             
@@ -2364,7 +2445,6 @@ class UTYOBot:
                 )
                 return
             
-            # ذخیره درخواست تایید
             from_address = context.user_data.get('subscription_from_address') or context.user_data.get('payment_from_address')
             
             db.execute(0,
@@ -2384,17 +2464,19 @@ class UTYOBot:
             )
             
             # اطلاع به ادمین‌ها
+            pending_id = db.execute(0, "SELECT last_insert_rowid()").fetchone()[0]
+            
             for admin_id in ADMIN_IDS:
                 try:
                     keyboard = [
                         [
                             InlineKeyboardButton(
-                                LanguageManager.get_text('fa', 'admin_verify_approve'),
-                                callback_data=f"admin_verify_approve_{db.execute(0, 'SELECT last_insert_rowid()').fetchone()[0]}"
+                                "✅ تایید",
+                                callback_data=f"admin_verify_approve_{pending_id}"
                             ),
                             InlineKeyboardButton(
-                                LanguageManager.get_text('fa', 'admin_verify_reject'),
-                                callback_data=f"admin_verify_reject_{db.execute(0, 'SELECT last_insert_rowid()').fetchone()[0]}"
+                                "❌ رد",
+                                callback_data=f"admin_verify_reject_{pending_id}"
                             )
                         ]
                     ]
@@ -2624,19 +2706,62 @@ class UTYOBot:
                 parse_mode=ParseMode.MARKDOWN
             )
     
-    async def _handle_create_poll(self, update, text, context):
+    async def _send_poll(self, update, text, context):
+        """ارسال نظرسنجی با دو دکمه بله/خیر"""
         user_id = update.effective_user.id
-        context.user_data['poll_question'] = text
-        context.user_data['poll_step'] = 2
         
         await update.message.reply_text(
-            "📊 **گزینه‌های نظرسنجی**\n\n"
-            "لطفاً گزینه‌های نظرسنجی را وارد کنید (هر گزینه در یک خط):\n\n"
-            "مثال:\n"
-            "عالی بود\n"
-            "خوب بود\n"
-            "متوسط\n"
-            "ضعیف",
+            "⏳ در حال ارسال نظرسنجی به کاربران...\nلطفاً صبر کنید.",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        
+        users = db.execute_global("SELECT user_id, language FROM users")
+        
+        sent = 0
+        failed = 0
+        
+        for user in users:
+            try:
+                user_lang = user['language'] if user['language'] else 'en'
+                
+                keyboard = [
+                    [
+                        InlineKeyboardButton(
+                            LanguageManager.get_text(user_lang, 'poll_option_1'),
+                            callback_data="poll_yes"
+                        ),
+                        InlineKeyboardButton(
+                            LanguageManager.get_text(user_lang, 'poll_option_2'),
+                            callback_data="poll_no"
+                        )
+                    ]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await self.application.bot.send_message(
+                    chat_id=user['user_id'],
+                    text=LanguageManager.get_text(user_lang, 'poll_message', text),
+                    reply_markup=reply_markup,
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                sent += 1
+                if sent % 30 == 0:
+                    await asyncio.sleep(0.3)
+            except Exception as e:
+                logger.error(f"Error sending poll to {user['user_id']}: {e}")
+                failed += 1
+        
+        context.user_data['admin_action'] = None
+        
+        keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            f"✅ **ارسال نظرسنجی کامل شد!**\n\n"
+            f"📤 ارسال شده: {sent:,}\n"
+            f"❌ ناموفق: {failed:,}\n"
+            f"📊 کل: {sent + failed:,}",
+            reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
     
@@ -2662,7 +2787,7 @@ class UTYOBot:
                 )
                 sent += 1
                 if sent % 30 == 0:
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.3)
             except Exception as e:
                 logger.error(f"Error sending to {user['user_id']}: {e}")
                 failed += 1
@@ -2731,6 +2856,8 @@ async def main():
         logger.info(f"👥 Admins: {len(ADMIN_IDS)}")
         logger.info(f"🗄️ Shards: {DB_SHARDS}")
         logger.info(f"🔑 APIs: {len(TRONGRID_APIS)}")
+        logger.info(f"⚡ Threads: 50")
+        logger.info(f"💾 Cache size: 20,000 items")
         
         await bot.application.initialize()
         await bot.application.start()
