@@ -36,8 +36,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.environ.get('BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
-ADMIN_IDS = [int(id) for id in os.environ.get('ADMIN_IDS', '123456789').split(',')]
+BOT_TOKEN = os.environ.get('8723263125:AAG_dGKL2MOmh1SrYr8pSt_Goj-4LTtCVC4', '8723263125:AAG_dGKL2MOmh1SrYr8pSt_Goj-4LTtCVC4')
+ADMIN_IDS = [int(id) for id in os.environ.get('327855654', '327855654').split(',')]
 
 TRONGRID_APIS = [
     "7ae83b63-fdf3-47e4-ac69-56f960a34f5b",
