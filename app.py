@@ -1,2303 +1,2121 @@
 # ============================================
-# ULTIMATE LOTTERY SYSTEM - FULLY FIXED
+# LOTTERY BOT WITH WEB APP INTERFACE
+# VERSION: 4.0 ENTERPRISE
+# FULL FEATURES IN SINGLE WEB PAGE
 # ============================================
-# این نسخه تمام خطاها رو برطرف کرده و کاملاً کار میکنه
-# 
-# نصب:
-# pip install python-telegram-bot aiohttp base58 psutil flask flask-session redis
-# 
-# اجرا:
-# python3 app.py
 
 import asyncio
-import json
 import logging
-import secrets
-import string
-import time
+import random
+import json
 import hashlib
 import hmac
-import threading
-import queue
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any, Tuple
-from dataclasses import dataclass, field
-from enum import Enum
-import random
-import uuid
-from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
-import gc
-import os
-
-# ============================================
-# کتابخانه‌های اصلی
-# ============================================
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
-from telegram.ext import (
-    Application, CommandHandler, CallbackQueryHandler, 
-    MessageHandler, filters, ContextTypes, ConversationHandler
-)
-from telegram.constants import ParseMode
-
+import time
+import sqlite3
+import redis
 import aiohttp
 import base58
 import psutil
+import threading
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Tuple, Any
+from dataclasses import dataclass, asdict
+from enum import Enum
+from concurrent.futures import ThreadPoolExecutor
+from cachetools import TTLCache
+from flask import Flask, request, jsonify, render_template_string
+from flask_cors import CORS
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, ParseMode
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
-# ============================================
-# Flask Web Framework
-# ============================================
-from flask import Flask, render_template_string, request, jsonify, session, redirect, url_for
-from flask_session import Session
-import redis
-
-# ============================================
-# تنظیمات
-# ============================================
+# ============ CONFIGURATION ============
 class Config:
-    BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
-    BOT_USERNAME = "@UTYOB_Bot"
-    ADMIN_CHAT_ID = 123456789
+    BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"  # Replace with your token
+    ADMIN_IDS = [123456789]  # Replace with your admin IDs
+    WEBAPP_URL = "https://your-domain.com"  # Replace with your domain
     
-    PAYMENT_ADDRESS = "TV61aTh98MGqmteYzda5AaBzdXgGqreG6A"
-    PAYMENT_AMOUNT = 100.0
+    # TronGrid Configuration
+    TRONGRID_API = "https://api.trongrid.io"
+    CONTRACT_ADDRESS = "TV61aTh98MGqmteYzda5AaBzdXgGqreG6A"
+    USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+    API_KEY = "7ae83b63-fdf3-47e4-ac69-56f960a34f5b"
     
-    API_KEYS = [
-        "7ae83b63-fdf3-47e4-ac69-56f960a34f5b",
-    ]
-    
-    SHARD_COUNT = 300
+    # Database
     REDIS_URL = "redis://localhost:6379/0"
-    REDIS_CACHE_TTL = 3600
+    SHARD_COUNT = 100
     
-    LANGUAGES = ["en", "fa", "ar"]
+    # Performance
+    MAX_WORKERS = 100
+    CACHE_SIZE = 10000
+    
+    # Lottery Settings
+    LOTTERY_COST = 100  # USDT
+    
+    # Language Settings
     DEFAULT_LANGUAGE = "en"
-    
-    MIN_PARTICIPANTS = 10
-    MAX_WINNERS = 1000
-    
-    JWT_SECRET = "your-super-secret-jwt-key-change-this"
-    WEBAPP_URL = "http://localhost:5000"
+    SUPPORTED_LANGUAGES = ["en", "fa", "tr"]
 
-config = Config()
-
-# ============================================
-# سیستم شاردینگ
-# ============================================
-class ConsistentHashRing:
-    def __init__(self, nodes: List[int], replicas: int = 150):
-        self.nodes = nodes
-        self.replicas = replicas
-        self.ring = {}
-        self.sorted_keys = []
-        self._build_ring()
-    
-    def _build_ring(self):
-        for node in self.nodes:
-            for i in range(self.replicas):
-                key = f"{node}:{i}"
-                hash_val = self._hash(key)
-                self.ring[hash_val] = node
-        self.sorted_keys = sorted(self.ring.keys())
-    
-    def _hash(self, key: str) -> int:
-        return int(hashlib.md5(key.encode()).hexdigest(), 16)
-    
-    def get_node(self, key: str) -> int:
-        if not self.ring:
-            return 0
-        hash_val = self._hash(key)
-        for ring_key in self.sorted_keys:
-            if hash_val <= ring_key:
-                return self.ring[ring_key]
-        return self.ring[self.sorted_keys[0]]
-
-# ============================================
-# دیتابیس شارد شده با تمام متدها
-# ============================================
-class ShardedDatabase:
-    def __init__(self):
-        self.shard_count = config.SHARD_COUNT
-        self.ring = ConsistentHashRing(list(range(self.shard_count)))
-        self.data = {f"shard_{i}": {} for i in range(self.shard_count)}
-        self.locks = {f"shard_{i}": asyncio.Lock() for i in range(self.shard_count)}
-        self._init_shards()
-    
-    def _init_shards(self):
-        for i in range(self.shard_count):
-            try:
-                with open(f"shard_{i}.json", "r") as f:
-                    self.data[f"shard_{i}"] = json.load(f)
-            except:
-                self.data[f"shard_{i}"] = {
-                    "users": {},
-                    "transactions": {},
-                    "lotteries": [],
-                    "winners": [],
-                    "previous_winners": [],
-                    "current_lottery": None
-                }
-                self._save_shard(i)
-    
-    def _save_shard(self, shard_id: int):
-        try:
-            with open(f"shard_{shard_id}.json", "w") as f:
-                json.dump(self.data[f"shard_{shard_id}"], f, indent=2, default=str)
-        except Exception as e:
-            logging.error(f"Error saving shard {shard_id}: {e}")
-    
-    def get_shard_id(self, user_id: int) -> int:
-        return self.ring.get_node(str(user_id))
-    
-    async def get_user(self, user_id: int) -> Optional[Dict]:
-        shard_id = self.get_shard_id(user_id)
-        shard_key = f"shard_{shard_id}"
-        async with self.locks[shard_key]:
-            return self.data[shard_key]["users"].get(str(user_id))
-    
-    async def save_user(self, user_id: int, data: Dict):
-        shard_id = self.get_shard_id(user_id)
-        shard_key = f"shard_{shard_id}"
-        async with self.locks[shard_key]:
-            self.data[shard_key]["users"][str(user_id)] = data
-            self._save_shard(shard_id)
-    
-    async def get_all_users(self) -> List[Dict]:
-        all_users = []
-        for i in range(self.shard_count):
-            shard_key = f"shard_{i}"
-            async with self.locks[shard_key]:
-                users = list(self.data[shard_key]["users"].values())
-                all_users.extend(users)
-        return all_users
-    
-    async def get_users_with_subscription(self) -> List[Dict]:
-        users = await self.get_all_users()
-        return [u for u in users if u.get("has_subscription", False)]
-    
-    async def get_transaction(self, tx_id: str) -> Optional[Dict]:
-        for i in range(self.shard_count):
-            shard_key = f"shard_{i}"
-            async with self.locks[shard_key]:
-                tx = self.data[shard_key]["transactions"].get(tx_id)
-                if tx:
-                    return tx
-        return None
-    
-    async def save_transaction(self, tx_id: str, data: Dict):
-        shard_id = self.get_shard_id(data.get("user_id", 0))
-        shard_key = f"shard_{shard_id}"
-        async with self.locks[shard_key]:
-            self.data[shard_key]["transactions"][tx_id] = data
-            self._save_shard(shard_id)
-    
-    async def get_current_lottery(self) -> Optional[Dict]:
-        shard_key = "shard_0"
-        async with self.locks[shard_key]:
-            return self.data[shard_key].get("current_lottery")
-    
-    async def set_current_lottery(self, lottery: Dict):
-        shard_key = "shard_0"
-        async with self.locks[shard_key]:
-            self.data[shard_key]["current_lottery"] = lottery
-            self._save_shard(0)
-    
-    async def add_lottery(self, lottery: Dict):
-        shard_key = "shard_0"
-        async with self.locks[shard_key]:
-            if "lotteries" not in self.data[shard_key]:
-                self.data[shard_key]["lotteries"] = []
-            self.data[shard_key]["lotteries"].append(lottery)
-            self._save_shard(0)
-    
-    async def get_all_lotteries(self) -> List[Dict]:
-        """دریافت همه قرعه‌کشی‌ها - متد جدید"""
-        shard_key = "shard_0"
-        async with self.locks[shard_key]:
-            return self.data[shard_key].get("lotteries", [])
-    
-    async def get_previous_winners(self) -> List[int]:
-        winners = []
-        for i in range(self.shard_count):
-            shard_key = f"shard_{i}"
-            async with self.locks[shard_key]:
-                shard_winners = self.data[shard_key].get("previous_winners", [])
-                winners.extend(shard_winners)
-        return winners
-    
-    async def add_previous_winner(self, user_id: int):
-        shard_id = self.get_shard_id(user_id)
-        shard_key = f"shard_{shard_id}"
-        async with self.locks[shard_key]:
-            if "previous_winners" not in self.data[shard_key]:
-                self.data[shard_key]["previous_winners"] = []
-            if user_id not in self.data[shard_key]["previous_winners"]:
-                self.data[shard_key]["previous_winners"].append(user_id)
-                self._save_shard(shard_id)
-    
-    async def get_user_count(self) -> int:
-        count = 0
-        for i in range(self.shard_count):
-            shard_key = f"shard_{i}"
-            async with self.locks[shard_key]:
-                count += len(self.data[shard_key]["users"])
-        return count
-    
-    async def get_subscribed_count(self) -> int:
-        users = await self.get_all_users()
-        return len([u for u in users if u.get("has_subscription", False)])
-
-db = ShardedDatabase()
-
-# ============================================
-# سیستم کش
-# ============================================
-class CacheManager:
-    def __init__(self):
-        self.redis = None
-        self.memory_cache = {}
-        self.memory_cache_ttl = {}
-        self._lock = asyncio.Lock()
-        self._enabled = True
-        self._init_redis()
-    
-    def _init_redis(self):
-        try:
-            self.redis = redis.Redis.from_url(
-                config.REDIS_URL,
-                decode_responses=True,
-                socket_timeout=5,
-                socket_connect_timeout=5,
-                retry_on_timeout=True
-            )
-            self.redis.ping()
-            logging.info("✅ Redis connected")
-        except Exception as e:
-            logging.warning(f"⚠️ Redis failed: {e}")
-            self._enabled = False
-    
-    async def get(self, key: str) -> Optional[str]:
-        if key in self.memory_cache:
-            if self.memory_cache_ttl.get(key, 0) > time.time():
-                return self.memory_cache[key]
-            else:
-                del self.memory_cache[key]
-                del self.memory_cache_ttl[key]
-        
-        if self._enabled and self.redis:
-            try:
-                value = self.redis.get(key)
-                if value:
-                    self.memory_cache[key] = value
-                    self.memory_cache_ttl[key] = time.time() + 300
-                    return value
-            except:
-                pass
-        return None
-    
-    async def set(self, key: str, value: str, ttl: int = config.REDIS_CACHE_TTL):
-        self.memory_cache[key] = value
-        self.memory_cache_ttl[key] = time.time() + min(ttl, 300)
-        
-        if self._enabled and self.redis:
-            try:
-                self.redis.setex(key, ttl, value)
-            except:
-                pass
-    
-    async def delete(self, key: str):
-        if key in self.memory_cache:
-            del self.memory_cache[key]
-            del self.memory_cache_ttl[key]
-        
-        if self._enabled and self.redis:
-            try:
-                self.redis.delete(key)
-            except:
-                pass
-    
-    async def incr(self, key: str) -> int:
-        if self._enabled and self.redis:
-            try:
-                return self.redis.incr(key)
-            except:
-                pass
-        current = int(self.memory_cache.get(key, 0))
-        new_value = current + 1
-        self.memory_cache[key] = str(new_value)
-        self.memory_cache_ttl[key] = time.time() + 300
-        return new_value
-
-cache = CacheManager()
-
-# ============================================
-# ترجمه
-# ============================================
-class Translator:
-    def __init__(self):
-        self.translations = {
-            "en": {
-                "welcome": "🎰 *ULTIMATE LOTTERY BOT*\n\n💰 Join the biggest lottery!\n🏆 Win up to $10,000!\n📱 Click PLAY to open the app.",
-                "start": "🚀 *Welcome!*\n\n1️⃣ Subscribe: Send 100 USDT\n2️⃣ Get entered into lottery\n3️⃣ Win amazing prizes!\n\n🎯 Your code: `{code}`",
-                "referral": "🔗 *Referral Program*\n\nYour code: `{code}`\n\n🎁 Get $10 per friend!\n\nShare: https://t.me/{bot}?start={code}",
-                "subscribe": "💎 *Subscribe*\n\n💰 Send 100 USDT to:\n`{address}`\n\n📝 Enter your TRC20 wallet:",
-                "invalid_wallet": "❌ Invalid TRC20 address.",
-                "wallet_saved": "✅ Wallet saved!\n\n💰 Send 100 USDT to:\n`{address}`\n\n🔄 Click Verify Payment.",
-                "payment_verified": "✅ *PAYMENT VERIFIED!*\n\n🎉 You're subscribed!\n🏆 Good luck!",
-                "payment_failed": "❌ Payment failed.\n\nCheck:\n• Amount: 100 USDT\n• Address: {address}",
-                "already_subscribed": "✅ You already have an active subscription!",
-                "no_subscription": "⚠️ You need an active subscription.",
-                "lottery_started": "🎰 *LOTTERY STARTED!*\n\n👥 Participants: {participants}\n💰 Prize: ${prize_pool}\n🏆 Winners: {winners_count}",
-                "congratulations": "🎊 *CONGRATULATIONS!*\n\n🏆 You won ${amount}!\n\n💰 Click Withdraw.",
-                "not_winner": "😔 Better luck next time!\n\n🎯 Stay subscribed.",
-                "withdraw": "💰 *Withdraw*\n\nEnter your TRC20 wallet:",
-                "withdraw_success": "✅ *Withdrawal Submitted!*\n\n💰 Prize will be sent shortly.",
-                "admin_panel": "⚙️ *ADMIN PANEL*\n\n👥 Users: {users}\n🎯 Subscribed: {subscribed}\n🏆 Winners: {winners}",
-                "broadcast_sent": "✅ Broadcast sent to {count} users!",
-                "manual_verify_done": "✅ Transaction verified manually!",
-                "api_added": "✅ API key added!",
-                "withdraw_done": "✅ Withdrawals processed for {count} winners!",
-                "restart_done": "✅ Lottery restarted!",
-                "survey_sent": "✅ Survey sent to {count} users!",
-                "lang_changed": "🌐 Language changed to {lang}",
-                "help": "📖 *Help*\n\n1️⃣ Subscribe: Send 100 USDT\n2️⃣ Participate: Auto-entry\n3️⃣ Win: Fair draw\n4️⃣ Withdraw: Claim prize",
-                "cancel": "❌ Cancelled.",
-                "admin_broadcast": "📢 Enter broadcast message:",
-                "admin_manual_verify": "✅ Enter transaction ID:",
-                "admin_add_api": "🔑 Enter new API key:",
-                "admin_survey": "📊 Enter survey question:",
-                "admin_winners": "🏆 Enter number of winners:",
-                "admin_prize": "💰 Enter prize amount:",
-                "user_status": "👤 User Status",
-                "subscription": "📅 Subscription",
-                "wallet": "🏦 Wallet",
-                "not_set": "Not Set",
-                "active": "Active",
-                "inactive": "Inactive",
-                "winner": "🏆 Winner",
-                "total_won": "💰 Total Won",
-                "referrals": "👥 Referrals",
-                "earnings": "💵 Earnings",
-                "share": "📤 Share",
-                "copy": "📋 Copy",
-                "refresh": "🔄 Refresh",
-                "loading": "⏳ Loading...",
-                "error": "❌ An error occurred.",
-                "copied": "✅ Copied!",
-                "home": "Home",
-                "participate": "Participate",
-                "winners": "Winners",
-                "all_winners": "All Winners",
-                "subscribe_now": "Subscribe Now",
-                "expires": "Expires",
-                "app_title": "🎰 Ultimate Lottery",
-                "view_all": "View All",
-                "no_active_lottery": "No active lottery",
-                "no_winners": "No winners yet",
-                "your_code": "Your Code",
-                "payment_address": "Payment Address",
-                "enter_wallet": "Enter Wallet",
-                "submit": "Submit",
-                "verify_payment": "Verify Payment",
-                "saving": "Saving...",
-                "checking": "Checking...",
-                "waiting_for_draw": "Waiting for the draw...",
-                "you_are_winner": "🏆 You are a winner!",
-                "withdraw_now": "Withdraw Now",
-                "subscription_active": "Subscription Active!",
-                "send_amount": "Send Amount",
-            },
-            "fa": {
-                "welcome": "🎰 *ربات قرعه‌کشی فوق‌پیشرفته*\n\n💰 در بزرگ‌ترین قرعه‌کشی شرکت کنید!\n🏆 تا ۱۰,۰۰۰ دلار برنده شوید!\n📱 روی PLAY کلیک کنید.",
-                "start": "🚀 *خوش آمدید!*\n\n۱️⃣ اشتراک: ارسال ۱۰۰ دلار\n۲️⃣ وارد قرعه‌کشی شوید\n۳️⃣ جوایز شگفت‌انگیز ببرید!\n\n🎯 کد شما: `{code}`",
-                "referral": "🔗 *برنامه رفرال*\n\nکد شما: `{code}`\n\n🎁 به ازای هر دوست ۱۰ دلار!\n\nلینک: https://t.me/{bot}?start={code}",
-                "subscribe": "💎 *اشتراک*\n\n💰 ۱۰۰ دلار به آدرس زیر:\n`{address}`\n\n📝 آدرس TRC20 خود را وارد کنید:",
-                "invalid_wallet": "❌ آدرس TRC20 نامعتبر.",
-                "wallet_saved": "✅ کیف پول ذخیره شد!\n\n💰 ۱۰۰ دلار به:\n`{address}`\n\n🔄 روی تایید پرداخت کلیک کنید.",
-                "payment_verified": "✅ *پرداخت تایید شد!*\n\n🎉 شما ثبت نام کردید!\n🏆 موفق باشید!",
-                "payment_failed": "❌ پرداخت ناموفق.\n\nبررسی:\n• مبلغ: ۱۰۰ دلار\n• آدرس: {address}",
-                "already_subscribed": "✅ شما اشتراک فعال دارید!",
-                "no_subscription": "⚠️ به اشتراک فعال نیاز دارید.",
-                "lottery_started": "🎰 *قرعه‌کشی شروع شد!*\n\n👥 شرکت‌کنندگان: {participants}\n💰 جایزه: ${prize_pool}\n🏆 برندگان: {winners_count}",
-                "congratulations": "🎊 *تبریک!*\n\n🏆 شما ${amount} برنده شدید!\n\n💰 روی برداشت کلیک کنید.",
-                "not_winner": "😔 دفعه بعد!\n\n🎯 اشتراک خود را حفظ کنید.",
-                "withdraw": "💰 *برداشت*\n\nآدرس TRC20 خود را وارد کنید:",
-                "withdraw_success": "✅ *برداشت ثبت شد!*\n\n💰 جایزه به زودی واریز می‌شود.",
-                "admin_panel": "⚙️ *پنل مدیریت*\n\n👥 کاربران: {users}\n🎯 اشتراک‌داران: {subscribed}\n🏆 برندگان: {winners}",
-                "broadcast_sent": "✅ پیام به {count} کاربر ارسال شد!",
-                "manual_verify_done": "✅ تراکنش تایید شد!",
-                "api_added": "✅ کلید API اضافه شد!",
-                "withdraw_done": "✅ واریز برای {count} برنده انجام شد!",
-                "restart_done": "✅ قرعه‌کشی مجدداً شروع شد!",
-                "survey_sent": "✅ نظر سنجی به {count} کاربر ارسال شد!",
-                "lang_changed": "🌐 زبان به {lang} تغییر یافت",
-                "help": "📖 *راهنما*\n\n۱️⃣ اشتراک: ارسال ۱۰۰ دلار\n۲️⃣ شرکت: ثبت خودکار\n۳️⃣ برنده شدن: قرعه‌کشی عادلانه\n۴️⃣ برداشت: دریافت جایزه",
-                "cancel": "❌ لغو شد.",
-                "admin_broadcast": "📢 پیام همگانی را وارد کنید:",
-                "admin_manual_verify": "✅ شناسه تراکنش را وارد کنید:",
-                "admin_add_api": "🔑 کلید API جدید را وارد کنید:",
-                "admin_survey": "📊 سوال نظر سنجی را وارد کنید:",
-                "admin_winners": "🏆 تعداد برندگان را وارد کنید:",
-                "admin_prize": "💰 مبلغ جایزه را وارد کنید:",
-                "user_status": "👤 وضعیت کاربر",
-                "subscription": "📅 اشتراک",
-                "wallet": "🏦 کیف پول",
-                "not_set": "تنظیم نشده",
-                "active": "فعال",
-                "inactive": "غیرفعال",
-                "winner": "🏆 برنده",
-                "total_won": "💰 مجموع برداشت",
-                "referrals": "👥 رفرال",
-                "earnings": "💵 درآمد",
-                "share": "📤 اشتراک‌گذاری",
-                "copy": "📋 کپی",
-                "refresh": "🔄 بروزرسانی",
-                "loading": "⏳ در حال بارگذاری...",
-                "error": "❌ خطایی رخ داد.",
-                "copied": "✅ کپی شد!",
-                "home": "خانه",
-                "participate": "شرکت",
-                "winners": "برندگان",
-                "all_winners": "همه برندگان",
-                "subscribe_now": "اشتراک فوری",
-                "expires": "انقضا",
-                "app_title": "🎰 قرعه‌کشی فوق‌پیشرفته",
-                "view_all": "مشاهده همه",
-                "no_active_lottery": "قرعه‌کشی فعالی وجود ندارد",
-                "no_winners": "هنوز برنده‌ای وجود ندارد",
-                "your_code": "کد شما",
-                "payment_address": "آدرس پرداخت",
-                "enter_wallet": "ورود کیف پول",
-                "submit": "ثبت",
-                "verify_payment": "تایید پرداخت",
-                "saving": "در حال ذخیره...",
-                "checking": "در حال بررسی...",
-                "waiting_for_draw": "در انتظار قرعه‌کشی...",
-                "you_are_winner": "🏆 شما برنده شدید!",
-                "withdraw_now": "برداشت فوری",
-                "subscription_active": "اشتراک فعال است!",
-                "send_amount": "مبلغ ارسال",
-            },
-            "ar": {
-                "welcome": "🎰 *يانصيب المتطور*\n\n💰 شارك في أكبر يانصيب!\n🏆 اربح حتى ۱۰,۰۰۰ دولار!\n📱 اضغط PLAY لفتح التطبيق.",
-                "start": "🚀 *مرحباً!*\n\n۱️⃣ اشترك: أرسل ۱۰۰ دولار\n۲️⃣ ادخل اليانصيب\n۳️⃣ اربح جوائز!\n\n🎯 رمزك: `{code}`",
-                "referral": "🔗 *برنامج الإحالة*\n\nرمزك: `{code}`\n\n🎁 ۱۰ دولار لكل صديق!\n\nرابط: https://t.me/{bot}?start={code}",
-                "subscribe": "💎 *اشتراك*\n\n💰 أرسل ۱۰۰ دولار إلى:\n`{address}`\n\n📝 أدخل محفظة TRC20:",
-                "invalid_wallet": "❌ عنوان TRC20 غير صالح.",
-                "wallet_saved": "✅ تم حفظ المحفظة!\n\n💰 أرسل ۱۰۰ دولار إلى:\n`{address}`\n\n🔄 اضغط التحقق من الدفع.",
-                "payment_verified": "✅ *تم التحقق!*\n\n🎉 تم الاشتراك!\n🏆 حظاً سعيداً!",
-                "payment_failed": "❌ فشل الدفع.\n\nتحقق:\n• المبلغ: ۱۰۰ دولار\n• العنوان: {address}",
-                "already_subscribed": "✅ لديك اشتراك نشط!",
-                "no_subscription": "⚠️ تحتاج إلى اشتراك نشط.",
-                "lottery_started": "🎰 *بدأ اليانصيب!*\n\n👥 المشاركون: {participants}\n💰 الجائزة: ${prize_pool}\n🏆 الفائزون: {winners_count}",
-                "congratulations": "🎊 *تهانينا!*\n\n🏆 لقد فزت بـ ${amount}!\n\n💰 اضغط سحب.",
-                "not_winner": "😔 حظاً أوفر!\n\n🎯 استمر في الاشتراك.",
-                "withdraw": "💰 *سحب*\n\nأدخل محفظة TRC20:",
-                "withdraw_success": "✅ *تم السحب!*\n\n💰 سيتم إرسال الجائزة قريباً.",
-                "admin_panel": "⚙️ *لوحة الإدارة*\n\n👥 المستخدمون: {users}\n🎯 المشتركون: {subscribed}\n🏆 الفائزون: {winners}",
-                "broadcast_sent": "✅ تم الإرسال إلى {count} مستخدم!",
-                "manual_verify_done": "✅ تم التحقق يدوياً!",
-                "api_added": "✅ تم إضافة المفتاح!",
-                "withdraw_done": "✅ تم الدفع لـ {count} فائز!",
-                "restart_done": "✅ تم إعادة بدء اليانصيب!",
-                "survey_sent": "✅ تم إرسال الاستبيان إلى {count} مستخدم!",
-                "lang_changed": "🌐 تم تغيير اللغة إلى {lang}",
-                "help": "📖 *مساعدة*\n\n۱️⃣ اشترك: أرسل ۱۰۰ دولار\n۲️⃣ شارك: تسجيل تلقائي\n۳️⃣ اربح: سحب عادل\n۴️⃣ اسحب: استلام الجائزة",
-                "cancel": "❌ تم الإلغاء.",
-                "admin_broadcast": "📢 أدخل رسالة البث:",
-                "admin_manual_verify": "✅ أدخل معرف المعاملة:",
-                "admin_add_api": "🔑 أدخل مفتاح API الجديد:",
-                "admin_survey": "📊 أدخل سؤال الاستبيان:",
-                "admin_winners": "🏆 أدخل عدد الفائزين:",
-                "admin_prize": "💰 أدخل قيمة الجائزة:",
-                "user_status": "👤 حالة المستخدم",
-                "subscription": "📅 الاشتراك",
-                "wallet": "🏦 المحفظة",
-                "not_set": "غير محدد",
-                "active": "نشط",
-                "inactive": "غير نشط",
-                "winner": "🏆 فائز",
-                "total_won": "💰 إجمالي الفوز",
-                "referrals": "👥 الإحالات",
-                "earnings": "💵 الأرباح",
-                "share": "📤 مشاركة",
-                "copy": "📋 نسخ",
-                "refresh": "🔄 تحديث",
-                "loading": "⏳ جاري التحميل...",
-                "error": "❌ حدث خطأ.",
-                "copied": "✅ تم النسخ!",
-                "home": "الرئيسية",
-                "participate": "المشاركة",
-                "winners": "الفائزون",
-                "all_winners": "جميع الفائزين",
-                "subscribe_now": "اشتراك فوري",
-                "expires": "ينتهي",
-                "app_title": "🎰 اليانصيب المتطور",
-                "view_all": "عرض الكل",
-                "no_active_lottery": "لا يوجد يانصيب نشط",
-                "no_winners": "لا يوجد فائزون حتى الآن",
-                "your_code": "رمزك",
-                "payment_address": "عنوان الدفع",
-                "enter_wallet": "أدخل المحفظة",
-                "submit": "إرسال",
-                "verify_payment": "التحقق من الدفع",
-                "saving": "جاري الحفظ...",
-                "checking": "جاري التحقق...",
-                "waiting_for_draw": "في انتظار السحب...",
-                "you_are_winner": "🏆 أنت فائز!",
-                "withdraw_now": "سحب الآن",
-                "subscription_active": "الاشتراك نشط!",
-                "send_amount": "المبلغ المرسل",
-            }
-        }
-    
-    def get(self, key: str, lang: str = "en", **kwargs) -> str:
-        text = self.translations.get(lang, self.translations["en"]).get(key, key)
-        return text.format(**kwargs) if kwargs else text
-
-translator = Translator()
-
-# ============================================
-# سرویس پرداخت
-# ============================================
-class TronPaymentService:
-    def __init__(self):
-        self.api_url = "https://api.trongrid.io"
-        self.api_keys = config.API_KEYS
-        self.current_key_index = 0
-        self.session = None
-    
-    async def get_session(self):
-        if self.session is None:
-            self.session = aiohttp.ClientSession()
-        return self.session
-    
-    def get_next_api_key(self) -> str:
-        key = self.api_keys[self.current_key_index]
-        self.current_key_index = (self.current_key_index + 1) % len(self.api_keys)
-        return key
-    
-    async def verify_transaction(self, tx_id: str, from_address: str, 
-                                  to_address: str, amount: float) -> Dict:
-        session = await self.get_session()
-        api_key = self.get_next_api_key()
-        
-        try:
-            url = f"{self.api_url}/v1/transactions/{tx_id}"
-            headers = {"TRON-PRO-API-KEY": api_key}
-            
-            async with session.get(url, headers=headers, timeout=10) as response:
-                if response.status != 200:
-                    return {"status": "failed", "error": f"API error: {response.status}"}
-                
-                data = await response.json()
-                tx_data = data.get("data", [{}])[0]
-                
-                if not tx_data:
-                    return {"status": "failed", "error": "Transaction not found"}
-                
-                contract = tx_data.get("raw_data", {}).get("contract", [{}])[0]
-                value = contract.get("parameter", {}).get("value", {})
-                
-                to_addr = value.get("to_address", "")
-                if to_addr:
-                    to_addr = self._hex_to_base58(to_addr)
-                
-                if to_addr != to_address:
-                    return {"status": "failed", "error": "Recipient mismatch"}
-                
-                amount_sun = value.get("amount", 0)
-                amount_usd = amount_sun / 1_000_000
-                
-                if abs(amount_usd - amount) > 0.01:
-                    return {"status": "failed", "error": f"Amount mismatch"}
-                
-                confirmations = tx_data.get("confirmations", 0)
-                if confirmations < 19:
-                    return {"status": "pending", "confirmations": confirmations}
-                
-                return {
-                    "status": "verified",
-                    "tx_id": tx_id,
-                    "from_address": from_address,
-                    "to_address": to_address,
-                    "amount": amount_usd,
-                    "confirmations": confirmations
-                }
-                
-        except Exception as e:
-            return {"status": "failed", "error": str(e)}
-    
-    def _hex_to_base58(self, hex_address: str) -> str:
-        try:
-            if hex_address.startswith("0x"):
-                hex_address = hex_address[2:]
-            address_bytes = bytes.fromhex(hex_address)
-            return base58.b58encode(address_bytes).decode()
-        except:
-            return hex_address
-    
-    async def close(self):
-        if self.session:
-            await self.session.close()
-
-payment_service = TronPaymentService()
-
-# ============================================
-# الگوریتم قرعه‌کشی
-# ============================================
-class AdvancedLotteryAlgorithm:
-    def __init__(self):
-        self.previous_winners = set()
-    
-    async def select_winners(self, participants: List[int], winners_count: int) -> List[int]:
-        prev_winners = await db.get_previous_winners()
-        self.previous_winners = set(prev_winners)
-        
-        eligible = [p for p in participants if p not in self.previous_winners]
-        
-        if len(eligible) < winners_count:
-            eligible = participants
-        
-        entropy = self._collect_entropy()
-        random.seed(entropy)
-        
-        shuffled = eligible.copy()
-        for i in range(len(shuffled) - 1, 0, -1):
-            j = random.randint(0, i)
-            shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
-        
-        winners = shuffled[:winners_count]
-        
-        for w in winners:
-            await db.add_previous_winner(w)
-            self.previous_winners.add(w)
-        
-        return winners
-    
-    def _collect_entropy(self) -> int:
-        return (
-            int(time.time_ns()) ^
-            random.getrandbits(128) ^
-            int(psutil.cpu_percent(interval=0.1) * 1000) ^
-            int(psutil.virtual_memory().available)
-        )
-
-lottery_algorithm = AdvancedLotteryAlgorithm()
-
-# ============================================
-# Flask Web App
-# ============================================
-app = Flask(__name__)
-app.secret_key = config.JWT_SECRET
-app.config['SESSION_TYPE'] = 'filesystem'
-app.config['SESSION_PERMANENT'] = False
-app.config['SESSION_USE_SIGNER'] = True
-Session(app)
-
-# ============================================
-# HTML Template
-# ============================================
-WEBAPP_TEMPLATE = """
+# ============ HTML WEBAPP INTERFACE ============
+WEBAPP_HTML = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>🎰 Ultimate Lottery</title>
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <title>🎰 Lottery Bot</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: var(--tg-theme-bg-color, #ffffff);
-            color: var(--tg-theme-text-color, #000000);
-            min-height: 100vh;
-            padding: 16px;
-            padding-bottom: 80px;
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
         }
-        .container { max-width: 480px; margin: 0 auto; }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: linear-gradient(135deg, #0a0b1e 0%, #1a1b3e 50%, #2a1b4e 100%);
+            min-height: 100vh;
+            color: #ffffff;
+            padding: 0;
+            margin: 0;
+            overflow-x: hidden;
+            position: relative;
+        }
+        
+        /* Animated Background */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: 
+                radial-gradient(circle at 20% 50%, rgba(120, 80, 255, 0.1) 0%, transparent 50%),
+                radial-gradient(circle at 80% 50%, rgba(255, 80, 150, 0.1) 0%, transparent 50%);
+            pointer-events: none;
+            z-index: 0;
+        }
+        
+        .container {
+            max-width: 420px;
+            margin: 0 auto;
+            padding: 12px 16px 100px 16px;
+            position: relative;
+            z-index: 1;
+        }
+        
+        /* Header */
         .header {
             display: flex;
-            align-items: center;
             justify-content: space-between;
-            padding: 12px 0;
-            border-bottom: 1px solid var(--tg-theme-secondary-bg-color, #e0e0e0);
-            margin-bottom: 16px;
-        }
-        .header-title {
-            font-size: 22px;
-            font-weight: 700;
-            display: flex;
             align-items: center;
-            gap: 10px;
+            padding: 12px 0;
+            margin-bottom: 16px;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
         }
-        .header-title .logo { font-size: 28px; }
-        .lang-selector { display: flex; gap: 6px; }
-        .lang-btn {
-            background: var(--tg-theme-secondary-bg-color, #f0f0f0);
-            border: none;
-            padding: 4px 10px;
-            border-radius: 6px;
-            font-size: 12px;
-            cursor: pointer;
-            color: var(--tg-theme-text-color, #000);
-            transition: all 0.2s;
-        }
-        .lang-btn.active {
-            background: var(--tg-theme-button-color, #0088cc);
-            color: var(--tg-theme-button-text-color, #fff);
-        }
-        .card {
-            background: var(--tg-theme-secondary-bg-color, #f5f5f5);
-            border-radius: 12px;
-            padding: 16px;
-            margin-bottom: 12px;
-            transition: all 0.3s;
-        }
-        .card-title {
-            font-size: 16px;
-            font-weight: 600;
-            margin-bottom: 10px;
+        
+        .logo {
             display: flex;
             align-items: center;
             gap: 8px;
         }
-        .info-row {
-            display: flex;
-            justify-content: space-between;
-            padding: 6px 0;
-            border-bottom: 1px solid var(--tg-theme-secondary-bg-color, #e0e0e0);
-        }
-        .info-row:last-child { border-bottom: none; }
-        .info-label {
-            color: var(--tg-theme-hint-color, #666);
-            font-size: 13px;
-        }
-        .info-value {
-            font-weight: 500;
-            font-size: 13px;
-        }
-        .info-value.highlight {
-            color: var(--tg-theme-button-color, #0088cc);
-            font-weight: 700;
-        }
-        .info-value.winner {
-            color: #ffd700;
-            font-weight: 700;
-        }
-        .badge {
-            display: inline-block;
-            padding: 2px 10px;
+        
+        .logo-icon {
+            width: 36px;
+            height: 36px;
+            background: linear-gradient(135deg, #7c5cfc, #fc5c7c);
             border-radius: 12px;
-            font-size: 11px;
-            font-weight: 600;
-        }
-        .badge.active { background: #4caf50; color: white; }
-        .badge.inactive { background: #9e9e9e; color: white; }
-        .badge.winner { background: #ffd700; color: #000; }
-        .badge.pending { background: #ff9800; color: white; }
-        .btn {
-            display: inline-flex;
+            display: flex;
             align-items: center;
             justify-content: center;
-            gap: 6px;
-            padding: 10px 20px;
-            border: none;
-            border-radius: 10px;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s;
-            width: 100%;
-            color: var(--tg-theme-button-text-color, #fff);
-            background: var(--tg-theme-button-color, #0088cc);
+            font-size: 20px;
+            box-shadow: 0 4px 15px rgba(124, 92, 252, 0.3);
         }
-        .btn:active { transform: scale(0.97); }
-        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-        .btn-secondary {
-            background: var(--tg-theme-secondary-bg-color, #e0e0e0);
-            color: var(--tg-theme-text-color, #000);
-        }
-        .btn-success { background: #4caf50; }
-        .btn-danger { background: #f44336; }
-        .btn-gold {
-            background: linear-gradient(135deg, #ffd700, #f5a623);
-            color: #000;
-        }
-        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-        .referral-code {
-            background: var(--tg-theme-bg-color, #fff);
-            padding: 10px;
-            border-radius: 8px;
-            text-align: center;
-            font-size: 18px;
+        
+        .logo-text {
             font-weight: 700;
-            letter-spacing: 2px;
-            font-family: monospace;
-            border: 2px dashed var(--tg-theme-button-color, #0088cc);
-            word-break: break-all;
+            font-size: 18px;
+            background: linear-gradient(135deg, #7c5cfc, #fc5c7c);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
         }
-        .winner-list { list-style: none; padding: 0; }
-        .winner-list li {
+        
+        .header-actions {
+            display: flex;
+            gap: 8px;
+        }
+        
+        .btn-icon {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            color: white;
+            width: 38px;
+            height: 38px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            cursor: pointer;
+            transition: all 0.3s;
+            backdrop-filter: blur(10px);
+        }
+        
+        .btn-icon:active {
+            transform: scale(0.95);
+            background: rgba(255,255,255,0.1);
+        }
+        
+        /* User Card */
+        .user-card {
+            background: rgba(255,255,255,0.05);
+            backdrop-filter: blur(20px);
+            border-radius: 16px;
+            padding: 16px 20px;
+            margin-bottom: 16px;
+            border: 1px solid rgba(255,255,255,0.08);
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 8px 0;
-            border-bottom: 1px solid var(--tg-theme-secondary-bg-color, #e0e0e0);
         }
-        .winner-list li:last-child { border-bottom: none; }
-        .winner-avatar {
+        
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .user-avatar {
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7c5cfc, #fc5c7c);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            font-weight: 600;
+            box-shadow: 0 4px 15px rgba(124, 92, 252, 0.2);
+        }
+        
+        .user-name {
+            font-weight: 600;
+            font-size: 15px;
+            color: #fff;
+        }
+        
+        .user-id {
+            font-size: 12px;
+            color: rgba(255,255,255,0.5);
+            font-family: monospace;
+        }
+        
+        .user-badge {
+            background: rgba(124, 92, 252, 0.2);
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 600;
+            color: #7c5cfc;
+            border: 1px solid rgba(124, 92, 252, 0.2);
+        }
+        
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+        
+        .stat-card {
+            background: rgba(255,255,255,0.05);
+            backdrop-filter: blur(20px);
+            border-radius: 12px;
+            padding: 12px 8px;
+            text-align: center;
+            border: 1px solid rgba(255,255,255,0.05);
+        }
+        
+        .stat-value {
+            font-size: 20px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #7c5cfc, #fc5c7c);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .stat-label {
+            font-size: 10px;
+            color: rgba(255,255,255,0.5);
+            margin-top: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        /* Main Actions */
+        .main-actions {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+        
+        .btn-main {
+            padding: 14px;
+            border: none;
+            border-radius: 12px;
+            font-weight: 700;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            font-family: inherit;
+            color: white;
+            text-decoration: none;
+        }
+        
+        .btn-main:active {
+            transform: scale(0.97);
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #7c5cfc, #fc5c7c);
+            box-shadow: 0 4px 20px rgba(124, 92, 252, 0.3);
+        }
+        
+        .btn-primary:active {
+            box-shadow: 0 2px 10px rgba(124, 92, 252, 0.2);
+        }
+        
+        .btn-secondary {
+            background: rgba(255,255,255,0.08);
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .btn-success {
+            background: linear-gradient(135deg, #00d4ff, #00b894);
+            box-shadow: 0 4px 20px rgba(0, 212, 255, 0.2);
+        }
+        
+        .btn-danger {
+            background: linear-gradient(135deg, #ff6b6b, #ee5a24);
+            box-shadow: 0 4px 20px rgba(255, 107, 107, 0.2);
+        }
+        
+        .btn-gold {
+            background: linear-gradient(135deg, #f9d423, #f7971e);
+            box-shadow: 0 4px 20px rgba(249, 212, 35, 0.2);
+            color: #1a1a2e;
+        }
+        
+        .btn-full {
+            grid-column: 1 / -1;
+        }
+        
+        /* Card Sections */
+        .section {
+            background: rgba(255,255,255,0.03);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 16px 18px;
+            margin-bottom: 12px;
+            border: 1px solid rgba(255,255,255,0.05);
+        }
+        
+        .section-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: rgba(255,255,255,0.6);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .section-title .icon {
+            font-size: 16px;
+        }
+        
+        /* Lottery Status */
+        .lottery-status {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            background: rgba(124, 92, 252, 0.1);
+            border-radius: 10px;
+            border: 1px solid rgba(124, 92, 252, 0.2);
+            margin-bottom: 12px;
+        }
+        
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+        }
+        
+        .status-dot.active {
+            background: #00b894;
+            animation: pulse 1.5s infinite;
+        }
+        
+        .status-dot.inactive {
+            background: #ff6b6b;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(0.8); }
+        }
+        
+        /* Participant List */
+        .participant-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+        }
+        
+        .participant-item:last-child {
+            border-bottom: none;
+        }
+        
+        .participant-avatar {
             width: 32px;
             height: 32px;
             border-radius: 50%;
-            background: var(--tg-theme-button-color, #0088cc);
+            background: rgba(255,255,255,0.05);
             display: flex;
             align-items: center;
             justify-content: center;
-            color: white;
-            font-weight: 700;
-            font-size: 14px;
+            font-size: 12px;
+            font-weight: 600;
         }
-        .winner-info { flex: 1; margin-left: 10px; }
-        .winner-name { font-weight: 500; font-size: 13px; }
-        .winner-amount { font-weight: 700; color: #ffd700; font-size: 14px; }
-        .input-group { margin-bottom: 12px; }
-        .input-group label {
-            display: block;
+        
+        .participant-name {
             font-size: 13px;
-            font-weight: 500;
-            margin-bottom: 4px;
-            color: var(--tg-theme-hint-color, #666);
+            flex: 1;
         }
-        .input-group input {
-            width: 100%;
-            padding: 10px 14px;
-            border: 2px solid var(--tg-theme-secondary-bg-color, #e0e0e0);
+        
+        .participant-wallet {
+            font-size: 11px;
+            font-family: monospace;
+            color: rgba(255,255,255,0.4);
+        }
+        
+        /* Winner Badge */
+        .winner-badge {
+            background: linear-gradient(135deg, #f9d423, #f7971e);
+            color: #1a1a2e;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 10px;
+            font-weight: 700;
+        }
+        
+        /* Admin Panel */
+        .admin-panel {
+            display: none;
+        }
+        
+        .admin-panel.show {
+            display: block;
+        }
+        
+        .admin-actions {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        
+        .btn-admin {
+            padding: 10px 12px;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
             border-radius: 10px;
-            font-size: 14px;
-            background: var(--tg-theme-bg-color, #fff);
-            color: var(--tg-theme-text-color, #000);
-            transition: border-color 0.3s;
+            color: white;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-family: inherit;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
         }
-        .input-group input:focus {
-            outline: none;
-            border-color: var(--tg-theme-button-color, #0088cc);
+        
+        .btn-admin:active {
+            transform: scale(0.95);
+            background: rgba(255,255,255,0.1);
         }
-        .loading { display: none; text-align: center; padding: 20px; }
-        .loading.active { display: block; }
-        .spinner {
-            width: 36px;
-            height: 36px;
-            border: 3px solid var(--tg-theme-secondary-bg-color, #e0e0e0);
-            border-top: 3px solid var(--tg-theme-button-color, #0088cc);
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 10px;
-        }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        .empty-state {
-            text-align: center;
-            padding: 30px 20px;
-            color: var(--tg-theme-hint-color, #666);
-        }
-        .empty-state .icon { font-size: 40px; margin-bottom: 10px; }
-        .tab-bar {
+        
+        /* Modal */
+        .modal-overlay {
             position: fixed;
-            bottom: 0;
+            top: 0;
             left: 0;
             right: 0;
-            background: var(--tg-theme-bg-color, #fff);
-            border-top: 1px solid var(--tg-theme-secondary-bg-color, #e0e0e0);
-            display: flex;
-            padding: 6px 0;
-            padding-bottom: env(safe-area-inset-bottom);
-            z-index: 100;
-        }
-        .tab-item {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            backdrop-filter: blur(10px);
+            display: none;
             align-items: center;
-            padding: 2px 0;
-            cursor: pointer;
-            transition: all 0.2s;
-            border: none;
-            background: none;
-            color: var(--tg-theme-hint-color, #666);
-            font-size: 10px;
+            justify-content: center;
+            z-index: 1000;
+            padding: 20px;
         }
-        .tab-item.active { color: var(--tg-theme-button-color, #0088cc); }
-        .tab-item .icon { font-size: 22px; }
-        .tab-item .label { font-size: 9px; margin-top: 2px; }
-        .page { display: none; }
-        .page.active { display: block; }
+        
+        .modal-overlay.show {
+            display: flex;
+        }
+        
+        .modal {
+            background: linear-gradient(135deg, #1a1b3e, #2a1b4e);
+            border-radius: 20px;
+            padding: 24px;
+            max-width: 400px;
+            width: 100%;
+            border: 1px solid rgba(255,255,255,0.1);
+            box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        
+        .modal-title {
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 16px;
+            text-align: center;
+        }
+        
+        .modal-input {
+            width: 100%;
+            padding: 12px 16px;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 10px;
+            color: white;
+            font-size: 14px;
+            font-family: inherit;
+            margin-bottom: 12px;
+            transition: all 0.3s;
+        }
+        
+        .modal-input:focus {
+            outline: none;
+            border-color: #7c5cfc;
+            background: rgba(255,255,255,0.08);
+        }
+        
+        .modal-input::placeholder {
+            color: rgba(255,255,255,0.3);
+        }
+        
+        .modal-actions {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .modal-actions .btn-main {
+            flex: 1;
+        }
+        
+        .modal-close {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            background: none;
+            border: none;
+            color: rgba(255,255,255,0.5);
+            font-size: 24px;
+            cursor: pointer;
+        }
+        
+        /* Toast Notification */
         .toast {
             position: fixed;
-            bottom: 80px;
+            bottom: 20px;
             left: 50%;
             transform: translateX(-50%);
             background: rgba(0,0,0,0.8);
+            backdrop-filter: blur(20px);
+            padding: 12px 24px;
+            border-radius: 12px;
             color: white;
-            padding: 10px 20px;
-            border-radius: 10px;
-            font-size: 13px;
-            z-index: 1000;
-            opacity: 0;
-            transition: opacity 0.3s;
+            font-size: 14px;
+            font-weight: 500;
+            z-index: 2000;
+            display: none;
             max-width: 90%;
             text-align: center;
-            pointer-events: none;
+            border: 1px solid rgba(255,255,255,0.1);
         }
-        .toast.show { opacity: 1; }
-        .toast.success { background: #4caf50; }
-        .toast.error { background: #f44336; }
-        .toast.warning { background: #ff9800; }
-        @media (max-width: 400px) {
-            .grid-2 { grid-template-columns: 1fr; }
-            .header-title { font-size: 18px; }
+        
+        .toast.show {
+            display: block;
+            animation: slideUp 0.3s ease;
+        }
+        
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateX(-50%) translateY(20px); }
+            to { opacity: 1; transform: translateX(-50%) translateY(0); }
+        }
+        
+        .toast.success {
+            border-color: #00b894;
+        }
+        
+        .toast.error {
+            border-color: #ff6b6b;
+        }
+        
+        .toast.warning {
+            border-color: #f9d423;
+        }
+        
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 3px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: rgba(124, 92, 252, 0.3);
+            border-radius: 10px;
+        }
+        
+        /* Loading Spinner */
+        .spinner {
+            width: 30px;
+            height: 30px;
+            border: 3px solid rgba(255,255,255,0.1);
+            border-top-color: #7c5cfc;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin: 20px auto;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        /* Responsive */
+        @media (max-width: 380px) {
+            .container { padding: 8px 10px 80px 10px; }
+            .stats-grid { gap: 4px; }
+            .stat-card { padding: 8px 4px; }
+            .stat-value { font-size: 16px; }
+            .btn-main { font-size: 12px; padding: 10px; }
+        }
+        
+        /* Tabs */
+        .tabs {
+            display: flex;
+            gap: 4px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 4px;
+            margin-bottom: 12px;
+        }
+        
+        .tab {
+            flex: 1;
+            padding: 8px;
+            text-align: center;
+            border: none;
+            background: transparent;
+            color: rgba(255,255,255,0.5);
+            font-weight: 600;
+            font-size: 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-family: inherit;
+        }
+        
+        .tab.active {
+            background: rgba(124, 92, 252, 0.2);
+            color: white;
+        }
+        
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
         }
     </style>
 </head>
 <body>
+    <!-- Toast Notification -->
     <div id="toast" class="toast"></div>
     
-    <div class="container">
-        <div class="header">
-            <div class="header-title">
-                <span class="logo">🎰</span>
-                <span id="app-title">Ultimate Lottery</span>
-            </div>
-            <div class="lang-selector">
-                <button class="lang-btn active" onclick="changeLang('en')">🇬🇧</button>
-                <button class="lang-btn" onclick="changeLang('fa')">🇮🇷</button>
-                <button class="lang-btn" onclick="changeLang('ar')">🇸🇦</button>
-            </div>
-        </div>
-        
-        <div id="page-home" class="page active">
-            <div class="card">
-                <div class="card-title">👤 <span data-i18n="user_status">User Status</span></div>
-                <div id="user-status"><div class="loading active"><div class="spinner"></div><span data-i18n="loading">Loading...</span></div></div>
-            </div>
-            
-            <div class="card">
-                <div class="card-title">📅 <span data-i18n="subscription">Subscription</span></div>
-                <div id="subscription-status"><div class="loading active"><div class="spinner"></div><span data-i18n="loading">Loading...</span></div></div>
-            </div>
-            
-            <div class="card">
-                <div class="card-title">🎰 <span data-i18n="lottery">Lottery</span></div>
-                <div id="lottery-status"><div class="loading active"><div class="spinner"></div><span data-i18n="loading">Loading...</span></div></div>
-            </div>
-            
-            <div class="card">
-                <div class="card-title">🏆 <span data-i18n="winners">Winners</span></div>
-                <div id="winners-list"><div class="loading active"><div class="spinner"></div><span data-i18n="loading">Loading...</span></div></div>
-            </div>
-            
-            <div class="card">
-                <div class="card-title">🔗 <span data-i18n="referral_program">Referral Program</span></div>
-                <div id="referral-info"><div class="loading active"><div class="spinner"></div><span data-i18n="loading">Loading...</span></div></div>
-            </div>
-        </div>
-        
-        <div id="page-participate" class="page">
-            <div class="card">
-                <div class="card-title">💰 <span data-i18n="participate">Participate</span></div>
-                <div id="participate-content"><div class="loading active"><div class="spinner"></div><span data-i18n="loading">Loading...</span></div></div>
-            </div>
-        </div>
-        
-        <div id="page-winners" class="page">
-            <div class="card">
-                <div class="card-title">🏆 <span data-i18n="all_winners">All Winners</span></div>
-                <div id="all-winners"><div class="loading active"><div class="spinner"></div><span data-i18n="loading">Loading...</span></div></div>
-            </div>
+    <!-- Modal -->
+    <div id="modal" class="modal-overlay">
+        <div class="modal" style="position: relative;">
+            <button class="modal-close" onclick="closeModal()">✕</button>
+            <div id="modal-content"></div>
         </div>
     </div>
     
-    <div class="tab-bar">
-        <button class="tab-item active" onclick="switchPage('home')">
-            <span class="icon">🏠</span>
-            <span class="label" data-i18n="home">Home</span>
-        </button>
-        <button class="tab-item" onclick="switchPage('participate')">
-            <span class="icon">💰</span>
-            <span class="label" data-i18n="participate">Participate</span>
-        </button>
-        <button class="tab-item" onclick="switchPage('winners')">
-            <span class="icon">🏆</span>
-            <span class="label" data-i18n="winners">Winners</span>
-        </button>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <div class="logo">
+                <div class="logo-icon">🎰</div>
+                <span class="logo-text">Lottery</span>
+            </div>
+            <div class="header-actions">
+                <button class="btn-icon" onclick="showLanguageModal()" title="Language">🌐</button>
+                <button class="btn-icon" onclick="showHelp()" title="Help">❓</button>
+            </div>
+        </div>
+        
+        <!-- User Card -->
+        <div class="user-card" id="userCard">
+            <div class="user-info">
+                <div class="user-avatar" id="userAvatar">👤</div>
+                <div>
+                    <div class="user-name" id="userName">Loading...</div>
+                    <div class="user-id" id="userId">ID: ---</div>
+                </div>
+            </div>
+            <div>
+                <span class="user-badge" id="userBadge">🟢 Active</span>
+            </div>
+        </div>
+        
+        <!-- Stats -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value" id="statBalance">0</div>
+                <div class="stat-label">💰 Balance</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="statWins">0</div>
+                <div class="stat-label">🏆 Wins</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="statReferrals">0</div>
+                <div class="stat-label">👥 Referrals</div>
+            </div>
+        </div>
+        
+        <!-- Main Actions -->
+        <div class="main-actions">
+            <button class="btn-main btn-primary" onclick="joinLottery()">
+                🎯 Join Lottery
+            </button>
+            <button class="btn-main btn-secondary" onclick="showReferral()">
+                🔗 Referral
+            </button>
+            <button class="btn-main btn-gold" onclick="showWithdraw()">
+                💰 Withdraw
+            </button>
+            <button class="btn-main btn-secondary" onclick="showHistory()">
+                📜 History
+            </button>
+        </div>
+        
+        <!-- Lottery Status -->
+        <div class="section">
+            <div class="section-title">
+                <span class="icon">🎯</span> Lottery Status
+            </div>
+            <div class="lottery-status">
+                <div>
+                    <span class="status-dot active" id="statusDot"></span>
+                    <span id="statusText">Active</span>
+                </div>
+                <div style="font-size:13px; color: rgba(255,255,255,0.5);">
+                    <span id="participantCount">0</span> participants
+                </div>
+            </div>
+            <div style="font-size:13px; color: rgba(255,255,255,0.5);">
+                🏆 Prize: <span id="prizeAmount">0</span> USDT
+            </div>
+        </div>
+        
+        <!-- Tabs -->
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('participants')">👥 Participants</button>
+            <button class="tab" onclick="switchTab('winners')">🏆 Winners</button>
+            <button class="tab" onclick="switchTab('admin')">🛠 Admin</button>
+        </div>
+        
+        <!-- Participants Tab -->
+        <div class="tab-content active" id="tab-participants">
+            <div class="section">
+                <div class="section-title">
+                    <span class="icon">👥</span> Participants (<span id="participantCount2">0</span>)
+                </div>
+                <div id="participantList">
+                    <div style="text-align:center; padding:20px; color: rgba(255,255,255,0.3);">
+                        No participants yet
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Winners Tab -->
+        <div class="tab-content" id="tab-winners">
+            <div class="section">
+                <div class="section-title">
+                    <span class="icon">🏆</span> Winners
+                </div>
+                <div id="winnerList">
+                    <div style="text-align:center; padding:20px; color: rgba(255,255,255,0.3);">
+                        No winners yet
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Admin Tab -->
+        <div class="tab-content" id="tab-admin">
+            <div class="section" id="adminPanel">
+                <div class="section-title">
+                    <span class="icon">🛠</span> Admin Panel
+                </div>
+                <div id="adminContent">
+                    <div style="text-align:center; padding:20px; color: rgba(255,255,255,0.3);">
+                        🔒 Admin access required
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
     
     <script>
-        const tg = window.Telegram.WebApp;
-        tg.expand();
-        tg.ready();
+        // ============ STATE ============
+        const state = {
+            userId: null,
+            userName: '',
+            language: 'en',
+            isAdmin: false,
+            data: {}
+        };
         
-        let currentLang = 'en';
-        let userId = null;
-        
-        const translations = {{ translations|safe }};
-        
-        function t(key) {
-            return translations[currentLang]?.[key] || key;
-        }
-        
-        function updateUI() {
-            document.querySelectorAll('[data-i18n]').forEach(el => {
-                el.textContent = t(el.dataset.i18n);
-            });
-        }
-        
-        function changeLang(lang) {
-            currentLang = lang;
-            document.querySelectorAll('.lang-btn').forEach(btn => btn.classList.remove('active'));
-            document.querySelector(`.lang-btn[onclick="changeLang('${lang}')"]`).classList.add('active');
-            updateUI();
-            loadAllData();
-            fetch('/api/language', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({language: lang, user_id: userId})
-            }).catch(() => {});
-        }
-        
-        function showToast(message, type = 'info') {
-            const toast = document.getElementById('toast');
-            toast.textContent = message;
-            toast.className = 'toast ' + type;
-            setTimeout(() => { toast.classList.add('show'); }, 100);
-            setTimeout(() => { toast.classList.remove('show'); }, 3000);
-        }
-        
+        // ============ API CALLS ============
         async function apiCall(endpoint, method = 'GET', data = null) {
             try {
-                const options = { method: method, headers: {'Content-Type': 'application/json'} };
+                const options = {
+                    method: method,
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-User-Id': state.userId || ''
+                    }
+                };
                 if (data) options.body = JSON.stringify(data);
-                const response = await fetch(endpoint, options);
-                const result = await response.json();
-                if (!response.ok) throw new Error(result.error || 'API Error');
-                return result;
-            } catch (error) {
-                console.error('API Error:', error);
-                showToast(t('error'), 'error');
-                throw error;
-            }
-        }
-        
-        function switchPage(page) {
-            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-            document.getElementById('page-' + page).classList.add('active');
-            document.querySelectorAll('.tab-item').forEach(t => t.classList.remove('active'));
-            document.querySelector(`.tab-item[onclick="switchPage('${page}')"]`).classList.add('active');
-            if (page === 'participate') loadParticipate();
-            else if (page === 'winners') loadAllWinners();
-        }
-        
-        async function loadAllData() {
-            try {
-                await Promise.all([
-                    loadUserStatus(),
-                    loadSubscription(),
-                    loadLotteryStatus(),
-                    loadWinners(),
-                    loadReferral()
-                ]);
-            } catch (e) { console.error(e); }
-        }
-        
-        async function loadUserStatus() {
-            try {
-                const data = await apiCall('/api/user/status');
-                const u = data.user || {};
-                const html = `
-                    <div class="info-row"><span class="info-label">${t('user_id')}</span><span class="info-value">${u.telegram_id || 'N/A'}</span></div>
-                    <div class="info-row"><span class="info-label">${t('username')}</span><span class="info-value">${u.username || 'N/A'}</span></div>
-                    <div class="info-row"><span class="info-label">${t('wallet')}</span><span class="info-value">${u.wallet_address ? u.wallet_address.substring(0,8)+'...' : t('not_set')}</span></div>
-                    <div class="info-row"><span class="info-label">${t('total_won')}</span><span class="info-value highlight">$${u.total_won || 0}</span></div>
-                    ${u.is_winner ? `<div class="info-row"><span class="info-label">${t('winner')}</span><span class="info-value winner">🏆 $${u.won_amount || 0}</span></div>` : ''}
-                `;
-                document.getElementById('user-status').innerHTML = html;
+                
+                const response = await fetch('/api/' + endpoint, options);
+                return await response.json();
             } catch (e) {
-                document.getElementById('user-status').innerHTML = `<div class="empty-state"><p>${t('error')}</p></div>`;
+                showToast('Connection error', 'error');
+                return null;
             }
         }
         
-        async function loadSubscription() {
-            try {
-                const data = await apiCall('/api/user/subscription');
-                const has = data.has_subscription || false;
-                const html = `
-                    <div class="info-row">
-                        <span class="info-label">${t('subscription')}</span>
-                        <span class="info-value"><span class="badge ${has ? 'active' : 'inactive'}">${has ? t('active') : t('inactive')}</span></span>
-                    </div>
-                    ${has ? `<div class="info-row"><span class="info-label">${t('expires')}</span><span class="info-value">${new Date(data.expiry).toLocaleDateString()}</span></div>`
-                    : `<div style="margin-top:8px;"><button class="btn btn-success" onclick="switchPage('participate')">💰 ${t('subscribe_now')}</button></div>`}
-                `;
-                document.getElementById('subscription-status').innerHTML = html;
-            } catch (e) {
-                document.getElementById('subscription-status').innerHTML = `<div class="empty-state"><p>${t('error')}</p></div>`;
-            }
+        // ============ TOAST ============
+        function showToast(message, type = 'success') {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = 'toast ' + type + ' show';
+            clearTimeout(toast._timeout);
+            toast._timeout = setTimeout(() => {
+                toast.className = 'toast';
+            }, 3000);
         }
         
-        async function loadLotteryStatus() {
-            try {
-                const data = await apiCall('/api/lottery/status');
-                if (data.active) {
-                    const html = `
-                        <div class="info-row"><span class="info-label">${t('status')}</span><span class="info-value"><span class="badge active">${t('active')}</span></span></div>
-                        <div class="info-row"><span class="info-label">${t('participants')}</span><span class="info-value">${data.participant_count || 0}</span></div>
-                        <div class="info-row"><span class="info-label">${t('prize_pool')}</span><span class="info-value highlight">$${data.prize_pool || 0}</span></div>
-                        <div class="info-row"><span class="info-label">${t('prize_per_winner')}</span><span class="info-value">$${data.prize_per_winner || 0}</span></div>
-                    `;
-                    document.getElementById('lottery-status').innerHTML = html;
-                } else {
-                    document.getElementById('lottery-status').innerHTML = `<div class="empty-state"><div class="icon">⏳</div><p>${t('no_active_lottery')}</p></div>`;
+        // ============ MODAL ============
+        function showModal(content) {
+            document.getElementById('modal-content').innerHTML = content;
+            document.getElementById('modal').classList.add('show');
+        }
+        
+        function closeModal() {
+            document.getElementById('modal').classList.remove('show');
+        }
+        
+        // ============ TABS ============
+        function switchTab(tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            
+            document.querySelector(`.tab[onclick*="${tab}"]`).classList.add('active');
+            document.getElementById('tab-' + tab).classList.add('active');
+        }
+        
+        // ============ LOAD USER DATA ============
+        async function loadUserData() {
+            const userData = await apiCall('user');
+            if (userData) {
+                state.userId = userData.id;
+                state.userName = userData.name || 'User';
+                state.isAdmin = userData.is_admin || false;
+                
+                document.getElementById('userName').textContent = state.userName;
+                document.getElementById('userId').textContent = 'ID: ' + state.userId;
+                document.getElementById('userAvatar').textContent = state.userName.charAt(0).toUpperCase();
+                
+                // Update stats
+                document.getElementById('statBalance').textContent = userData.balance || 0;
+                document.getElementById('statWins').textContent = userData.wins || 0;
+                document.getElementById('statReferrals').textContent = userData.referrals || 0;
+                
+                // Update admin panel
+                if (state.isAdmin) {
+                    loadAdminPanel();
                 }
-            } catch (e) {
-                document.getElementById('lottery-status').innerHTML = `<div class="empty-state"><p>${t('error')}</p></div>`;
+                
+                // Load participants
+                loadParticipants();
             }
         }
         
-        async function loadWinners() {
-            try {
-                const data = await apiCall('/api/lottery/winners');
-                if (data.winners && data.winners.length > 0) {
-                    let html = `<ul class="winner-list">`;
-                    data.winners.slice(0, 5).forEach((w, i) => {
-                        html += `<li><div class="winner-avatar">${i+1}</div><div class="winner-info"><div class="winner-name">${w.username || 'User'}</div></div><div class="winner-amount">$${w.amount}</div></li>`;
-                    });
-                    html += `</ul>`;
-                    if (data.winners.length > 5) html += `<button class="btn btn-secondary" onclick="switchPage('winners')">${t('view_all')}</button>`;
-                    document.getElementById('winners-list').innerHTML = html;
+        // ============ LOAD PARTICIPANTS ============
+        async function loadParticipants() {
+            const data = await apiCall('lottery/participants');
+            if (data) {
+                document.getElementById('participantCount').textContent = data.count || 0;
+                document.getElementById('participantCount2').textContent = data.count || 0;
+                
+                const list = document.getElementById('participantList');
+                if (data.participants && data.participants.length > 0) {
+                    list.innerHTML = data.participants.map(p => `
+                        <div class="participant-item">
+                            <div class="participant-avatar">${p.name ? p.name.charAt(0).toUpperCase() : '👤'}</div>
+                            <div class="participant-name">${p.name || 'User ' + p.id}</div>
+                            <div class="participant-wallet">${p.wallet ? p.wallet.slice(0,6)+'...'+p.wallet.slice(-4) : 'No wallet'}</div>
+                        </div>
+                    `).join('');
                 } else {
-                    document.getElementById('winners-list').innerHTML = `<div class="empty-state"><div class="icon">🏆</div><p>${t('no_winners')}</p></div>`;
+                    list.innerHTML = '<div style="text-align:center; padding:20px; color: rgba(255,255,255,0.3);">No participants yet</div>';
                 }
-            } catch (e) {
-                document.getElementById('winners-list').innerHTML = `<div class="empty-state"><p>${t('error')}</p></div>`;
             }
         }
         
-        async function loadReferral() {
-            try {
-                const data = await apiCall('/api/user/referral');
-                const html = `
-                    <div class="info-row"><span class="info-label">${t('your_code')}</span><span class="info-value"><div class="referral-code">${data.referral_code}</div></span></div>
-                    <div style="margin-top:8px;display:flex;gap:8px;">
-                        <button class="btn btn-secondary" onclick="copyCode('${data.referral_code}')">📋 ${t('copy')}</button>
-                        <button class="btn btn-success" onclick="shareCode('${data.referral_code}')">📤 ${t('share')}</button>
-                    </div>
-                    <div style="margin-top:8px;">
-                        <div class="info-row"><span class="info-label">${t('referrals')}</span><span class="info-value">${data.referral_count || 0}</span></div>
-                        <div class="info-row"><span class="info-label">${t('earnings')}</span><span class="info-value highlight">$${data.referral_earnings || 0}</span></div>
+        // ============ LOAD ADMIN PANEL ============
+        function loadAdminPanel() {
+            if (!state.isAdmin) {
+                document.getElementById('adminContent').innerHTML = `
+                    <div style="text-align:center; padding:20px; color: rgba(255,255,255,0.3);">
+                        🔒 Admin access required
                     </div>
                 `;
-                document.getElementById('referral-info').innerHTML = html;
-            } catch (e) {
-                document.getElementById('referral-info').innerHTML = `<div class="empty-state"><p>${t('error')}</p></div>`;
-            }
-        }
-        
-        async function loadParticipate() {
-            const content = document.getElementById('participate-content');
-            try {
-                const data = await apiCall('/api/user/status');
-                if (data.user && data.user.has_subscription) {
-                    content.innerHTML = `
-                        <div style="text-align:center;padding:20px;">
-                            <div style="font-size:48px;margin-bottom:12px;">🎉</div>
-                            <h3>${t('subscription_active')}</h3>
-                            <p style="color:var(--tg-theme-hint-color,#666);margin:8px 0;">${t('expires')}: ${new Date(data.user.subscription_expiry).toLocaleDateString()}</p>
-                            ${data.user.is_winner ? `
-                            <div style="margin-top:12px;padding:12px;background:#ffd70022;border-radius:8px;">
-                                <p style="font-weight:700;color:#ffd700;">🏆 ${t('you_are_winner')} $${data.user.won_amount}</p>
-                                <button class="btn btn-gold" onclick="withdraw()">💰 ${t('withdraw_now')}</button>
-                            </div>` : `<p style="color:var(--tg-theme-hint-color,#666);">${t('waiting_for_draw')}</p>`}
-                        </div>
-                    `;
-                } else {
-                    content.innerHTML = `
-                        <div style="text-align:center;margin-bottom:16px;">
-                            <div style="font-size:48px;margin-bottom:8px;">💰</div>
-                            <h3>${t('subscribe_now')}</h3>
-                            <p style="color:var(--tg-theme-hint-color,#666);font-size:13px;">${t('send_amount')}: 100 USDT</p>
-                        </div>
-                        <div class="input-group">
-                            <label>${t('payment_address')}</label>
-                            <div style="display:flex;gap:6px;">
-                                <input type="text" id="payment-addr" value="{{ config.PAYMENT_ADDRESS }}" readonly style="flex:1;font-size:12px;">
-                                <button class="btn btn-secondary" onclick="copyAddress()" style="width:auto;padding:8px 12px;">📋</button>
-                            </div>
-                        </div>
-                        <div class="input-group">
-                            <label>${t('enter_wallet')}</label>
-                            <input type="text" id="wallet-input" placeholder="T... (TRC20)">
-                        </div>
-                        <button class="btn btn-success" onclick="submitWallet()">✅ ${t('submit')}</button>
-                        <button class="btn btn-secondary" onclick="verifyPayment()" style="margin-top:8px;">🔄 ${t('verify_payment')}</button>
-                    `;
-                }
-            } catch (e) {
-                content.innerHTML = `<div class="empty-state"><p>${t('error')}</p></div>`;
-            }
-        }
-        
-        async function loadAllWinners() {
-            const content = document.getElementById('all-winners');
-            try {
-                const data = await apiCall('/api/lottery/all-winners');
-                if (data.winners && data.winners.length > 0) {
-                    let html = `<ul class="winner-list">`;
-                    data.winners.forEach((w, i) => {
-                        html += `<li><div class="winner-avatar">${i+1}</div><div class="winner-info"><div class="winner-name">${w.username || 'User ' + w.user_id}</div><div style="font-size:11px;color:var(--tg-theme-hint-color,#666);">${new Date(w.date).toLocaleDateString()}</div></div><div class="winner-amount">$${w.amount}</div></li>`;
-                    });
-                    html += `</ul>`;
-                    content.innerHTML = html;
-                } else {
-                    content.innerHTML = `<div class="empty-state"><div class="icon">🏆</div><p>${t('no_winners')}</p></div>`;
-                }
-            } catch (e) {
-                content.innerHTML = `<div class="empty-state"><p>${t('error')}</p></div>`;
-            }
-        }
-        
-        function copyAddress() {
-            const addr = document.getElementById('payment-addr').value;
-            navigator.clipboard.writeText(addr).then(() => showToast(t('copied'), 'success'))
-                .catch(() => { document.getElementById('payment-addr').select(); document.execCommand('copy'); showToast(t('copied'), 'success'); });
-        }
-        
-        function copyCode(code) {
-            navigator.clipboard.writeText(code).then(() => showToast(t('copied'), 'success'))
-                .catch(() => { const el = document.createElement('textarea'); el.value = code; document.body.appendChild(el); el.select(); document.execCommand('copy'); document.body.removeChild(el); showToast(t('copied'), 'success'); });
-        }
-        
-        function shareCode(code) {
-            const text = `🎰 Join Ultimate Lottery! Use my referral code: ${code}\n@{{ config.BOT_USERNAME }}`;
-            if (navigator.share) { navigator.share({title: '🎰 Lottery', text: text}).catch(() => {}); }
-            else { navigator.clipboard.writeText(text).then(() => showToast(t('copied'), 'success')); }
-        }
-        
-        async function submitWallet() {
-            const wallet = document.getElementById('wallet-input').value.trim();
-            if (!wallet || !wallet.startsWith('T') || wallet.length !== 34) {
-                showToast(t('invalid_wallet'), 'error');
                 return;
             }
-            try {
-                const btn = document.querySelector('.btn-success');
-                btn.disabled = true;
-                btn.textContent = '⏳ ' + t('saving');
-                const result = await apiCall('/api/user/wallet', 'POST', {wallet_address: wallet});
-                if (result.success) {
-                    showToast(t('wallet_saved'), 'success');
-                    document.getElementById('wallet-input').value = '';
-                    loadAllData();
-                }
-            } catch (e) {
-                showToast(t('error'), 'error');
-            } finally {
-                const btn = document.querySelector('.btn-success');
-                btn.disabled = false;
-                btn.textContent = '✅ ' + t('submit');
-            }
+            
+            document.getElementById('adminContent').innerHTML = `
+                <div class="admin-actions">
+                    <button class="btn-admin" onclick="adminBroadcast()">📢 Broadcast</button>
+                    <button class="btn-admin" onclick="adminStartLottery()">🎯 Start Lottery</button>
+                    <button class="btn-admin" onclick="adminManualVerify()">✅ Manual Verify</button>
+                    <button class="btn-admin" onclick="adminAddApi()">🔑 Add API</button>
+                    <button class="btn-admin" onclick="adminWithdrawals()">💰 Withdrawals</button>
+                    <button class="btn-admin" onclick="adminRestart()">🔄 Restart</button>
+                </div>
+                <div style="margin-top:10px; font-size:12px; color: rgba(255,255,255,0.3);">
+                    🟢 System: Online | ${new Date().toLocaleString()}
+                </div>
+            `;
         }
         
-        async function verifyPayment() {
-            try {
-                const btn = document.querySelector('.btn-secondary');
-                btn.disabled = true;
-                btn.textContent = '⏳ ' + t('checking');
-                const result = await apiCall('/api/payment/verify', 'POST');
-                if (result.verified) {
-                    showToast(t('payment_verified'), 'success');
-                    loadAllData();
-                } else {
-                    showToast(t('payment_failed'), 'error');
-                }
-            } catch (e) {
-                showToast(t('error'), 'error');
-            } finally {
-                const btn = document.querySelector('.btn-secondary');
-                btn.disabled = false;
-                btn.textContent = '🔄 ' + t('verify_payment');
-            }
+        // ============ JOIN LOTTERY ============
+        async function joinLottery() {
+            showModal(`
+                <div class="modal-title">🎯 Join Lottery</div>
+                <p style="color: rgba(255,255,255,0.6); margin-bottom: 16px; font-size:14px;">
+                    Send <strong>100 USDT</strong> to the contract address:
+                </p>
+                <div style="background: rgba(255,255,255,0.05); padding: 12px; border-radius: 8px; font-family: monospace; font-size: 13px; margin-bottom: 16px; word-break: break-all; color: #7c5cfc;">
+                    TV61aTh98MGqmteYzda5AaBzdXgGqreG6A
+                </div>
+                <input class="modal-input" id="walletInput" placeholder="Enter your TRC20 wallet address" />
+                <input class="modal-input" id="txInput" placeholder="Enter transaction ID" />
+                <div class="modal-actions">
+                    <button class="btn-main btn-primary" onclick="submitJoin()">✅ Verify</button>
+                    <button class="btn-main btn-secondary" onclick="closeModal()">Cancel</button>
+                </div>
+            `);
         }
         
-        async function withdraw() {
-            const wallet = prompt(t('enter_wallet'));
-            if (!wallet) return;
-            if (!wallet.startsWith('T') || wallet.length !== 34) {
-                showToast(t('invalid_wallet'), 'error');
+        async function submitJoin() {
+            const wallet = document.getElementById('walletInput').value.trim();
+            const txId = document.getElementById('txInput').value.trim();
+            
+            if (!wallet || !txId) {
+                showToast('Please fill all fields', 'error');
                 return;
             }
-            try {
-                const result = await apiCall('/api/user/withdraw', 'POST', {wallet_address: wallet});
-                if (result.success) {
-                    showToast(t('withdraw_success'), 'success');
-                    loadAllData();
-                }
-            } catch (e) {
-                showToast(t('error'), 'error');
+            
+            if (wallet.length !== 34 || !wallet.startsWith('T')) {
+                showToast('Invalid wallet address', 'error');
+                return;
             }
-        }
-        
-        async function init() {
-            if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
-                userId = tg.initDataUnsafe.user.id;
-                try {
-                    const response = await fetch('/api/auth', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({user: tg.initDataUnsafe.user, init_data: tg.initData})
-                    });
-                    const result = await response.json();
-                    if (result.success && result.language) {
-                        currentLang = result.language;
-                        document.querySelectorAll('.lang-btn').forEach(btn => {
-                            btn.classList.remove('active');
-                            if (btn.textContent.toLowerCase().includes(currentLang)) btn.classList.add('active');
-                        });
-                        updateUI();
-                        await loadAllData();
-                    }
-                } catch (e) {
-                    console.error('Auth error:', e);
-                    showToast(t('error'), 'error');
-                }
+            
+            closeModal();
+            showToast('⏳ Verifying transaction...', 'warning');
+            
+            const result = await apiCall('lottery/join', 'POST', {
+                wallet: wallet,
+                tx_id: txId
+            });
+            
+            if (result && result.success) {
+                showToast('✅ Successfully joined lottery!', 'success');
+                loadParticipants();
+                loadUserData();
             } else {
-                // Fallback: try to get user from session
-                try {
-                    const result = await apiCall('/api/user/status');
-                    if (result.user) {
-                        userId = result.user.telegram_id;
-                        await loadAllData();
-                    }
-                } catch (e) {}
+                showToast(result?.message || '❌ Verification failed', 'error');
             }
         }
         
-        document.addEventListener('DOMContentLoaded', init);
-        window.onerror = function(msg, url, line, col, error) {
-            console.error('Error:', msg, error);
-            showToast(t('error'), 'error');
-            return false;
-        };
+        // ============ REFERRAL ============
+        function showReferral() {
+            showModal(`
+                <div class="modal-title">🔗 Your Referral Link</div>
+                <p style="color: rgba(255,255,255,0.6); margin-bottom: 16px; font-size:14px;">
+                    Share your referral link and earn rewards!
+                </p>
+                <div style="background: rgba(255,255,255,0.05); padding: 12px; border-radius: 8px; font-size: 12px; margin-bottom: 16px; word-break: break-all; color: #7c5cfc;">
+                    https://t.me/UTYOB_Bot?start=${state.userId || ''}
+                </div>
+                <div style="display: flex; gap: 8px;">
+                    <button class="btn-main btn-primary" onclick="copyReferral()">📋 Copy</button>
+                    <button class="btn-main btn-secondary" onclick="closeModal()">Close</button>
+                </div>
+            `);
+        }
+        
+        function copyReferral() {
+            const text = `https://t.me/UTYOB_Bot?start=${state.userId || ''}`;
+            navigator.clipboard?.writeText(text);
+            showToast('✅ Copied to clipboard!', 'success');
+            closeModal();
+        }
+        
+        // ============ WITHDRAW ============
+        function showWithdraw() {
+            showModal(`
+                <div class="modal-title">💰 Withdraw</div>
+                <p style="color: rgba(255,255,255,0.6); margin-bottom: 16px; font-size:14px;">
+                    Enter your TRC20 wallet address to withdraw your prize.
+                </p>
+                <input class="modal-input" id="withdrawInput" placeholder="Enter TRC20 wallet address" />
+                <div class="modal-actions">
+                    <button class="btn-main btn-gold" onclick="submitWithdraw()">💰 Withdraw</button>
+                    <button class="btn-main btn-secondary" onclick="closeModal()">Cancel</button>
+                </div>
+            `);
+        }
+        
+        async function submitWithdraw() {
+            const wallet = document.getElementById('withdrawInput').value.trim();
+            if (!wallet || wallet.length !== 34 || !wallet.startsWith('T')) {
+                showToast('Invalid wallet address', 'error');
+                return;
+            }
+            
+            closeModal();
+            showToast('⏳ Processing withdrawal...', 'warning');
+            
+            const result = await apiCall('withdraw', 'POST', { wallet: wallet });
+            if (result && result.success) {
+                showToast('✅ Withdrawal request submitted!', 'success');
+            } else {
+                showToast(result?.message || '❌ Withdrawal failed', 'error');
+            }
+        }
+        
+        // ============ HISTORY ============
+        function showHistory() {
+            showModal(`
+                <div class="modal-title">📜 Transaction History</div>
+                <div id="historyList" style="max-height: 300px; overflow-y: auto;">
+                    <div style="text-align:center; padding:20px; color: rgba(255,255,255,0.3);">
+                        Loading...
+                    </div>
+                </div>
+                <button class="btn-main btn-secondary" onclick="closeModal()">Close</button>
+            `);
+            
+            loadHistory();
+        }
+        
+        async function loadHistory() {
+            const data = await apiCall('history');
+            const list = document.getElementById('historyList');
+            
+            if (data && data.history && data.history.length > 0) {
+                list.innerHTML = data.history.map(h => `
+                    <div style="padding: 10px; border-bottom: 1px solid rgba(255,255,255,0.05); font-size:13px;">
+                        <div>${h.type} - ${h.amount || 0} USDT</div>
+                        <div style="color: rgba(255,255,255,0.3); font-size:11px;">${h.date || ''}</div>
+                        <div style="color: ${h.status === 'completed' ? '#00b894' : '#ff6b6b'}; font-size:11px;">${h.status || ''}</div>
+                    </div>
+                `).join('');
+            } else {
+                list.innerHTML = '<div style="text-align:center; padding:20px; color: rgba(255,255,255,0.3);">No history</div>';
+            }
+        }
+        
+        // ============ LANGUAGE ============
+        function showLanguageModal() {
+            showModal(`
+                <div class="modal-title">🌐 Select Language</div>
+                <div style="display: flex; flex-direction: column; gap: 8px;">
+                    <button class="btn-main btn-secondary" onclick="setLanguage('en')">🇬🇧 English</button>
+                    <button class="btn-main btn-secondary" onclick="setLanguage('fa')">🇮🇷 فارسی</button>
+                    <button class="btn-main btn-secondary" onclick="setLanguage('tr')">🇹🇷 Türkçe</button>
+                </div>
+                <button class="btn-main btn-secondary" style="margin-top:12px;" onclick="closeModal()">Close</button>
+            `);
+        }
+        
+        async function setLanguage(lang) {
+            state.language = lang;
+            await apiCall('language', 'POST', { language: lang });
+            showToast('✅ Language changed!', 'success');
+            closeModal();
+        }
+        
+        // ============ HELP ============
+        function showHelp() {
+            showModal(`
+                <div class="modal-title">❓ Help</div>
+                <div style="font-size:14px; color: rgba(255,255,255,0.7); line-height: 1.6;">
+                    <p><strong>🎯 Join Lottery:</strong> Send 100 USDT to the contract address and verify.</p>
+                    <p><strong>🔗 Referral:</strong> Share your referral link and earn rewards.</p>
+                    <p><strong>💰 Withdraw:</strong> Claim your prize if you win.</p>
+                    <p><strong>📜 History:</strong> View your transaction history.</p>
+                    <p><strong>🏆 Winners:</strong> See all past winners.</p>
+                    <p style="margin-top:12px; color: rgba(255,255,255,0.3); font-size:12px;">
+                        Support: @Admin
+                    </p>
+                </div>
+                <button class="btn-main btn-secondary" style="margin-top:12px;" onclick="closeModal()">Close</button>
+            `);
+        }
+        
+        // ============ ADMIN FUNCTIONS ============
+        async function adminBroadcast() {
+            showModal(`
+                <div class="modal-title">📢 Broadcast</div>
+                <textarea class="modal-input" id="broadcastMsg" rows="3" placeholder="Enter your message..." style="resize: vertical;"></textarea>
+                <div class="modal-actions">
+                    <button class="btn-main btn-primary" onclick="submitBroadcast()">📢 Send</button>
+                    <button class="btn-main btn-secondary" onclick="closeModal()">Cancel</button>
+                </div>
+            `);
+        }
+        
+        async function submitBroadcast() {
+            const msg = document.getElementById('broadcastMsg').value.trim();
+            if (!msg) {
+                showToast('Please enter a message', 'error');
+                return;
+            }
+            
+            closeModal();
+            showToast('⏳ Sending broadcast...', 'warning');
+            
+            const result = await apiCall('admin/broadcast', 'POST', { message: msg });
+            if (result && result.success) {
+                showToast(`✅ Broadcast sent to ${result.sent || 0} users!`, 'success');
+            } else {
+                showToast('❌ Broadcast failed', 'error');
+            }
+        }
+        
+        async function adminStartLottery() {
+            showModal(`
+                <div class="modal-title">🎯 Start Lottery</div>
+                <input class="modal-input" id="winnersCount" type="number" placeholder="Number of winners" />
+                <input class="modal-input" id="prizeAmount" type="number" placeholder="Prize per winner (USDT)" />
+                <div style="background: rgba(255, 107, 107, 0.1); padding: 12px; border-radius: 8px; margin-bottom: 12px; font-size: 12px; color: #ff6b6b;">
+                    ⚠️ This will start a new lottery and select winners!
+                </div>
+                <div class="modal-actions">
+                    <button class="btn-main btn-danger" onclick="submitStartLottery()">🚀 Start</button>
+                    <button class="btn-main btn-secondary" onclick="closeModal()">Cancel</button>
+                </div>
+            `);
+        }
+        
+        async function submitStartLottery() {
+            const winners = parseInt(document.getElementById('winnersCount').value);
+            const prize = parseFloat(document.getElementById('prizeAmount').value);
+            
+            if (!winners || !prize || winners < 1 || prize < 1) {
+                showToast('Please enter valid numbers', 'error');
+                return;
+            }
+            
+            closeModal();
+            showToast('⏳ Starting lottery...', 'warning');
+            
+            const result = await apiCall('admin/start_lottery', 'POST', {
+                winners_count: winners,
+                prize_amount: prize
+            });
+            
+            if (result && result.success) {
+                showToast(`✅ Lottery started! ${winners} winners, ${prize} USDT each!`, 'success');
+                loadParticipants();
+                loadUserData();
+            } else {
+                showToast(result?.message || '❌ Failed to start lottery', 'error');
+            }
+        }
+        
+        async function adminManualVerify() {
+            showModal(`
+                <div class="modal-title">✅ Manual Verify</div>
+                <input class="modal-input" id="verifyUserId" type="number" placeholder="User ID" />
+                <div class="modal-actions">
+                    <button class="btn-main btn-success" onclick="submitManualVerify()">✅ Verify</button>
+                    <button class="btn-main btn-secondary" onclick="closeModal()">Cancel</button>
+                </div>
+            `);
+        }
+        
+        async function submitManualVerify() {
+            const userId = parseInt(document.getElementById('verifyUserId').value);
+            if (!userId) {
+                showToast('Please enter user ID', 'error');
+                return;
+            }
+            
+            closeModal();
+            showToast('⏳ Verifying user...', 'warning');
+            
+            const result = await apiCall('admin/manual_verify', 'POST', { user_id: userId });
+            if (result && result.success) {
+                showToast(`✅ User ${userId} verified!`, 'success');
+            } else {
+                showToast('❌ Verification failed', 'error');
+            }
+        }
+        
+        async function adminAddApi() {
+            showModal(`
+                <div class="modal-title">🔑 Add API Key</div>
+                <input class="modal-input" id="apiKeyInput" placeholder="Enter API key" />
+                <input class="modal-input" id="apiMaxUsage" type="number" placeholder="Max usage (default: 1000)" />
+                <div class="modal-actions">
+                    <button class="btn-main btn-primary" onclick="submitAddApi()">➕ Add</button>
+                    <button class="btn-main btn-secondary" onclick="closeModal()">Cancel</button>
+                </div>
+            `);
+        }
+        
+        async function submitAddApi() {
+            const apiKey = document.getElementById('apiKeyInput').value.trim();
+            const maxUsage = parseInt(document.getElementById('apiMaxUsage').value) || 1000;
+            
+            if (!apiKey) {
+                showToast('Please enter API key', 'error');
+                return;
+            }
+            
+            closeModal();
+            showToast('⏳ Adding API key...', 'warning');
+            
+            const result = await apiCall('admin/add_api', 'POST', {
+                api_key: apiKey,
+                max_usage: maxUsage
+            });
+            
+            if (result && result.success) {
+                showToast('✅ API key added!', 'success');
+            } else {
+                showToast('❌ Failed to add API key', 'error');
+            }
+        }
+        
+        async function adminWithdrawals() {
+            showModal(`
+                <div class="modal-title">💰 Withdrawals</div>
+                <div id="withdrawalList" style="max-height: 300px; overflow-y: auto;">
+                    <div style="text-align:center; padding:20px; color: rgba(255,255,255,0.3);">
+                        Loading...
+                    </div>
+                </div>
+                <button class="btn-main btn-secondary" onclick="closeModal()">Close</button>
+            `);
+            
+            loadWithdrawals();
+        }
+        
+        async function loadWithdrawals() {
+            const data = await apiCall('admin/withdrawals');
+            const list = document.getElementById('withdrawalList');
+            
+            if (data && data.withdrawals && data.withdrawals.length > 0) {
+                list.innerHTML = data.withdrawals.map(w => `
+                    <div style="padding: 10px; border-bottom: 1px solid rgba(255,255,255,0.05);">
+                        <div style="display: flex; justify-content: space-between; font-size:13px;">
+                            <span>User: ${w.user_id}</span>
+                            <span>${w.amount || 0} USDT</span>
+                        </div>
+                        <div style="font-size:11px; color: rgba(255,255,255,0.3);">
+                            ${w.wallet || ''}
+                        </div>
+                        <div style="margin-top:6px; display: flex; gap: 6px;">
+                            <span style="font-size:11px; color: ${w.status === 'completed' ? '#00b894' : '#f9d423'};">
+                                ${w.status || 'pending'}
+                            </span>
+                            ${w.status !== 'completed' ? `
+                                <button class="btn-admin" style="padding: 4px 12px; font-size: 10px;" onclick="adminConfirmWithdrawal(${w.id})">
+                                    ✅ Confirm
+                                </button>
+                            ` : ''}
+                        </div>
+                    </div>
+                `).join('');
+            } else {
+                list.innerHTML = '<div style="text-align:center; padding:20px; color: rgba(255,255,255,0.3);">No withdrawals</div>';
+            }
+        }
+        
+        async function adminConfirmWithdrawal(id) {
+            closeModal();
+            showToast('⏳ Confirming...', 'warning');
+            
+            const result = await apiCall('admin/confirm_withdrawal', 'POST', { withdrawal_id: id });
+            if (result && result.success) {
+                showToast('✅ Withdrawal confirmed!', 'success');
+            } else {
+                showToast('❌ Confirmation failed', 'error');
+            }
+        }
+        
+        async function adminRestart() {
+            if (confirm('Are you sure you want to restart the bot?')) {
+                showToast('⏳ Restarting...', 'warning');
+                const result = await apiCall('admin/restart', 'POST');
+                if (result && result.success) {
+                    showToast('✅ Bot restarted!', 'success');
+                }
+            }
+        }
+        
+        // ============ INIT ============
+        async function init() {
+            // Get user ID from URL parameter
+            const urlParams = new URLSearchParams(window.location.search);
+            const userId = urlParams.get('user_id');
+            
+            if (userId) {
+                state.userId = parseInt(userId);
+            }
+            
+            await loadUserData();
+            
+            // Auto refresh every 30 seconds
+            setInterval(() => {
+                loadUserData();
+                loadParticipants();
+            }, 30000);
+        }
+        
+        // Handle Telegram WebApp
+        if (window.Telegram && window.Telegram.WebApp) {
+            window.Telegram.WebApp.ready();
+            window.Telegram.WebApp.expand();
+        }
+        
+        // Start
+        init();
     </script>
 </body>
 </html>
 """
 
-# ============================================
-# Flask Routes
-# ============================================
+# ============ FLASK APP ============
+flask_app = Flask(__name__)
+CORS(flask_app)
 
-@app.route('/')
+# ============ DATABASE SHARDING ============
+class DatabaseShard:
+    def __init__(self, shard_id: int):
+        self.shard_id = shard_id
+        self.conn = sqlite3.connect(f"shard_{shard_id}.db", check_same_thread=False)
+        self.conn.row_factory = sqlite3.Row
+        self.init_tables()
+        self.lock = threading.Lock()
+    
+    def init_tables(self):
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                first_name TEXT,
+                last_name TEXT,
+                language TEXT DEFAULT 'en',
+                referral_code TEXT UNIQUE,
+                referrer_id INTEGER,
+                subscription_expiry INTEGER,
+                wallet_address TEXT,
+                balance REAL DEFAULT 0,
+                is_winner BOOLEAN DEFAULT 0,
+                total_wins INTEGER DEFAULT 0,
+                participated_count INTEGER DEFAULT 0,
+                created_at INTEGER
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS transactions (
+                tx_id TEXT PRIMARY KEY,
+                user_id INTEGER,
+                amount REAL,
+                wallet_from TEXT,
+                wallet_to TEXT,
+                status TEXT,
+                type TEXT,
+                block_number INTEGER,
+                verified_at INTEGER,
+                created_at INTEGER
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS lottery_participants (
+                user_id INTEGER,
+                lottery_id INTEGER,
+                wallet_address TEXT,
+                joined_at INTEGER,
+                is_winner BOOLEAN DEFAULT 0,
+                PRIMARY KEY (user_id, lottery_id)
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS lottery_results (
+                lottery_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                total_participants INTEGER,
+                winners_count INTEGER,
+                prize_amount REAL,
+                created_at INTEGER,
+                status TEXT DEFAULT 'pending'
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS api_keys (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                api_key TEXT UNIQUE,
+                is_active BOOLEAN DEFAULT 1,
+                usage_count INTEGER DEFAULT 0,
+                max_usage INTEGER DEFAULT 1000,
+                created_at INTEGER
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS withdrawals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                amount REAL,
+                wallet_address TEXT,
+                status TEXT DEFAULT 'pending',
+                tx_hash TEXT,
+                requested_at INTEGER,
+                completed_at INTEGER
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS lottery_settings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                winners_count INTEGER DEFAULT 1,
+                prize_amount REAL DEFAULT 0,
+                is_active BOOLEAN DEFAULT 1,
+                created_at INTEGER
+            )
+        ''')
+        self.conn.commit()
+    
+    def execute(self, query: str, params: tuple = ()):
+        with self.lock:
+            cursor = self.conn.cursor()
+            cursor.execute(query, params)
+            self.conn.commit()
+            return cursor
+
+class ShardManager:
+    def __init__(self, shard_count: int = Config.SHARD_COUNT):
+        self.shards = [DatabaseShard(i) for i in range(shard_count)]
+        self.shard_count = shard_count
+    
+    def get_shard(self, user_id: int) -> DatabaseShard:
+        shard_id = user_id % self.shard_count
+        return self.shards[shard_id]
+
+shard_manager = ShardManager()
+
+# ============ REDIS CACHE ============
+class CacheManager:
+    def __init__(self):
+        try:
+            self.redis = redis.Redis.from_url(Config.REDIS_URL, decode_responses=True)
+        except:
+            self.redis = None
+        self.local_cache = TTLCache(maxsize=Config.CACHE_SIZE, ttl=300)
+    
+    def get(self, key: str):
+        if self.local_cache:
+            value = self.local_cache.get(key)
+            if value:
+                return value
+        if self.redis:
+            return self.redis.get(key)
+        return None
+    
+    def set(self, key: str, value: str, ttl: int = 300):
+        if self.local_cache:
+            self.local_cache[key] = value
+        if self.redis:
+            self.redis.setex(key, ttl, value)
+    
+    def delete(self, key: str):
+        if self.local_cache and key in self.local_cache:
+            del self.local_cache[key]
+        if self.redis:
+            self.redis.delete(key)
+
+cache = CacheManager()
+
+# ============ TRANSACTION VERIFIER ============
+class TransactionVerifier:
+    def __init__(self):
+        self.session = None
+        self.api_keys = [Config.API_KEY]
+        self.current_key_index = 0
+        self.key_lock = threading.Lock()
+    
+    async def get_session(self):
+        if not self.session:
+            self.session = aiohttp.ClientSession()
+        return self.session
+    
+    async def verify_transaction(self, tx_id: str, from_wallet: str, to_wallet: str, amount: float) -> Tuple[bool, Dict]:
+        try:
+            session = await self.get_session()
+            
+            with self.key_lock:
+                api_key = self.api_keys[self.current_key_index % len(self.api_keys)]
+                self.current_key_index += 1
+            
+            url = f"{Config.TRONGRID_API}/v1/transactions/{tx_id}"
+            headers = {"TRON-PRO-API-KEY": api_key}
+            
+            async with session.get(url, headers=headers, timeout=30) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    tx_data = data.get('data', [{}])[0]
+                    
+                    contract_data = tx_data.get('raw_data', {}).get('contract', [{}])[0]
+                    parameter = contract_data.get('parameter', {}).get('value', {})
+                    
+                    to_address = parameter.get('to_address')
+                    if to_address:
+                        to_address = base58.b58encode(bytes.fromhex(to_address)).decode()
+                    
+                    owner_address = parameter.get('owner_address')
+                    if owner_address:
+                        owner_address = base58.b58encode(bytes.fromhex(owner_address)).decode()
+                    
+                    amount_transferred = parameter.get('amount', 0) / 1_000_000
+                    
+                    if (to_address.lower() == to_wallet.lower() and
+                        owner_address.lower() == from_wallet.lower() and
+                        amount_transferred >= amount):
+                        return True, {'amount': amount_transferred, 'from': owner_address, 'to': to_address}
+            
+            return False, {}
+        except:
+            return False, {}
+
+# ============ USER SERVICE ============
+class UserService:
+    def get_user(self, user_id: int) -> Optional[Dict]:
+        cache_key = f"user:{user_id}"
+        cached = cache.get(cache_key)
+        if cached:
+            return json.loads(cached)
+        
+        shard = shard_manager.get_shard(user_id)
+        cursor = shard.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+        if row:
+            user_data = dict(row)
+            cache.set(cache_key, json.dumps(user_data), 300)
+            return user_data
+        return None
+    
+    def create_user(self, user_id: int, username: str = None, first_name: str = None, 
+                   last_name: str = None, language: str = Config.DEFAULT_LANGUAGE) -> Dict:
+        shard = shard_manager.get_shard(user_id)
+        referral_code = hashlib.md5(f"{user_id}{time.time()}".encode()).hexdigest()[:8]
+        now = int(time.time())
+        
+        shard.execute('''
+            INSERT INTO users (user_id, username, first_name, last_name, language, referral_code, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (user_id, username, first_name, last_name, language, referral_code, now))
+        
+        user_data = {'user_id': user_id, 'username': username, 'first_name': first_name, 
+                    'last_name': last_name, 'language': language, 'referral_code': referral_code}
+        cache.set(f"user:{user_id}", json.dumps(user_data), 300)
+        return user_data
+    
+    def update_wallet(self, user_id: int, wallet: str):
+        shard = shard_manager.get_shard(user_id)
+        shard.execute("UPDATE users SET wallet_address = ? WHERE user_id = ?", (wallet, user_id))
+        cache.delete(f"user:{user_id}")
+    
+    def add_balance(self, user_id: int, amount: float):
+        shard = shard_manager.get_shard(user_id)
+        shard.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
+        cache.delete(f"user:{user_id}")
+    
+    def mark_winner(self, user_id: int):
+        shard = shard_manager.get_shard(user_id)
+        shard.execute("UPDATE users SET is_winner = 1, total_wins = total_wins + 1 WHERE user_id = ?", (user_id,))
+        cache.delete(f"user:{user_id}")
+
+user_service = UserService()
+
+# ============ LOTTERY SERVICE ============
+class LotteryService:
+    def __init__(self):
+        self.verifier = TransactionVerifier()
+    
+    async def add_participant(self, user_id: int, wallet: str, tx_id: str) -> Tuple[bool, str]:
+        # Check if already participating
+        shard = shard_manager.get_shard(user_id)
+        cursor = shard.execute(
+            "SELECT * FROM lottery_participants WHERE user_id = ? AND lottery_id = (SELECT MAX(lottery_id) FROM lottery_participants)",
+            (user_id,)
+        )
+        if cursor.fetchone():
+            return False, "already_participating"
+        
+        # Verify transaction
+        verified, details = await self.verifier.verify_transaction(
+            tx_id, wallet, Config.CONTRACT_ADDRESS, Config.LOTTERY_COST
+        )
+        
+        if not verified:
+            return False, "transaction_failed"
+        
+        # Add participant
+        now = int(time.time())
+        shard.execute('''
+            INSERT INTO lottery_participants (user_id, lottery_id, wallet_address, joined_at)
+            VALUES (?, (SELECT COALESCE(MAX(lottery_id), 0) + 1 FROM lottery_participants), ?, ?)
+        ''', (user_id, wallet, now))
+        
+        shard.execute("UPDATE users SET participated_count = participated_count + 1 WHERE user_id = ?", (user_id,))
+        cache.delete(f"user:{user_id}")
+        
+        return True, "success"
+    
+    def get_participants(self) -> List[Dict]:
+        participants = []
+        for shard in shard_manager.shards:
+            cursor = shard.execute('''
+                SELECT lp.user_id, lp.wallet_address, u.first_name, u.username
+                FROM lottery_participants lp
+                JOIN users u ON lp.user_id = u.user_id
+                WHERE lp.lottery_id = (SELECT MAX(lottery_id) FROM lottery_participants)
+            ''')
+            for row in cursor.fetchall():
+                participants.append(dict(row))
+        return participants
+    
+    def select_winners(self, winners_count: int, prize_amount: float) -> List[int]:
+        participants = self.get_participants()
+        if len(participants) < winners_count:
+            return []
+        
+        # Get previous winners
+        previous_winners = []
+        for shard in shard_manager.shards:
+            cursor = shard.execute("SELECT user_id FROM users WHERE is_winner = 1")
+            for row in cursor.fetchall():
+                previous_winners.append(row['user_id'])
+        
+        eligible = [p['user_id'] for p in participants if p['user_id'] not in previous_winners]
+        
+        if len(eligible) < winners_count:
+            eligible = [p['user_id'] for p in participants]
+        
+        # Fair random selection
+        random.seed(time.time() + random.randint(1, 1000000))
+        winners = random.sample(eligible, min(winners_count, len(eligible)))
+        
+        # Mark winners
+        for user_id in winners:
+            user_service.mark_winner(user_id)
+        
+        return winners
+
+lottery_service = LotteryService()
+
+# ============ FLASK API ENDPOINTS ============
+
+@flask_app.route('/')
 def index():
-    return render_template_string(
-        WEBAPP_TEMPLATE,
-        translations=json.dumps(translator.translations),
-        config=config
-    )
+    return render_template_string(WEBAPP_HTML)
 
-@app.route('/api/auth', methods=['POST'])
-def auth():
+@flask_app.route('/api/user')
+def api_get_user():
+    user_id = request.headers.get('X-User-Id')
+    if not user_id:
+        return jsonify({'error': 'User ID required'}), 401
+    
+    try:
+        user_id = int(user_id)
+    except:
+        return jsonify({'error': 'Invalid user ID'}), 400
+    
+    user = user_service.get_user(user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    
+    # Get participation count
+    shard = shard_manager.get_shard(user_id)
+    cursor = shard.execute(
+        "SELECT COUNT(*) as count FROM lottery_participants WHERE user_id = ?",
+        (user_id,)
+    )
+    row = cursor.fetchone()
+    
+    return jsonify({
+        'id': user_id,
+        'name': user.get('first_name') or user.get('username') or f"User{user_id}",
+        'balance': user.get('balance', 0),
+        'wins': user.get('total_wins', 0),
+        'referrals': 0,  # Would need separate table
+        'is_admin': user_id in Config.ADMIN_IDS,
+        'is_winner': user.get('is_winner', False),
+        'wallet': user.get('wallet_address', '')
+    })
+
+@flask_app.route('/api/lottery/participants')
+def api_get_participants():
+    participants = lottery_service.get_participants()
+    return jsonify({
+        'count': len(participants),
+        'participants': participants
+    })
+
+@flask_app.route('/api/lottery/join', methods=['POST'])
+async def api_join_lottery():
     data = request.json
-    user = data.get('user', {})
-    user_id = user.get('id')
+    user_id = request.headers.get('X-User-Id')
     
     if not user_id:
-        return jsonify({'success': False, 'error': 'Invalid user'}), 400
+        return jsonify({'error': 'User ID required'}), 401
     
-    import asyncio
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    try:
+        user_id = int(user_id)
+    except:
+        return jsonify({'error': 'Invalid user ID'}), 400
     
-    db_user = loop.run_until_complete(db.get_user(user_id))
+    wallet = data.get('wallet')
+    tx_id = data.get('tx_id')
     
-    if not db_user:
-        referral_code = ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(8))
-        db_user = {
-            "telegram_id": user_id,
-            "username": user.get('username', ''),
-            "first_name": user.get('first_name', ''),
-            "last_name": user.get('last_name', ''),
-            "language": config.DEFAULT_LANGUAGE,
-            "wallet_address": None,
-            "referral_code": referral_code,
-            "referred_by": None,
-            "has_subscription": False,
-            "subscription_expiry": None,
-            "is_winner": False,
-            "won_amount": 0,
-            "total_won": 0,
-            "referral_count": 0,
-            "referral_earnings": 0,
-            "created_at": datetime.now().isoformat()
-        }
-        loop.run_until_complete(db.save_user(user_id, db_user))
+    if not wallet or not tx_id:
+        return jsonify({'error': 'Wallet and TX ID required'}), 400
     
-    session['user_id'] = user_id
-    session['language'] = db_user.get('language', config.DEFAULT_LANGUAGE)
+    # Update wallet
+    user_service.update_wallet(user_id, wallet)
+    
+    # Join lottery
+    success, message = await lottery_service.add_participant(user_id, wallet, tx_id)
+    
+    return jsonify({
+        'success': success,
+        'message': message
+    })
+
+@flask_app.route('/api/withdraw', methods=['POST'])
+def api_withdraw():
+    data = request.json
+    user_id = request.headers.get('X-User-Id')
+    
+    if not user_id:
+        return jsonify({'error': 'User ID required'}), 401
+    
+    try:
+        user_id = int(user_id)
+    except:
+        return jsonify({'error': 'Invalid user ID'}), 400
+    
+    wallet = data.get('wallet')
+    if not wallet:
+        return jsonify({'error': 'Wallet required'}), 400
+    
+    user = user_service.get_user(user_id)
+    if not user or not user.get('is_winner'):
+        return jsonify({'error': 'Not eligible for withdrawal'}), 400
+    
+    # Get prize amount from last lottery
+    shard = shard_manager.get_shard(user_id)
+    cursor = shard.execute(
+        "SELECT prize_amount FROM lottery_results WHERE status = 'completed' ORDER BY created_at DESC LIMIT 1"
+    )
+    row = cursor.fetchone()
+    amount = row['prize_amount'] if row else 0
+    
+    if amount <= 0:
+        return jsonify({'error': 'No prize available'}), 400
+    
+    # Create withdrawal request
+    now = int(time.time())
+    shard.execute('''
+        INSERT INTO withdrawals (user_id, amount, wallet_address, requested_at)
+        VALUES (?, ?, ?, ?)
+    ''', (user_id, amount, wallet, now))
+    
+    return jsonify({'success': True, 'amount': amount})
+
+@flask_app.route('/api/history')
+def api_history():
+    user_id = request.headers.get('X-User-Id')
+    if not user_id:
+        return jsonify({'error': 'User ID required'}), 401
+    
+    try:
+        user_id = int(user_id)
+    except:
+        return jsonify({'error': 'Invalid user ID'}), 400
+    
+    shard = shard_manager.get_shard(user_id)
+    cursor = shard.execute('''
+        SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT 50
+    ''', (user_id,))
+    
+    history = []
+    for row in cursor.fetchall():
+        history.append({
+            'type': row.get('type', 'transaction'),
+            'amount': row.get('amount', 0),
+            'status': row.get('status', 'pending'),
+            'date': datetime.fromtimestamp(row.get('created_at', 0)).strftime('%Y-%m-%d %H:%M')
+        })
+    
+    return jsonify({'history': history})
+
+@flask_app.route('/api/language', methods=['POST'])
+def api_set_language():
+    data = request.json
+    user_id = request.headers.get('X-User-Id')
+    
+    if not user_id or not data.get('language'):
+        return jsonify({'error': 'Invalid request'}), 400
+    
+    try:
+        user_id = int(user_id)
+    except:
+        return jsonify({'error': 'Invalid user ID'}), 400
+    
+    shard = shard_manager.get_shard(user_id)
+    shard.execute("UPDATE users SET language = ? WHERE user_id = ?", (data['language'], user_id))
+    cache.delete(f"user:{user_id}")
+    
+    return jsonify({'success': True})
+
+# ============ ADMIN API ============
+
+@flask_app.route('/api/admin/broadcast', methods=['POST'])
+def api_admin_broadcast():
+    user_id = request.headers.get('X-User-Id')
+    if not user_id or int(user_id) not in Config.ADMIN_IDS:
+        return jsonify({'error': 'Unauthorized'}), 403
+    
+    data = request.json
+    message = data.get('message')
+    if not message:
+        return jsonify({'error': 'Message required'}), 400
+    
+    # Send to all users (async in background)
+    def send_broadcast():
+        sent = 0
+        for shard in shard_manager.shards:
+            cursor = shard.execute("SELECT user_id FROM users")
+            for row in cursor.fetchall():
+                try:
+                    # Would use telegram bot here
+                    sent += 1
+                except:
+                    pass
+        return sent
+    
+    # Run in thread
+    thread = threading.Thread(target=send_broadcast)
+    thread.start()
+    
+    return jsonify({'success': True, 'sent': 0, 'queued': True})
+
+@flask_app.route('/api/admin/start_lottery', methods=['POST'])
+def api_admin_start_lottery():
+    user_id = request.headers.get('X-User-Id')
+    if not user_id or int(user_id) not in Config.ADMIN_IDS:
+        return jsonify({'error': 'Unauthorized'}), 403
+    
+    data = request.json
+    winners_count = data.get('winners_count', 1)
+    prize_amount = data.get('prize_amount', 0)
+    
+    if winners_count < 1 or prize_amount < 1:
+        return jsonify({'error': 'Invalid parameters'}), 400
+    
+    # Select winners
+    winners = lottery_service.select_winners(winners_count, prize_amount)
+    
+    if not winners:
+        return jsonify({'error': 'Not enough participants'}), 400
+    
+    # Record results
+    participants = lottery_service.get_participants()
+    now = int(time.time())
+    
+    for shard in shard_manager.shards:
+        shard.execute('''
+            INSERT INTO lottery_results (total_participants, winners_count, prize_amount, created_at, status)
+            VALUES (?, ?, ?, ?, 'completed')
+        ''', (len(participants), len(winners), prize_amount, now))
     
     return jsonify({
         'success': True,
-        'language': db_user.get('language', config.DEFAULT_LANGUAGE),
-        'is_admin': user_id == config.ADMIN_CHAT_ID
+        'winners': winners,
+        'count': len(winners)
     })
 
-@app.route('/api/user/status')
-def user_status():
-    user_id = session.get('user_id')
-    if not user_id:
-        return jsonify({'error': 'Not authenticated'}), 401
-    
-    import asyncio
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
-    user = loop.run_until_complete(db.get_user(user_id))
-    if not user:
-        return jsonify({'error': 'User not found'}), 404
-    
-    return jsonify({
-        'user': {
-            'telegram_id': user.get('telegram_id'),
-            'username': user.get('username'),
-            'has_subscription': user.get('has_subscription', False),
-            'subscription_expiry': user.get('subscription_expiry'),
-            'wallet_address': user.get('wallet_address'),
-            'total_won': user.get('total_won', 0),
-            'is_winner': user.get('is_winner', False),
-            'won_amount': user.get('won_amount', 0)
-        },
-        'is_admin': user_id == config.ADMIN_CHAT_ID
-    })
-
-@app.route('/api/user/subscription')
-def user_subscription():
-    user_id = session.get('user_id')
-    if not user_id:
-        return jsonify({'error': 'Not authenticated'}), 401
-    
-    import asyncio
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
-    user = loop.run_until_complete(db.get_user(user_id))
-    if not user:
-        return jsonify({'error': 'User not found'}), 404
-    
-    return jsonify({
-        'has_subscription': user.get('has_subscription', False),
-        'expiry': user.get('subscription_expiry')
-    })
-
-@app.route('/api/user/wallet', methods=['POST'])
-def save_wallet():
-    user_id = session.get('user_id')
-    if not user_id:
-        return jsonify({'error': 'Not authenticated'}), 401
+@flask_app.route('/api/admin/manual_verify', methods=['POST'])
+def api_admin_manual_verify():
+    user_id = request.headers.get('X-User-Id')
+    if not user_id or int(user_id) not in Config.ADMIN_IDS:
+        return jsonify({'error': 'Unauthorized'}), 403
     
     data = request.json
-    wallet = data.get('wallet_address')
+    target_user = data.get('user_id')
     
-    if not wallet or not wallet.startswith('T') or len(wallet) != 34:
-        return jsonify({'error': 'Invalid wallet address'}), 400
+    if not target_user:
+        return jsonify({'error': 'User ID required'}), 400
     
-    import asyncio
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    try:
+        target_user = int(target_user)
+    except:
+        return jsonify({'error': 'Invalid user ID'}), 400
     
-    user = loop.run_until_complete(db.get_user(user_id))
-    if user:
-        user['wallet_address'] = wallet
-        loop.run_until_complete(db.save_user(user_id, user))
-        return jsonify({'success': True})
+    # Mark as winner
+    user_service.mark_winner(target_user)
     
-    return jsonify({'error': 'User not found'}), 404
+    return jsonify({'success': True})
 
-@app.route('/api/user/referral')
-def user_referral():
-    user_id = session.get('user_id')
-    if not user_id:
-        return jsonify({'error': 'Not authenticated'}), 401
-    
-    import asyncio
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
-    user = loop.run_until_complete(db.get_user(user_id))
-    if not user:
-        return jsonify({'error': 'User not found'}), 404
-    
-    return jsonify({
-        'referral_code': user.get('referral_code'),
-        'referral_count': user.get('referral_count', 0),
-        'referral_earnings': user.get('referral_earnings', 0)
-    })
-
-@app.route('/api/lottery/status')
-def lottery_status():
-    import asyncio
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
-    lottery = loop.run_until_complete(db.get_current_lottery())
-    
-    if lottery and lottery.get('status') in ['active', 'drawing']:
-        return jsonify({
-            'active': True,
-            'status': lottery.get('status'),
-            'participant_count': lottery.get('participant_count', 0),
-            'prize_pool': lottery.get('prize_pool', 0),
-            'prize_per_winner': lottery.get('prize_per_winner', 0)
-        })
-    
-    return jsonify({'active': False})
-
-@app.route('/api/lottery/winners')
-def lottery_winners():
-    import asyncio
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
-    lottery = loop.run_until_complete(db.get_current_lottery())
-    
-    if lottery and lottery.get('winners'):
-        winners = []
-        for w_id in lottery['winners']:
-            user = loop.run_until_complete(db.get_user(w_id))
-            if user:
-                winners.append({
-                    'user_id': w_id,
-                    'username': user.get('username', 'User'),
-                    'amount': lottery.get('prize_per_winner', 0)
-                })
-        return jsonify({'winners': winners})
-    
-    return jsonify({'winners': []})
-
-@app.route('/api/lottery/all-winners')
-def all_winners():
-    import asyncio
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
-    lotteries = loop.run_until_complete(db.get_all_lotteries())
-    winners = []
-    
-    for lottery in lotteries:
-        if lottery.get('winners'):
-            for w_id in lottery['winners']:
-                user = loop.run_until_complete(db.get_user(w_id))
-                if user:
-                    winners.append({
-                        'user_id': w_id,
-                        'username': user.get('username', 'User'),
-                        'amount': lottery.get('prize_per_winner', 0),
-                        'date': lottery.get('drawn_at', datetime.now().isoformat())
-                    })
-    
-    return jsonify({'winners': winners})
-
-@app.route('/api/payment/verify', methods=['POST'])
-def verify_payment():
-    user_id = session.get('user_id')
-    if not user_id:
-        return jsonify({'error': 'Not authenticated'}), 401
-    
-    import asyncio
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
-    user = loop.run_until_complete(db.get_user(user_id))
-    if not user or not user.get('wallet_address'):
-        return jsonify({'error': 'Wallet not set'}), 400
-    
-    # Simulate verification - in production, actual Tron API call
-    user['has_subscription'] = True
-    user['subscription_expiry'] = (datetime.now() + timedelta(days=30)).isoformat()
-    loop.run_until_complete(db.save_user(user_id, user))
-    
-    return jsonify({'verified': True})
-
-@app.route('/api/user/withdraw', methods=['POST'])
-def withdraw():
-    user_id = session.get('user_id')
-    if not user_id:
-        return jsonify({'error': 'Not authenticated'}), 401
+@flask_app.route('/api/admin/add_api', methods=['POST'])
+def api_admin_add_api():
+    user_id = request.headers.get('X-User-Id')
+    if not user_id or int(user_id) not in Config.ADMIN_IDS:
+        return jsonify({'error': 'Unauthorized'}), 403
     
     data = request.json
-    wallet = data.get('wallet_address')
+    api_key = data.get('api_key')
+    max_usage = data.get('max_usage', 1000)
     
-    if not wallet or not wallet.startswith('T') or len(wallet) != 34:
-        return jsonify({'error': 'Invalid wallet'}), 400
+    if not api_key:
+        return jsonify({'error': 'API key required'}), 400
     
-    import asyncio
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    # Add to all shards
+    for shard in shard_manager.shards:
+        try:
+            shard.execute('''
+                INSERT INTO api_keys (api_key, max_usage, created_at)
+                VALUES (?, ?, ?)
+            ''', (api_key, max_usage, int(time.time())))
+        except:
+            pass
     
-    user = loop.run_until_complete(db.get_user(user_id))
-    if user and user.get('is_winner'):
-        user['wallet_address'] = wallet
-        user['is_winner'] = False
-        loop.run_until_complete(db.save_user(user_id, user))
-        return jsonify({'success': True})
-    
-    return jsonify({'error': 'Not a winner'}), 400
+    return jsonify({'success': True})
 
-@app.route('/api/language', methods=['POST'])
-def set_language():
+@flask_app.route('/api/admin/withdrawals')
+def api_admin_withdrawals():
+    user_id = request.headers.get('X-User-Id')
+    if not user_id or int(user_id) not in Config.ADMIN_IDS:
+        return jsonify({'error': 'Unauthorized'}), 403
+    
+    withdrawals = []
+    for shard in shard_manager.shards:
+        cursor = shard.execute("SELECT * FROM withdrawals WHERE status = 'pending' ORDER BY requested_at DESC")
+        for row in cursor.fetchall():
+            withdrawals.append(dict(row))
+    
+    return jsonify({'withdrawals': withdrawals})
+
+@flask_app.route('/api/admin/confirm_withdrawal', methods=['POST'])
+def api_admin_confirm_withdrawal():
+    user_id = request.headers.get('X-User-Id')
+    if not user_id or int(user_id) not in Config.ADMIN_IDS:
+        return jsonify({'error': 'Unauthorized'}), 403
+    
     data = request.json
-    lang = data.get('language')
-    user_id = data.get('user_id') or session.get('user_id')
+    withdrawal_id = data.get('withdrawal_id')
     
-    if not user_id or lang not in config.LANGUAGES:
-        return jsonify({'error': 'Invalid request'}), 400
+    if not withdrawal_id:
+        return jsonify({'error': 'Withdrawal ID required'}), 400
     
-    import asyncio
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    for shard in shard_manager.shards:
+        shard.execute('''
+            UPDATE withdrawals SET status = 'completed', completed_at = ?
+            WHERE id = ? AND status = 'pending'
+        ''', (int(time.time()), withdrawal_id))
     
-    user = loop.run_until_complete(db.get_user(user_id))
-    if user:
-        user['language'] = lang
-        loop.run_until_complete(db.save_user(user_id, user))
-        session['language'] = lang
-        return jsonify({'success': True})
-    
-    return jsonify({'error': 'User not found'}), 404
+    return jsonify({'success': True})
 
-# ============================================
-# Telegram Bot
-# ============================================
+@flask_app.route('/api/admin/restart', methods=['POST'])
+def api_admin_restart():
+    user_id = request.headers.get('X-User-Id')
+    if not user_id or int(user_id) not in Config.ADMIN_IDS:
+        return jsonify({'error': 'Unauthorized'}), 403
+    
+    # Restart logic would go here
+    return jsonify({'success': True})
+
+# ============ TELEGRAM BOT ============
+
 class LotteryBot:
-    def __init__(self):
+    def __init__(self, token: str):
+        self.token = token
         self.application = None
+        self.webapp_url = Config.WEBAPP_URL
     
-    async def start(self):
-        self.application = Application.builder().token(config.BOT_TOKEN).build()
-        self._register_handlers()
-        await self.application.initialize()
-        await self.application.start()
-        await self.application.updater.start_polling()
-        logging.info("🤖 Bot started!")
-    
-    def _register_handlers(self):
-        app = self.application
-        
-        app.add_handler(CommandHandler("start", self.start_command))
-        app.add_handler(CommandHandler("help", self.help_command))
-        app.add_handler(CommandHandler("language", self.language_command))
-        app.add_handler(CommandHandler("admin", self.admin_command))
-        
-        app.add_handler(CallbackQueryHandler(self.handle_language, pattern="^(en|fa|ar)$"))
-        app.add_handler(CallbackQueryHandler(self.handle_subscribe, pattern="^subscribe$"))
-        app.add_handler(CallbackQueryHandler(self.handle_referral, pattern="^referral$"))
-        app.add_handler(CallbackQueryHandler(self.handle_verify, pattern="^verify$"))
-        app.add_handler(CallbackQueryHandler(self.handle_withdraw, pattern="^withdraw$"))
-        app.add_handler(CallbackQueryHandler(self.handle_admin, pattern="^admin_panel$"))
-        app.add_handler(CallbackQueryHandler(self.handle_admin_action, pattern="^admin_"))
-        
-        conv_handler = ConversationHandler(
-            entry_points=[CallbackQueryHandler(self.subscribe_start, pattern="^subscribe$")],
-            states={
-                1: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_wallet_input)],
-                2: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_manual_verify)],
-                3: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_broadcast)],
-                4: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_add_api)],
-                5: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_survey)],
-                6: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_withdraw_input)],
-            },
-            fallbacks=[CommandHandler("cancel", self.cancel)],
-        )
-        app.add_handler(conv_handler)
-    
-    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
-        user_id = user.id
         
-        db_user = await db.get_user(user_id)
-        if not db_user:
-            referral_code = ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(8))
-            db_user = {
-                "telegram_id": user_id,
-                "username": user.username,
-                "first_name": user.first_name,
-                "last_name": user.last_name,
-                "language": config.DEFAULT_LANGUAGE,
-                "wallet_address": None,
-                "referral_code": referral_code,
-                "referred_by": None,
-                "has_subscription": False,
-                "subscription_expiry": None,
-                "is_winner": False,
-                "won_amount": 0,
-                "total_won": 0,
-                "referral_count": 0,
-                "referral_earnings": 0,
-                "created_at": datetime.now().isoformat()
-            }
-            await db.save_user(user_id, db_user)
+        # Create or get user
+        existing = user_service.get_user(user.id)
+        if not existing:
+            user_service.create_user(
+                user.id,
+                user.username,
+                user.first_name,
+                user.last_name
+            )
         
-        lang = db_user.get("language", config.DEFAULT_LANGUAGE)
+        # Handle referral
+        if context.args and len(context.args) > 0:
+            referrer_code = context.args[0]
+            for shard in shard_manager.shards:
+                cursor = shard.execute("SELECT user_id FROM users WHERE referral_code = ?", (referrer_code,))
+                row = cursor.fetchone()
+                if row:
+                    shard.execute("UPDATE users SET referrer_id = ? WHERE user_id = ?", (row['user_id'], user.id))
+                    break
         
-        keyboard = [
-            [InlineKeyboardButton("🎮 PLAY", web_app=WebAppInfo(url=config.WEBAPP_URL))],
-            [InlineKeyboardButton("🎰 Subscribe", callback_data="subscribe")],
-            [InlineKeyboardButton("🔗 Referral", callback_data="referral")],
-            [InlineKeyboardButton("🌐 Language", callback_data="change_lang")],
-        ]
-        
-        if user_id == config.ADMIN_CHAT_ID:
-            keyboard.append([InlineKeyboardButton("⚙️ Admin Panel", callback_data="admin_panel")])
+        # Show Play button
+        keyboard = [[
+            InlineKeyboardButton(
+                "🎮 Play", 
+                web_app=WebAppInfo(url=f"{self.webapp_url}?user_id={user.id}")
+            )
+        ]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
-            translator.get("welcome", lang, code=db_user.get("referral_code", "")),
-            reply_markup=InlineKeyboardMarkup(keyboard),
+            "🎰 *Welcome to the Lottery Bot!*\n\n"
+            "Click the button below to open the full app experience:\n\n"
+            "✨ *Features:*\n"
+            "• 🎯 Join Lottery\n"
+            "• 🔗 Referral System\n"
+            "• 💰 Withdraw Prizes\n"
+            "• 📜 Transaction History\n"
+            "• 🏆 View Winners\n\n"
+            "Tap the button to get started! 🚀",
+            reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
     
-    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def admin(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
-        lang = await self.get_user_language(user_id)
-        await update.message.reply_text(
-            translator.get("help", lang),
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    async def language_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        keyboard = [
-            [InlineKeyboardButton("🇬🇧 English", callback_data="en")],
-            [InlineKeyboardButton("🇮🇷 فارسی", callback_data="fa")],
-            [InlineKeyboardButton("🇸🇦 العربية", callback_data="ar")],
-        ]
-        await update.message.reply_text(
-            "🌐 Select your language:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    
-    async def admin_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        if user_id != config.ADMIN_CHAT_ID:
-            await update.message.reply_text("⛔ Access denied.")
-            return
-        await self.show_admin_panel(update, context)
-    
-    async def get_user_language(self, user_id: int) -> str:
-        user = await db.get_user(user_id)
-        return user.get("language", config.DEFAULT_LANGUAGE) if user else config.DEFAULT_LANGUAGE
-    
-    async def show_admin_panel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        users = await db.get_user_count()
-        subscribed = await db.get_subscribed_count()
-        lottery = await db.get_current_lottery()
-        
-        lang = await self.get_user_language(update.effective_user.id)
-        
-        keyboard = [
-            [InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast")],
-            [InlineKeyboardButton("🎰 Start Lottery", callback_data="admin_start_lottery")],
-            [InlineKeyboardButton("✅ Manual Verify", callback_data="admin_manual_verify")],
-            [InlineKeyboardButton("🔑 Add API Key", callback_data="admin_add_api")],
-            [InlineKeyboardButton("💰 Withdraw to Winners", callback_data="admin_withdraw")],
-            [InlineKeyboardButton("🔄 Restart Lottery", callback_data="admin_restart")],
-            [InlineKeyboardButton("📊 Send Survey", callback_data="admin_survey")],
-        ]
-        
-        text = translator.get(
-            "admin_panel", lang,
-            users=users,
-            subscribed=subscribed,
-            winners=len(lottery.get("winners", [])) if lottery else 0
-        )
-        
-        if update.callback_query:
-            await update.callback_query.edit_message_text(
-                text,
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode=ParseMode.MARKDOWN
-            )
-        else:
-            await update.message.reply_text(
-                text,
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode=ParseMode.MARKDOWN
-            )
-    
-    async def handle_language(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        lang = query.data
-        user_id = query.from_user.id
-        
-        user = await db.get_user(user_id)
-        if user:
-            user["language"] = lang
-            await db.save_user(user_id, user)
-        
-        lang_names = {"en": "English", "fa": "فارسی", "ar": "العربية"}
-        await query.edit_message_text(
-            translator.get("lang_changed", lang, lang=lang_names.get(lang, lang))
-        )
-    
-    async def handle_subscribe(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = await self.get_user_language(user_id)
-        
-        user = await db.get_user(user_id)
-        if user and user.get("has_subscription"):
-            await query.edit_message_text(
-                translator.get("already_subscribed", lang),
-                parse_mode=ParseMode.MARKDOWN
-            )
+        if user_id not in Config.ADMIN_IDS:
+            await update.message.reply_text("⛔ Unauthorized access!")
             return
         
-        text = translator.get("subscribe", lang, address=config.PAYMENT_ADDRESS)
-        keyboard = [[InlineKeyboardButton("✅ Verify Payment", callback_data="verify")]]
-        
-        await query.edit_message_text(
-            text,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode=ParseMode.MARKDOWN
-        )
-        
-        context.user_data["subscribe_step"] = 1
-        return 1
-    
-    async def subscribe_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = await self.get_user_language(user_id)
-        
-        user = await db.get_user(user_id)
-        if user and user.get("has_subscription"):
-            await query.edit_message_text(
-                translator.get("already_subscribed", lang),
-                parse_mode=ParseMode.MARKDOWN
+        keyboard = [[
+            InlineKeyboardButton(
+                "🛠 Open Admin Panel", 
+                web_app=WebAppInfo(url=f"{self.webapp_url}?user_id={user_id}")
             )
-            return ConversationHandler.END
-        
-        text = translator.get("subscribe", lang, address=config.PAYMENT_ADDRESS)
-        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
-        
-        context.user_data["subscribe_step"] = 1
-        return 1
-    
-    async def handle_wallet_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        lang = await self.get_user_language(user_id)
-        wallet = update.message.text.strip()
-        
-        if not wallet.startswith("T") or len(wallet) != 34:
-            await update.message.reply_text(
-                translator.get("invalid_wallet", lang),
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return 1
-        
-        user = await db.get_user(user_id)
-        if user:
-            user["wallet_address"] = wallet
-            await db.save_user(user_id, user)
-        
-        text = translator.get("wallet_saved", lang, address=config.PAYMENT_ADDRESS)
-        keyboard = [[InlineKeyboardButton("✅ Verify Payment", callback_data="verify")]]
+        ]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
-            text,
-            reply_markup=InlineKeyboardMarkup(keyboard),
+            "🛠 *Admin Panel*\n\n"
+            "Open the admin panel to manage the lottery system.",
+            reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
-        
-        return ConversationHandler.END
-    
-    async def handle_verify(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = await self.get_user_language(user_id)
-        
-        user = await db.get_user(user_id)
-        if not user or not user.get("wallet_address"):
-            await query.edit_message_text(
-                "❌ Please enter your wallet address first.",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-        
-        await query.edit_message_text(
-            "⏳ Checking payment...",
-            parse_mode=ParseMode.MARKDOWN
-        )
-        
-        await asyncio.sleep(2)
-        
-        user["has_subscription"] = True
-        user["subscription_expiry"] = (datetime.now() + timedelta(days=30)).isoformat()
-        await db.save_user(user_id, user)
-        
-        await query.edit_message_text(
-            translator.get("payment_verified", lang),
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    async def handle_referral(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = await self.get_user_language(user_id)
-        
-        user = await db.get_user(user_id)
-        if not user:
-            return
-        
-        text = translator.get(
-            "referral", lang,
-            code=user.get("referral_code", ""),
-            bot=config.BOT_USERNAME.replace("@", "")
-        )
-        
-        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
-    
-    async def handle_withdraw(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = await self.get_user_language(user_id)
-        
-        user = await db.get_user(user_id)
-        if not user or not user.get("is_winner"):
-            await query.edit_message_text(
-                "❌ You are not a winner.",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-        
-        text = translator.get("withdraw", lang)
-        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
-        
-        context.user_data["withdraw_step"] = 6
-        return 6
-    
-    async def handle_withdraw_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        lang = await self.get_user_language(user_id)
-        wallet = update.message.text.strip()
-        
-        if not wallet.startswith("T") or len(wallet) != 34:
-            await update.message.reply_text(
-                translator.get("invalid_wallet", lang),
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return 6
-        
-        user = await db.get_user(user_id)
-        if user:
-            user["wallet_address"] = wallet
-            user["is_winner"] = False
-            await db.save_user(user_id, user)
-            
-            admin_text = f"""
-💰 *Withdrawal Request*
 
-👤 User: {user_id}
-🏦 Wallet: {wallet}
-💵 Amount: ${user.get('won_amount', 0)}
-            """
-            await self.application.bot.send_message(
-                config.ADMIN_CHAT_ID,
-                admin_text,
-                parse_mode=ParseMode.MARKDOWN
-            )
-        
-        await update.message.reply_text(
-            translator.get("withdraw_success", lang),
-            parse_mode=ParseMode.MARKDOWN
-        )
-        
-        return ConversationHandler.END
+def setup_application():
+    app = Application.builder().token(Config.BOT_TOKEN).build()
+    bot = LotteryBot(Config.BOT_TOKEN)
     
-    async def handle_admin(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        if user_id != config.ADMIN_CHAT_ID:
-            await query.edit_message_text("⛔ Access denied.")
-            return
-        
-        await self.show_admin_panel(update, context)
+    app.add_handler(CommandHandler("start", bot.start))
+    app.add_handler(CommandHandler("admin", bot.admin))
     
-    async def handle_admin_action(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        if user_id != config.ADMIN_CHAT_ID:
-            await query.edit_message_text("⛔ Access denied.")
-            return
-        
-        action = query.data.replace("admin_", "")
-        lang = await self.get_user_language(user_id)
-        
-        if action == "broadcast":
-            await query.edit_message_text(
-                translator.get("admin_broadcast", lang),
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return 3
-        
-        elif action == "start_lottery":
-            await query.edit_message_text(
-                translator.get("admin_winners", lang),
-                parse_mode=ParseMode.MARKDOWN
-            )
-            context.user_data["lottery_step"] = "winners"
-            return
-        
-        elif action == "manual_verify":
-            await query.edit_message_text(
-                translator.get("admin_manual_verify", lang),
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return 2
-        
-        elif action == "add_api":
-            await query.edit_message_text(
-                translator.get("admin_add_api", lang),
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return 4
-        
-        elif action == "withdraw":
-            await self.process_withdrawals(update, context)
-            
-        elif action == "restart":
-            await self.restart_lottery(update, context)
-            
-        elif action == "survey":
-            await query.edit_message_text(
-                translator.get("admin_survey", lang),
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return 5
-        
-        return ConversationHandler.END
-    
-    async def handle_manual_verify(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        if user_id != config.ADMIN_CHAT_ID:
-            return ConversationHandler.END
-        
-        tx_id = update.message.text.strip()
-        lang = await self.get_user_language(user_id)
-        
-        tx = await db.get_transaction(tx_id)
-        if tx:
-            user = await db.get_user(tx.get("user_id"))
-            if user:
-                user["has_subscription"] = True
-                user["subscription_expiry"] = (datetime.now() + timedelta(days=30)).isoformat()
-                await db.save_user(tx.get("user_id"), user)
-                
-                await update.message.reply_text(
-                    translator.get("manual_verify_done", lang),
-                    parse_mode=ParseMode.MARKDOWN
-                )
-                return ConversationHandler.END
-        
-        await update.message.reply_text(
-            "❌ Transaction not found.",
-            parse_mode=ParseMode.MARKDOWN
-        )
-        return ConversationHandler.END
-    
-    async def handle_broadcast(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        if user_id != config.ADMIN_CHAT_ID:
-            return ConversationHandler.END
-        
-        message = update.message.text
-        lang = await self.get_user_language(user_id)
-        
-        users = await db.get_all_users()
-        count = 0
-        
-        for user in users:
-            try:
-                await self.application.bot.send_message(
-                    user["telegram_id"],
-                    f"📢 {message}",
-                    parse_mode=ParseMode.MARKDOWN
-                )
-                count += 1
-                await asyncio.sleep(0.05)
-            except:
-                pass
-        
-        await update.message.reply_text(
-            translator.get("broadcast_sent", lang, count=count),
-            parse_mode=ParseMode.MARKDOWN
-        )
-        
-        return ConversationHandler.END
-    
-    async def handle_add_api(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        if user_id != config.ADMIN_CHAT_ID:
-            return ConversationHandler.END
-        
-        api_key = update.message.text.strip()
-        lang = await self.get_user_language(user_id)
-        
-        config.API_KEYS.append(api_key)
-        
-        await update.message.reply_text(
-            translator.get("api_added", lang),
-            parse_mode=ParseMode.MARKDOWN
-        )
-        
-        return ConversationHandler.END
-    
-    async def handle_survey(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        if user_id != config.ADMIN_CHAT_ID:
-            return ConversationHandler.END
-        
-        question = update.message.text
-        lang = await self.get_user_language(user_id)
-        
-        users = await db.get_all_users()
-        count = 0
-        
-        for user in users:
-            try:
-                await self.application.bot.send_message(
-                    user["telegram_id"],
-                    f"📊 *Survey*\n\n{question}\n\nReply with your answer.",
-                    parse_mode=ParseMode.MARKDOWN
-                )
-                count += 1
-                await asyncio.sleep(0.05)
-            except:
-                pass
-        
-        await update.message.reply_text(
-            translator.get("survey_sent", lang, count=count),
-            parse_mode=ParseMode.MARKDOWN
-        )
-        
-        return ConversationHandler.END
-    
-    async def process_withdrawals(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        user_id = query.from_user.id
-        if user_id != config.ADMIN_CHAT_ID:
-            return
-        
-        lang = await self.get_user_language(user_id)
-        
-        lottery = await db.get_current_lottery()
-        if not lottery or not lottery.get("winners"):
-            await query.edit_message_text(
-                "❌ No winners to process.",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-        
-        count = 0
-        for winner_id in lottery["winners"]:
-            user = await db.get_user(winner_id)
-            if user and user.get("wallet_address"):
-                count += 1
-        
-        await query.edit_message_text(
-            translator.get("withdraw_done", lang, count=count),
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    async def restart_lottery(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        user_id = query.from_user.id
-        if user_id != config.ADMIN_CHAT_ID:
-            return
-        
-        lang = await self.get_user_language(user_id)
-        
-        await db.set_current_lottery(None)
-        
-        await query.edit_message_text(
-            translator.get("restart_done", lang),
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        lang = await self.get_user_language(user_id)
-        
-        await update.message.reply_text(
-            translator.get("cancel", lang),
-            parse_mode=ParseMode.MARKDOWN
-        )
-        
-        return ConversationHandler.END
+    return app
 
-# ============================================
-# اجرا
-# ============================================
-async def run_bot():
-    bot = LotteryBot()
-    await bot.start()
-    return bot
+# ============ MAIN ============
 
-def run_flask():
-    app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
-
-if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s'
-    )
+async def main():
+    logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
     
-    print("""
-    ╔══════════════════════════════════════════╗
-    ║   🎰 ULTIMATE LOTTERY SYSTEM v3.0       ║
-    ║   🔥 300 Shards | Redis Cache           ║
-    ║   🤖 Telegram Bot + WebApp              ║
-    ║   🌐 3 Languages Support                ║
-    ╚══════════════════════════════════════════╝
-    """)
+    # Start Flask server
+    def run_flask():
+        flask_app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
     
-    # Flask in separate thread
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
     
-    # Run bot
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    # Start bot
+    app = setup_application()
+    print("🤖 Lottery Bot starting...")
+    
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
+    
+    print("✅ Bot is running! WebApp: " + Config.WEBAPP_URL)
     
     try:
-        loop.run_until_complete(run_bot())
-        loop.run_forever()
+        while True:
+            await asyncio.sleep(1)
     except KeyboardInterrupt:
-        print("\n🛑 Shutting down...")
-    finally:
-        loop.close()
+        await app.updater.stop()
+        await app.stop()
+        await app.shutdown()
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Bot stopped.")
