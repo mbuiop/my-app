@@ -1,313 +1,79 @@
-# ============================================================
-# ربات قرعه‌کشی هوشمند UTYOB - نسخه کامل با پشتیبانی چندزبان
-# ============================================================
-
+import os
 import asyncio
+import json
 import logging
 import random
-import json
-import sqlite3
 import hashlib
-import base58
-import aiohttp
-import threading
 import time
-import os
-from datetime import datetime, timedelta
-from typing import Dict, List, Tuple, Optional, Any
+import sqlite3
+import aiohttp
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 from flask import Flask, request, jsonify
+import threading
+import base58
+from datetime import datetime
+from asyncio import Queue
+import uvloop
+from concurrent.futures import ThreadPoolExecutor
+from dotenv import load_dotenv
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
-from telegram.constants import ParseMode
+# بارگذاری متغیرهای محیطی
+load_dotenv()
 
-# ============================================================
-# تنظیمات اولیه
-# ============================================================
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('bot.log'),
-        logging.StreamHandler()
-    ]
-)
+# ==================== تنظیمات ====================
+uvloop.install()
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.environ.get('BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
-ADMIN_IDS = [int(id) for id in os.environ.get('ADMIN_IDS', '123456789').split(',')]
-
-TRONGRID_APIS = [
-    "7ae83b63-fdf3-47e4-ac69-56f960a34f5b",
-]
-
-DESTINATION_WALLET = "TV61aTh98MGqmteYzda5AaBzdXgGqreG6A"
-PAYMENT_AMOUNT = 100
-
-DB_SHARDS = 100
-CACHE_TTL = 300
-
-# ============================================================
-# سیستم چندزبانه (MULTI-LANGUAGE SYSTEM)
-# ============================================================
-class LanguageManager:
-    """مدیریت زبان‌های ربات"""
+# ==================== کانفیگ ====================
+class Config:
+    BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
+    if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
+        raise ValueError("❌ Please set your BOT_TOKEN in .env file!")
     
-    LANGUAGES = {
-        'en': {
-            'name': 'English',
-            'emoji': '🇬🇧',
-            'welcome': "🎮 **Welcome to UTYOB Lottery Bot!**\n\n💰 Win amazing prizes up to $10,000!\n🎯 Fair and transparent lottery system\n🌟 Join now and test your luck!\n\nClick PLAY to enter the game.",
-            'play_button': "▶️ PLAY",
-            'main_menu': "🎯 **UTYOB Lottery Bot**\n\nSelect an option below:\n👇👇👇",
-            'lottery': "🎰 Lottery",
-            'referral': "🔗 Referral & Invite Friends",
-            'guide': "📖 Guide & Rules",
-            'language': "🌐 Change Language",
-            'admin_panel': "⚙️ Admin Panel",
-            'no_subscription': "❌ **You don't have an active subscription!**\n\nTo participate in the lottery, you must first purchase a subscription.\n\n💰 Subscription cost: $100\n📅 Validity: 1 month\n\nClick the button below to subscribe.",
-            'renew_subscription': "🔄 Renew Subscription",
-            'back': "🔙 Back",
-            'enter_wallet': "💳 **Deposit to participate in the lottery**\n\nPlease enter your source wallet address (TRC20):\n\n🔹 **Deposit amount:** $100\n🔹 **Destination address:**\n`{}`\n\n⚠️ **Important notes:**\n• Use only TRC20 network\n• Amount must be exactly $100\n• System will verify automatically\n• Save transaction ID for tracking\n\n📤 **Enter your source address:**",
-            'confirm_payment': "✅ Confirm Payment",
-            'cancel': "❌ Cancel",
-            'verifying': "⏳ Verifying your payment...\nPlease wait a moment.",
-            'payment_success': "✅ **Payment verified!**\n\n🔹 Amount: ${}\n🔹 Transaction: `{}`\n\n🎉 You have successfully registered for the lottery.\n🙏 Good luck!",
-            'payment_failed': "❌ **Payment verification failed!**\n\n🔹 Reason: {}\n\n📌 **Solutions:**\n1. Amount must be exactly $100\n2. Destination address must be correct\n3. Transaction must be completed\n4. Use TRC20 network\n\n🔄 Try again after checking.",
-            'retry': "🔄 Retry",
-            'support': "📞 Support",
-            'main_menu_btn': "🔙 Main Menu",
-            'lottery_back': "🎰 Back to Lottery",
-            'withdraw_prize': "💰 Withdraw Prize",
-            'next_lottery': "🎰 Next Lottery",
-            'enter_withdraw_wallet': "💰 **Withdraw Prize**\n\nPrize amount: **${:,}**\n\nPlease enter your TRC20 wallet address:\n\n⚠️ **Important notes:**\n• Use only TRC20 network\n• Address must be correct\n• After confirmation, payment will be made\n\n📤 **Enter your wallet address:**",
-            'withdraw_success': "✅ **Withdrawal registered successfully!** 🎉\n\n💰 Amount: ${:,}\n📤 Address: {}\n\n⏳ Amount will be sent to your account soon.\n🔔 You will be notified when sent.",
-            'referral_text': "🔗 **UTYOB Referral System**\n\n👤 You: {}\n📊 Invites: {}\n\n🔑 **Your referral code:**\n`{}`\n\n🔗 **Referral link:**\n{}\n\n💰 **Referral reward:**\n• 5% of deposit per invite\n• Instant reward after verification\n\n📤 Share this link with your friends!",
-            'share': "📤 Share",
-            'guide_text': "📖 **UTYOB Bot Complete Guide**\n\n🎯 **How it works:**\n1. **Register**: Use /start to register\n2. **Subscription**: Purchase subscription to participate\n3. **Deposit**: Send $100 to the specified address\n4. **Participate**: Join the lottery after verification\n5. **Win**: Receive prize if you win\n\n💰 **Deposit amount:**\n- Fixed amount: $100\n- Deposit address: TV61aTh98MGqmteYzda5AaBzdXgGqreG6A\n- Network: TRC20\n\n🎁 **Prizes:**\n- 1st prize: 50% of total\n- 2nd prize: 30% of total\n- 3rd prize: 20% of total\n\n🔗 **Referral system:**\n- Each user has unique referral code\n- 5% reward per invite\n\n⚠️ **Rules:**\n- One participation per lottery per user\n- Previous winners have lower chance\n- All transactions verified automatically\n\n📞 **Support:**\nContact admin for questions.",
-            'language_selector': "🌐 **Change Language**\n\nCurrent language: {}",
-            'admin_stats': "📈 **System Statistics**\n\n👥 **Users:**\n• Total: {:,}\n• Active: {:,}\n• Active rate: {:.1f}%\n\n💳 **Transactions:**\n• Total: {:,}\n• Verified: {:,}\n• Pending: {:,}\n\n🎰 **Lottery:**\n• Total: {}\n• Total winners: {}\n• Last: {}\n\n⚡ **System:**\n• Cache: {} items\n• Hit rate: {:.1f}%\n• APIs: {}\n• Shards: {}",
-            'refresh': "🔄 Refresh",
-            'admin_panel_text': "⚙️ **Admin Panel**\n\n📊 **Statistics:**\n• Total users: {:,}\n• Active users: {:,}\n• Cache: {} items\n• APIs: {}\n\nSelect an option:",
-            'broadcast': "📢 Send Broadcast",
-            'start_lottery': "🎰 Start Lottery",
-            'manual_verify': "✅ Manual Verify",
-            'poll': "📊 Send Poll",
-            'pay_winners': "💰 Pay Winners",
-            'add_api': "🔑 Add New API",
-            'stats': "📈 Statistics",
-            'lottery_confirm': "🎰 **Start New Lottery**\n\n👥 Eligible users: {} users\n\nAre you sure you want to start the lottery?\n\n⚠️ **Note:**\n• All subscribed users participate\n• Previous winners have lower chance\n• Lottery is fair and transparent",
-            'confirm': "✅ Confirm",
-            'enter_winners': "🎯 **Number of Winners**\n\nPlease enter the number of winners for this lottery:\n(Max 100)\n\nExample: `5`",
-            'enter_prize': "✅ Winners: {}\n\n💰 **Prize Amount per Winner**\n\nPlease enter the prize amount for each winner:\n(Minimum $10)\n\nExample: `100`",
-            'lottery_final': "✅ **Lottery Information:**\n\n• Winners: {}\n• Prize per winner: ${:,}\n• Total prize: ${:,}\n\n⚠️ Are you sure you want to start the lottery?",
-            'lottery_success': "✅ **Lottery completed successfully!** 🎉\n\n📊 **Details:**\n• Lottery ID: {}\n• Winners: {}\n• Prize per winner: ${:,}\n• Total prize: ${:,}\n\n👥 **Winners:**\n{}\n\n✅ Congratulations messages sent to winners.",
-            'lottery_error': "❌ **Error starting lottery!**\n\n🔹 Reason: {}\n\nPlease check:\n• Eligible users count\n• Winners count entered\n• Database connection",
-            'winner_message': "🎉 **Congratulations! You won!** 🎉\n\n💰 Prize amount: **${:,}**\n🏆 Lottery ID: {}\n\n✅ Click the button below to withdraw your prize:\n📌 Enter your wallet address",
-            'already_paid': "✅ Prize already paid!\n\n💰 Amount: ${}\n📅 Date: {}",
-            'no_winner': "❌ You don't have any prize!\n\nParticipate in future lotteries.",
-            'manual_verify_text': "✅ **Manual Transaction Verification**\n\n{}\n📊 Total: {}\n\nUse admin panel to verify each user.",
-            'no_pending': "✅ **All transactions verified!**\n\nNo pending transactions.",
-            'poll_create': "📊 **Create New Poll**\n\nPlease send the poll question:\n\nExample: `What do you think about the lottery?`",
-            'poll_options': "📊 **Poll Options**\n\nPlease enter poll options (one per line):\n\nExample:\nExcellent\nGood\nAverage\nPoor",
-            'pay_winners_text': "💰 **Pay Winners**\n\n{}\n📊 Total: {}\n\nUse admin panel to process payments.",
-            'no_winners': "✅ **All winners paid!**",
-            'add_api_text': "🔑 **Add New API**\n\nPlease enter the new API key:\n\n⚠️ **Notes:**\n• API is used for transaction verification\n• Each API can handle thousands of users\n• More APIs = More speed",
-            'api_added': "✅ **New API added successfully!**\n\n🔑 Key: `{}`\n📊 Total APIs: {}\n\nThis API will be used for transaction verification.",
-            'api_error': "❌ **Error adding API!**\n\nThis API already exists or is invalid.",
-            'invalid_command': "⚠️ Invalid command!\n\nUse the buttons or /help.",
-            'photo_not_supported': "📸 Photo received!\nBut this feature is not supported.",
-            'error_message': "⚠️ An error occurred! Please try again.",
-        },
-        'fa': {
-            'name': 'فارسی',
-            'emoji': '🇮🇷',
-            'welcome': "🎮 **به ربات قرعه‌کشی UTYOB خوش آمدید!**\n\n💰 برنده جوایز شگفت‌انگیز تا ۱۰۰۰۰ دلار شوید!\n🎯 سیستم قرعه‌کشی عادلانه و شفاف\n🌟 همین حالا بپیوندید و شانس خود را امتحان کنید!\n\nبرای ورود به بازی، روی PLAY کلیک کنید.",
-            'play_button': "▶️ PLAY",
-            'main_menu': "🎯 **ربات قرعه‌کشی UTYOB**\n\nیکی از گزینه‌های زیر را انتخاب کنید:\n👇👇👇",
-            'lottery': "🎰 قرعه‌کشی",
-            'referral': "🔗 رفرال و دعوت دوستان",
-            'guide': "📖 راهنمایی و قوانین",
-            'language': "🌐 تغییر زبان",
-            'admin_panel': "⚙️ پنل مدیریت",
-            'no_subscription': "❌ **شما اشتراک فعال ندارید!**\n\nبرای شرکت در قرعه‌کشی، ابتدا باید اشتراک تهیه کنید.\n\n💰 هزینه اشتراک: ۱۰۰ دلار\n📅 مدت اعتبار: ۱ ماه\n\nبرای تهیه اشتراک، روی دکمه زیر کلیک کنید.",
-            'renew_subscription': "🔄 تمدید اشتراک",
-            'back': "🔙 بازگشت",
-            'enter_wallet': "💳 **واریز برای شرکت در قرعه‌کشی**\n\nلطفاً آدرس کیف پول مبدا (TRC20) خود را وارد کنید:\n\n🔹 **مبلغ واریز:** ۱۰۰ دلار\n🔹 **آدرس مقصد:**\n`{}`\n\n⚠️ **نکات مهم:**\n• فقط از شبکه TRC20 استفاده کنید\n• مبلغ دقیقاً ۱۰۰ دلار باشد\n• سیستم به صورت خودکار تایید می‌کند\n• کد تراکنش را برای پیگیری ذخیره کنید\n\n📤 **آدرس مبدا خود را وارد کنید:**",
-            'confirm_payment': "✅ تایید واریز",
-            'cancel': "❌ انصراف",
-            'verifying': "⏳ در حال بررسی پرداخت شما...\nلطفاً چند لحظه صبر کنید.",
-            'payment_success': "✅ **پرداخت شما تایید شد!**\n\n🔹 مبلغ: {}$\n🔹 تراکنش: `{}`\n\n🎉 شما با موفقیت در قرعه‌کشی ثبت نام کردید.\n🙏 برای شما آرزوی موفقیت داریم!",
-            'payment_failed': "❌ **پرداخت شما تایید نشد!**\n\n🔹 دلیل: {}\n\n📌 **راهکارها:**\n1. مبلغ دقیقاً ۱۰۰ دلار باشد\n2. آدرس مقصد صحیح باشد\n3. تراکنش انجام شده باشد\n4. از شبکه TRC20 استفاده کنید\n\n🔄 پس از بررسی، مجدداً تلاش کنید.",
-            'retry': "🔄 تلاش مجدد",
-            'support': "📞 پشتیبانی",
-            'main_menu_btn': "🔙 منوی اصلی",
-            'lottery_back': "🎰 بازگشت به قرعه‌کشی",
-            'withdraw_prize': "💰 برداشت جایزه",
-            'next_lottery': "🎰 قرعه‌کشی بعدی",
-            'enter_withdraw_wallet': "💰 **برداشت جایزه**\n\nمبلغ جایزه: **${:,}**\n\nلطفاً آدرس کیف پول TRC20 خود را وارد کنید:\n\n⚠️ **نکات مهم:**\n• فقط از شبکه TRC20 استفاده کنید\n• آدرس باید دقیق و صحیح باشد\n• پس از تایید، واریز انجام می‌شود\n\n📤 **آدرس کیف پول خود را وارد کنید:**",
-            'withdraw_success': "✅ **برداشت شما با موفقیت ثبت شد!** 🎉\n\n💰 مبلغ: ${:,}\n📤 آدرس: {}\n\n⏳ مبلغ به زودی به حساب شما واریز می‌شود.\n🔔 پس از واریز، به شما اطلاع داده می‌شود.",
-            'referral_text': "🔗 **سیستم رفرال UTYOB**\n\n👤 شما: {}\n📊 تعداد دعوت‌ها: {}\n\n🔑 **کد رفرال شما:**\n`{}`\n\n🔗 **لینک دعوت:**\n{}\n\n💰 **پاداش دعوت:**\n• به ازای هر دعوت: ۵٪ از واریز\n• پاداش فوری پس از تایید\n\n📤 لینک را برای دوستان خود ارسال کنید!",
-            'share': "📤 اشتراک‌گذاری",
-            'guide_text': "📖 **راهنمای کامل ربات UTYOB**\n\n🎯 **نحوه کار:**\n1. **ثبت‌نام**: با دستور /start ثبت‌نام کنید\n2. **اشتراک**: برای شرکت در قرعه‌کشی، اشتراک تهیه کنید\n3. **واریز**: مبلغ ۱۰۰ دلار به آدرس مشخص واریز کنید\n4. **شرکت**: پس از تایید، در قرعه‌کشی شرکت کنید\n5. **برنده**: در صورت برنده شدن، جایزه دریافت کنید\n\n💰 **مبلغ واریز:**\n- مبلغ ثابت: ۱۰۰ دلار\n- آدرس واریز: TV61aTh98MGqmteYzda5AaBzdXgGqreG6A\n- شبکه: TRC20\n\n🎁 **جوایز:**\n- جایزه اول: ۵۰٪ از کل مبلغ\n- جایزه دوم: ۳۰٪ از کل مبلغ\n- جایزه سوم: ۲۰٪ از کل مبلغ\n\n🔗 **سیستم رفرال:**\n- هر کاربر کد رفرال اختصاصی دارد\n- به ازای هر دعوت، ۵٪ پاداش دریافت کنید\n\n⚠️ **قوانین:**\n- هر کاربر فقط یک بار در هر قرعه‌کشی شرکت می‌کند\n- برندگان قبلی شانس کمتری در قرعه‌کشی‌های بعدی دارند\n- تمامی تراکنش‌ها به صورت خودکار تایید می‌شوند\n\n📞 **پشتیبانی:**\nبرای سوالات و مشکلات با مدیریت تماس بگیرید.",
-            'language_selector': "🌐 **تغییر زبان**\n\nزبان فعلی: {}",
-            'admin_stats': "📈 **آمار کامل سیستم**\n\n👥 **کاربران:**\n• کل: {:,}\n• فعال: {:,}\n• درصد فعال: {:.1f}%\n\n💳 **تراکنش‌ها:**\n• کل: {:,}\n• تایید شده: {:,}\n• در انتظار: {:,}\n\n🎰 **قرعه‌کشی:**\n• تعداد: {}\n• برندگان کل: {}\n• آخرین: {}\n\n⚡ **سیستم:**\n• کش: {} آیتم\n• نرخ برخورد: {:.1f}%\n• API‌ها: {}\n• شاردها: {}",
-            'refresh': "🔄 به‌روزرسانی",
-            'admin_panel_text': "⚙️ **پنل مدیریت**\n\n📊 **آمار:**\n• کل کاربران: {:,}\n• کاربران فعال: {:,}\n• کش: {} آیتم\n• API‌ها: {}\n\nانتخاب کنید:",
-            'broadcast': "📢 ارسال پیام همگانی",
-            'start_lottery': "🎰 شروع قرعه‌کشی",
-            'manual_verify': "✅ تایید دستی",
-            'poll': "📊 ارسال نظرسنجی",
-            'pay_winners': "💰 واریز به برندگان",
-            'add_api': "🔑 اضافه کردن API جدید",
-            'stats': "📈 آمار و اطلاعات",
-            'lottery_confirm': "🎰 **شروع قرعه‌کشی جدید**\n\n👥 کاربران واجد شرایط: {} نفر\n\nآیا مطمئن هستید که می‌خواهید قرعه‌کشی را شروع کنید؟\n\n⚠️ **توجه:**\n• تمام کاربران دارای اشتراک شرکت می‌کنند\n• برندگان قبلی شانس کمتری دارند\n• قرعه‌کشی به صورت عادلانه انجام می‌شود",
-            'confirm': "✅ تایید",
-            'enter_winners': "🎯 **تعداد برندگان**\n\nلطفاً تعداد برندگان این قرعه‌کشی را وارد کنید:\n(حداکثر ۱۰۰ نفر)\n\nمثال: `5`",
-            'enter_prize': "✅ تعداد برندگان: {}\n\n💰 **مبلغ جایزه هر نفر**\n\nلطفاً مبلغ جایزه برای هر برنده را وارد کنید:\n(حداقل ۱۰ دلار)\n\nمثال: `100`",
-            'lottery_final': "✅ **اطلاعات قرعه‌کشی:**\n\n• تعداد برندگان: {}\n• جایزه هر نفر: ${:,}\n• کل جایزه: ${:,}\n\n⚠️ آیا مطمئن هستید که می‌خواهید قرعه‌کشی را شروع کنید؟",
-            'lottery_success': "✅ **قرعه‌کشی با موفقیت انجام شد!** 🎉\n\n📊 **جزئیات:**\n• شماره قرعه‌کشی: {}\n• تعداد برندگان: {}\n• جایزه هر نفر: ${:,}\n• کل جایزه: ${:,}\n\n👥 **برندگان:**\n{}\n\n✅ پیام‌های تبریک به برندگان ارسال شد.",
-            'lottery_error': "❌ **خطا در اجرای قرعه‌کشی!**\n\n🔹 دلیل: {}\n\nلطفاً موارد زیر را بررسی کنید:\n• تعداد کاربران واجد شرایط\n• تعداد برندگان وارد شده\n• اتصال به دیتابیس",
-            'winner_message': "🎉 **تبریک! شما برنده شدید!** 🎉\n\n💰 مبلغ جایزه: **${:,}**\n🏆 شماره قرعه‌کشی: {}\n\n✅ برای برداشت جایزه، روی دکمه زیر کلیک کنید:\n📌 آدرس کیف پول خود را وارد کنید",
-            'already_paid': "✅ جایزه شما قبلاً پرداخت شده است!\n\n💰 مبلغ: ${}\n📅 تاریخ: {}",
-            'no_winner': "❌ شما برنده‌ای ندارید!\n\nدر قرعه‌کشی‌های بعدی شرکت کنید.",
-            'manual_verify_text': "✅ **تایید دستی تراکنش‌ها**\n\n{}\n📊 تعداد کل: {}\n\nبرای تایید هر کاربر، از پنل مدیریت استفاده کنید.",
-            'no_pending': "✅ **همه تراکنش‌ها تایید شده‌اند!**\n\nهیچ تراکنش تایید نشده‌ای وجود ندارد.",
-            'poll_create': "📊 **ایجاد نظرسنجی جدید**\n\nلطفاً سوال نظرسنجی را ارسال کنید:\n\nمثال: `نظر شما درباره قرعه‌کشی چیست؟`",
-            'poll_options': "📊 **گزینه‌های نظرسنجی**\n\nلطفاً گزینه‌های نظرسنجی را وارد کنید (هر گزینه در یک خط):\n\nمثال:\nعالی بود\nخوب بود\nمتوسط\nضعیف",
-            'pay_winners_text': "💰 **واریز به برندگان**\n\n{}\n📊 تعداد کل: {}\n\nبرای پرداخت، از پنل مدیریت استفاده کنید.",
-            'no_winners': "✅ **همه برندگان پرداخت شده‌اند!**",
-            'add_api_text': "🔑 **اضافه کردن API جدید**\n\nلطفاً کلید API جدید را وارد کنید:\n\n⚠️ **نکات:**\n• API برای تایید تراکنش‌ها استفاده می‌شود\n• هر API می‌تواند هزاران کاربر را پوشش دهد\n• API‌های بیشتر = سرعت بیشتر",
-            'api_added': "✅ **API جدید با موفقیت اضافه شد!**\n\n🔑 کلید: `{}`\n📊 تعداد کل API‌ها: {}\n\nاین API برای تایید تراکنش‌ها استفاده می‌شود.",
-            'api_error': "❌ **خطا در اضافه کردن API!**\n\nاین API قبلاً اضافه شده است یا نامعتبر است.",
-            'invalid_command': "⚠️ دستور نامعتبر!\n\nاز دکمه‌های موجود استفاده کنید یا /help را ببینید.",
-            'photo_not_supported': "📸 عکس دریافت شد!\nاما این قابلیت پشتیبانی نمی‌شود.",
-            'error_message': "⚠️ خطایی رخ داد! لطفاً دوباره تلاش کنید.",
-        },
-        'tr': {
-            'name': 'Türkçe',
-            'emoji': '🇹🇷',
-            'welcome': "🎮 **UTYOB Piyango Botuna Hoş Geldiniz!**\n\n💰 10.000$'a kadar harika ödüller kazanın!\n🎯 Adil ve şeffaf piyango sistemi\n🌟 Hemen katıl ve şansını dene!\n\nOyuna girmek için PLAY'a tıkla.",
-            'play_button': "▶️ PLAY",
-            'main_menu': "🎯 **UTYOB Piyango Botu**\n\nAşağıdaki seçeneklerden birini seçin:\n👇👇👇",
-            'lottery': "🎰 Piyango",
-            'referral': "🔗 Referans ve Arkadaş Davet",
-            'guide': "📖 Rehber ve Kurallar",
-            'language': "🌐 Dil Değiştir",
-            'admin_panel': "⚙️ Yönetim Paneli",
-            'no_subscription': "❌ **Aktif aboneliğiniz yok!**\n\nPiyangoya katılmak için önce abonelik satın almalısınız.\n\n💰 Abonelik ücreti: 100$\n📅 Geçerlilik: 1 ay\n\nAbone olmak için aşağıdaki butona tıklayın.",
-            'renew_subscription': "🔄 Aboneliği Yenile",
-            'back': "🔙 Geri",
-            'enter_wallet': "💳 **Piyangoya katılmak için yatırım**\n\nLütfen kaynak cüzdan adresinizi (TRC20) girin:\n\n🔹 **Yatırım tutarı:** 100$\n🔹 **Hedef adres:**\n`{}`\n\n⚠️ **Önemli notlar:**\n• Sadece TRC20 ağını kullanın\n• Tutar tam olarak 100$ olmalı\n• Sistem otomatik olarak doğrulayacak\n• Takip için işlem kimliğini kaydedin\n\n📤 **Kaynak adresinizi girin:**",
-            'confirm_payment': "✅ Ödemeyi Onayla",
-            'cancel': "❌ İptal",
-            'verifying': "⏳ Ödemeniz kontrol ediliyor...\nLütfen bir dakika bekleyin.",
-            'payment_success': "✅ **Ödemeniz doğrulandı!**\n\n🔹 Tutar: ${}\n🔹 İşlem: `{}`\n\n🎉 Piyangoya başarıyla kaydoldunuz.\n🙏 İyi şanslar!",
-            'payment_failed': "❌ **Ödeme doğrulaması başarısız!**\n\n🔹 Sebep: {}\n\n📌 **Çözümler:**\n1. Tutar tam olarak 100$ olmalı\n2. Hedef adres doğru olmalı\n3. İşlem tamamlanmış olmalı\n4. TRC20 ağını kullanın\n\n🔄 Kontrol ettikten sonra tekrar deneyin.",
-            'retry': "🔄 Tekrar Dene",
-            'support': "📞 Destek",
-            'main_menu_btn': "🔙 Ana Menü",
-            'lottery_back': "🎰 Piyangoya Dön",
-            'withdraw_prize': "💰 Ödülü Çek",
-            'next_lottery': "🎰 Sonraki Piyango",
-            'enter_withdraw_wallet': "💰 **Ödülü Çek**\n\nÖdül tutarı: **${:,}**\n\nLütfen TRC20 cüzdan adresinizi girin:\n\n⚠️ **Önemli notlar:**\n• Sadece TRC20 ağını kullanın\n• Adres doğru ve tam olmalı\n• Onaydan sonra ödeme yapılacak\n\n📤 **Cüzdan adresinizi girin:**",
-            'withdraw_success': "✅ **Çekim başarıyla kaydedildi!** 🎉\n\n💰 Tutar: ${:,}\n📤 Adres: {}\n\n⏳ Tutar yakında hesabınıza gönderilecek.\n🔔 Gönderildiğinde bilgilendirileceksiniz.",
-            'referral_text': "🔗 **UTYOB Referans Sistemi**\n\n👤 Siz: {}\n📊 Davetler: {}\n\n🔑 **Referans kodunuz:**\n`{}`\n\n🔗 **Referans linki:**\n{}\n\n💰 **Referans ödülü:**\n• Her davet için %5 yatırım\n• Doğrulama sonrası anında ödül\n\n📤 Bu linki arkadaşlarınızla paylaşın!",
-            'share': "📤 Paylaş",
-            'guide_text': "📖 **UTYOB Bot Tam Rehber**\n\n🎯 **Nasıl çalışır:**\n1. **Kayıt**: /start ile kaydolun\n2. **Abonelik**: Katılmak için abonelik satın alın\n3. **Yatırım**: Belirtilen adrese 100$ gönderin\n4. **Katılım**: Doğrulama sonrası piyangoya katılın\n5. **Kazanç**: Kazanırsanız ödülü alın\n\n💰 **Yatırım tutarı:**\n- Sabit tutar: 100$\n- Yatırım adresi: TV61aTh98MGqmteYzda5AaBzdXgGqreG6A\n- Ağ: TRC20\n\n🎁 **Ödüller:**\n- 1. ödül: Toplamın %50'si\n- 2. ödül: Toplamın %30'u\n- 3. ödül: Toplamın %20'si\n\n🔗 **Referans sistemi:**\n- Her kullanıcının benzersiz referans kodu vardır\n- Davet başına %5 ödül\n\n⚠️ **Kurallar:**\n- Her piyangoda kullanıcı başına bir katılım\n- Önceki kazananların şansı daha düşük\n- Tüm işlemler otomatik doğrulanır\n\n📞 **Destek:**\nSorularınız için yöneticiye başvurun.",
-            'language_selector': "🌐 **Dil Değiştir**\n\nMevcut dil: {}",
-            'admin_stats': "📈 **Sistem İstatistikleri**\n\n👥 **Kullanıcılar:**\n• Toplam: {:,}\n• Aktif: {:,}\n• Aktif oran: {:.1f}%\n\n💳 **İşlemler:**\n• Toplam: {:,}\n• Doğrulanan: {:,}\n• Bekleyen: {:,}\n\n🎰 **Piyango:**\n• Toplam: {}\n• Toplam kazanan: {}\n• Son: {}\n\n⚡ **Sistem:**\n• Önbellek: {} öğe\n• İsabet oranı: {:.1f}%\n• API'ler: {}\n• Parçalar: {}",
-            'refresh': "🔄 Yenile",
-            'admin_panel_text': "⚙️ **Yönetim Paneli**\n\n📊 **İstatistikler:**\n• Toplam kullanıcı: {:,}\n• Aktif kullanıcı: {:,}\n• Önbellek: {} öğe\n• API'ler: {}\n\nSeçenek seçin:",
-            'broadcast': "📢 Toplu Mesaj Gönder",
-            'start_lottery': "🎰 Piyangoyu Başlat",
-            'manual_verify': "✅ Manuel Doğrula",
-            'poll': "📊 Anket Gönder",
-            'pay_winners': "💰 Kazananlara Öde",
-            'add_api': "🔑 Yeni API Ekle",
-            'stats': "📈 İstatistikler",
-            'lottery_confirm': "🎰 **Yeni Piyango Başlat**\n\n👥 Uygun kullanıcılar: {} kullanıcı\n\nPiyangoyu başlatmak istediğinize emin misiniz?\n\n⚠️ **Not:**\n• Tüm abone kullanıcılar katılır\n• Önceki kazananların şansı daha düşük\n• Piyango adil ve şeffaftır",
-            'confirm': "✅ Onayla",
-            'enter_winners': "🎯 **Kazanan Sayısı**\n\nLütfen bu piyango için kazanan sayısını girin:\n(Maksimum 100)\n\nÖrnek: `5`",
-            'enter_prize': "✅ Kazananlar: {}\n\n💰 **Kazanan Başına Ödül Tutarı**\n\nLütfen her kazanan için ödül tutarını girin:\n(Minimum 10$)\n\nÖrnek: `100`",
-            'lottery_final': "✅ **Piyango Bilgileri:**\n\n• Kazananlar: {}\n• Kazanan başına ödül: ${:,}\n• Toplam ödül: ${:,}\n\n⚠️ Piyangoyu başlatmak istediğinize emin misiniz?",
-            'lottery_success': "✅ **Piyango başarıyla tamamlandı!** 🎉\n\n📊 **Detaylar:**\n• Piyango ID: {}\n• Kazananlar: {}\n• Kazanan başına ödül: ${:,}\n• Toplam ödül: ${:,}\n\n👥 **Kazananlar:**\n{}\n\n✅ Kazananlara tebrik mesajları gönderildi.",
-            'lottery_error': "❌ **Piyango başlatma hatası!**\n\n🔹 Sebep: {}\n\nLütfen kontrol edin:\n• Uygun kullanıcı sayısı\n• Girilen kazanan sayısı\n• Veritabanı bağlantısı",
-            'winner_message': "🎉 **Tebrikler! Kazandınız!** 🎉\n\n💰 Ödül tutarı: **${:,}**\n🏆 Piyango ID: {}\n\n✅ Ödülünüzü çekmek için aşağıdaki butona tıklayın:\n📌 Cüzdan adresinizi girin",
-            'already_paid': "✅ Ödül zaten ödendi!\n\n💰 Tutar: ${}\n📅 Tarih: {}",
-            'no_winner': "❌ Hiç ödülünüz yok!\n\nGelecek piyangolara katılın.",
-            'manual_verify_text': "✅ **Manuel İşlem Doğrulama**\n\n{}\n📊 Toplam: {}\n\nHer kullanıcıyı doğrulamak için yönetim panelini kullanın.",
-            'no_pending': "✅ **Tüm işlemler doğrulandı!**\n\nBekleyen işlem yok.",
-            'poll_create': "📊 **Yeni Anket Oluştur**\n\nLütfen anket sorusunu gönderin:\n\nÖrnek: `Piyango hakkında ne düşünüyorsunuz?`",
-            'poll_options': "📊 **Anket Seçenekleri**\n\nLütfen anket seçeneklerini girin (her satıra bir seçenek):\n\nÖrnek:\nMükemmel\nİyi\nOrta\nKötü",
-            'pay_winners_text': "💰 **Kazananlara Öde**\n\n{}\n📊 Toplam: {}\n\nÖdemeleri işlemek için yönetim panelini kullanın.",
-            'no_winners': "✅ **Tüm kazananlara ödendi!**",
-            'add_api_text': "🔑 **Yeni API Ekle**\n\nLütfen yeni API anahtarını girin:\n\n⚠️ **Notlar:**\n• API işlem doğrulama için kullanılır\n• Her API binlerce kullanıcıyı işleyebilir\n• Daha fazla API = Daha hızlı",
-            'api_added': "✅ **Yeni API başarıyla eklendi!**\n\n🔑 Anahtar: `{}`\n📊 Toplam API'ler: {}\n\nBu API işlem doğrulama için kullanılacak.",
-            'api_error': "❌ **API ekleme hatası!**\n\nBu API zaten mevcut veya geçersiz.",
-            'invalid_command': "⚠️ Geçersiz komut!\n\nButonları veya /help kullanın.",
-            'photo_not_supported': "📸 Fotoğraf alındı!\nAncak bu özellik desteklenmiyor.",
-            'error_message': "⚠️ Bir hata oluştu! Lütfen tekrar deneyin.",
-        }
-    }
+    ADMIN_IDS = []
+    admin_ids_str = os.getenv("ADMIN_IDS", "327855654")
+    for aid in admin_ids_str.split(","):
+        try:
+            ADMIN_IDS.append(int(aid.strip()))
+        except:
+            pass
     
-    DEFAULT_LANG = 'en'
+    SHARD_COUNT = int(os.getenv("SHARD_COUNT", "50"))
+    CACHE_TTL = int(os.getenv("CACHE_TTL", "300"))
     
-    @classmethod
-    def get_text(cls, lang_code: str, key: str, *args, **kwargs) -> str:
-        """دریافت متن به زبان مورد نظر"""
-        if lang_code not in cls.LANGUAGES:
-            lang_code = cls.DEFAULT_LANG
-            
-        text = cls.LANGUAGES[lang_code].get(key, cls.LANGUAGES[cls.DEFAULT_LANG].get(key, key))
+    TRONGRID_API = os.getenv("TRONGRID_API", "https://api.trongrid.io")
+    TRONSCAN_API = os.getenv("TRONSCAN_API", "https://api.tronscan.org")
+    WALLET_ADDRESS = os.getenv("WALLET_ADDRESS", "TV61aTh98MGqmteYzda5AaBzdXgGqreG6A")
+    AMOUNT_USD = int(os.getenv("AMOUNT_USD", "100"))
+    USDT_CONTRACT = os.getenv("USDT_CONTRACT", "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t")
+    
+    API_KEYS = []
+    api_keys_str = os.getenv("API_KEYS", "7ae83b63-fdf3-47e4-ac69-56f960a34f5b")
+    for key in api_keys_str.split(","):
+        key = key.strip()
+        if key:
+            API_KEYS.append(key)
+    
+    MAX_WORKERS = int(os.getenv("MAX_WORKERS", "50"))
+    VERIFICATION_TIMEOUT = int(os.getenv("VERIFICATION_TIMEOUT", "120"))
+    MAX_RETRY = int(os.getenv("MAX_RETRY", "3"))
+
+# ==================== دیتابیس ====================
+class ShardedDatabase:
+    def __init__(self):
+        self.shards = {}
+        self.cache = {}
+        self.executor = ThreadPoolExecutor(max_workers=Config.MAX_WORKERS)
         
-        if args:
-            try:
-                return text.format(*args)
-            except:
-                return text
-        if kwargs:
-            try:
-                return text.format(**kwargs)
-            except:
-                return text
-        return text
+        for i in range(Config.SHARD_COUNT):
+            db_path = f"shard_{i}.db"
+            self.shards[i] = sqlite3.connect(db_path, check_same_thread=False)
+            self._init_shard(i)
     
-    @classmethod
-    def get_language_name(cls, lang_code: str) -> str:
-        """دریافت نام زبان"""
-        return cls.LANGUAGES.get(lang_code, {}).get('name', 'English')
-    
-    @classmethod
-    def get_language_emoji(cls, lang_code: str) -> str:
-        """دریافت ایموجی زبان"""
-        return cls.LANGUAGES.get(lang_code, {}).get('emoji', '🇬🇧')
-
-# ============================================================
-# دیتابیس با ۱۰۰ شارد
-# ============================================================
-class DatabaseManager:
-    def __init__(self, num_shards=DB_SHARDS):
-        self.num_shards = num_shards
-        self.connections = {}
-        self.locks = {}
-        self._init_shards()
-        
-    def _init_shards(self):
-        os.makedirs("data", exist_ok=True)
-        for i in range(self.num_shards):
-            db_path = f"data/shard_{i}.db"
-            conn = sqlite3.connect(db_path, check_same_thread=False, timeout=30)
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA cache_size=10000")
-            self.connections[i] = conn
-            self.locks[i] = threading.Lock()
-            self._create_tables(conn, i)
-            
-    def _create_tables(self, conn, shard_id):
-        cursor = conn.cursor()
+    def _init_shard(self, shard_id):
+        cursor = self.shards[shard_id].cursor()
         
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
@@ -315,2209 +81,1068 @@ class DatabaseManager:
                 username TEXT,
                 first_name TEXT,
                 last_name TEXT,
-                language TEXT DEFAULT 'en',
                 wallet_address TEXT,
-                referral_code TEXT UNIQUE,
+                subscription_end INTEGER,
+                referral_code TEXT,
                 referred_by INTEGER,
-                has_subscription INTEGER DEFAULT 0,
-                subscription_end TEXT,
+                referral_count INTEGER DEFAULT 0,
+                created_at INTEGER,
+                language TEXT DEFAULT 'en',
+                is_winner BOOLEAN DEFAULT 0,
+                won_amount INTEGER DEFAULT 0,
                 total_participations INTEGER DEFAULT 0,
-                wins_count INTEGER DEFAULT 0,
-                last_win_date TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                is_banned BOOLEAN DEFAULT 0
             )
         ''')
         
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS transactions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tx_id TEXT PRIMARY KEY,
                 user_id INTEGER,
                 from_address TEXT,
                 to_address TEXT,
-                amount REAL,
-                tx_id TEXT,
-                status TEXT DEFAULT 'pending',
-                verified_at TEXT,
-                retry_count INTEGER DEFAULT 0,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                amount INTEGER,
+                status TEXT,
+                created_at INTEGER,
+                verified_at INTEGER,
+                api_key_used TEXT,
+                retry_count INTEGER DEFAULT 0
             )
         ''')
         
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS lotteries (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                winners_count INTEGER,
-                prize_per_winner REAL,
-                total_prize REAL,
-                status TEXT DEFAULT 'pending',
-                started_at TEXT,
-                ended_at TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            CREATE TABLE IF NOT EXISTS lottery_participants (
+                user_id INTEGER PRIMARY KEY,
+                participated_at INTEGER,
+                wallet_address TEXT
             )
         ''')
         
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS winners (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                lottery_id INTEGER,
-                user_id INTEGER,
-                prize_amount REAL,
-                wallet_address TEXT,
-                paid_status INTEGER DEFAULT 0,
-                paid_at TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            CREATE TABLE IF NOT EXISTS previous_winners (
+                user_id INTEGER PRIMARY KEY,
+                win_time INTEGER,
+                amount INTEGER
             )
         ''')
         
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_subscription ON users(subscription_end)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_referral ON users(referral_code)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_subscription ON users(has_subscription, subscription_end)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions(status)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_winners_user ON winners(user_id)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_winners_paid ON winners(paid_status)')
         
-        conn.commit()
+        self.shards[shard_id].commit()
+    
+    def _get_shard(self, user_id):
+        return user_id % Config.SHARD_COUNT
+    
+    async def execute_query(self, user_id, query, params=(), fetch=False):
+        shard_id = self._get_shard(user_id)
         
-    def get_shard(self, user_id):
-        return hash(str(user_id)) % self.num_shards
-        
-    def get_connection(self, user_id):
-        shard = self.get_shard(user_id)
-        return self.connections[shard], self.locks[shard]
-        
-    def execute(self, user_id, query, params=(), commit=True):
-        conn, lock = self.get_connection(user_id)
-        with lock:
-            cursor = conn.cursor()
-            cursor.execute(query, params)
-            if commit:
-                conn.commit()
-            return cursor
-            
-    def execute_global(self, query, params=()):
-        results = []
-        for shard_id, conn in self.connections.items():
-            with self.locks[shard_id]:
-                cursor = conn.cursor()
+        def _execute():
+            cursor = self.shards[shard_id].cursor()
+            try:
                 cursor.execute(query, params)
-                conn.commit()
-                results.extend(cursor.fetchall())
-        return results
-
-db = DatabaseManager()
-
-# ============================================================
-# سیستم کش
-# ============================================================
-class CacheManager:
-    def __init__(self):
-        self.cache = {}
-        self.expiry = {}
-        self.lock = threading.Lock()
-        self.hits = 0
-        self.misses = 0
+                if fetch:
+                    return cursor.fetchall()
+                self.shards[shard_id].commit()
+                return cursor.lastrowid
+            except Exception as e:
+                logger.error(f"DB error on shard {shard_id}: {e}")
+                self.shards[shard_id].rollback()
+                raise
         
-    def set(self, key, value, ttl=CACHE_TTL):
-        with self.lock:
-            self.cache[key] = value
-            self.expiry[key] = time.time() + ttl
-            
-    def get(self, key):
-        with self.lock:
-            if key in self.cache and time.time() < self.expiry[key]:
-                self.hits += 1
-                return self.cache[key]
-            if key in self.cache:
-                del self.cache[key]
-                del self.expiry[key]
-            self.misses += 1
-            return None
-            
-    def delete(self, key):
-        with self.lock:
-            if key in self.cache:
-                del self.cache[key]
-                del self.expiry[key]
-                
-    def get_stats(self):
-        with self.lock:
-            total = self.hits + self.misses
-            hit_rate = (self.hits / total * 100) if total > 0 else 0
-            return {
-                'hits': self.hits,
-                'misses': self.misses,
-                'hit_rate': hit_rate,
-                'size': len(self.cache)
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(self.executor, _execute)
+    
+    async def get_user(self, user_id):
+        cache_key = f"user_{user_id}"
+        if cache_key in self.cache:
+            cached = self.cache[cache_key]
+            if time.time() - cached.get("cached_at", 0) < Config.CACHE_TTL:
+                return cached
+        
+        result = await self.execute_query(
+            user_id,
+            "SELECT * FROM users WHERE user_id = ?",
+            (user_id,),
+            fetch=True
+        )
+        
+        if result:
+            user_data = {
+                "user_id": result[0][0],
+                "username": result[0][1],
+                "first_name": result[0][2],
+                "last_name": result[0][3],
+                "wallet_address": result[0][4],
+                "subscription_end": result[0][5],
+                "referral_code": result[0][6],
+                "referred_by": result[0][7],
+                "referral_count": result[0][8] if len(result[0]) > 8 else 0,
+                "created_at": result[0][9] if len(result[0]) > 9 else 0,
+                "language": result[0][10] if len(result[0]) > 10 else "en",
+                "is_winner": result[0][11] if len(result[0]) > 11 else False,
+                "won_amount": result[0][12] if len(result[0]) > 12 else 0,
+                "total_participations": result[0][13] if len(result[0]) > 13 else 0,
+                "is_banned": result[0][14] if len(result[0]) > 14 else False
             }
+            user_data["cached_at"] = time.time()
+            self.cache[cache_key] = user_data
+            return user_data
+        return None
+    
+    async def create_user(self, user_id, username, first_name, last_name=""):
+        referral_code = self._generate_referral_code(user_id)
+        
+        await self.execute_query(
+            user_id,
+            """INSERT INTO users 
+               (user_id, username, first_name, last_name, referral_code, created_at, language) 
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, username, first_name, last_name, referral_code, int(time.time()), "en")
+        )
+        
+        return referral_code
+    
+    async def get_all_users(self):
+        users = []
+        for shard_id in range(Config.SHARD_COUNT):
+            cursor = self.shards[shard_id].cursor()
+            cursor.execute("SELECT user_id, username, first_name, last_name, subscription_end FROM users")
+            users.extend(cursor.fetchall())
+        return users
+    
+    def _generate_referral_code(self, user_id):
+        return base58.b58encode(hashlib.sha256(f"{user_id}{time.time()}".encode()).digest()[:8]).decode()
 
-cache = CacheManager()
-
-# ============================================================
-# سیستم تایید پرداخت
-# ============================================================
-class PaymentVerifier:
+# ==================== سیستم ترجمه ====================
+class TranslationSystem:
     def __init__(self):
-        self.apis = TRONGRID_APIS.copy()
-        self.api_stats = {api: {'requests': 0, 'success': 0, 'errors': 0, 'last_reset': time.time()} for api in self.apis}
-        self.lock = threading.Lock()
+        self.translations = {
+            "en": {
+                "welcome": "🎉 Welcome to {bot_name}!\n\nPlease select an option:",
+                "join_lottery": "🎰 Join Lottery",
+                "referral": "👥 Referral",
+                "guidance": "📖 Guidance",
+                "change_language": "🌐 Change Language",
+                "lottery_join": "💰 Please enter your source TRC20 wallet address:",
+                "wallet_saved": "✅ Wallet saved!\n\n📤 Please send exactly ${amount} USDT to:\n`{wallet}`\n\n⏳ After sending, click 'I have paid' for automatic verification.",
+                "payment_verified": "✅ Payment verified!\n\n🎉 Your subscription is ACTIVE!",
+                "payment_failed": "❌ Payment verification failed. Please try again.",
+                "already_paid": "ℹ️ You already have an active subscription.",
+                "not_subscribed": "❌ You need an active subscription to participate.",
+                "admin_panel": "🔧 Admin Panel",
+                "broadcast": "📢 Broadcast",
+                "manual_verify": "✅ Manual Verify",
+                "add_api": "🔑 Add API",
+                "view_stats": "📊 Statistics",
+                "i_have_paid": "✅ I have paid",
+                "checking_payment": "⏳ Checking your payment...",
+                "invalid_wallet": "❌ Invalid TRC20 wallet address.",
+                "language_changed": "🌐 Language changed to English",
+                "referral_text": "🔗 Your referral link:\n`https://t.me/{bot_username}?start=ref_{code}`\n\n👥 Total referrals: {count}",
+                "guidance_text": """📚 **COMPLETE GUIDANCE** 📚
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔰 **PARTICIPATION IS VOLUNTARY**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✅ **How to Participate:**
+1. Click 'Join Lottery'
+2. Enter your TRC20 wallet address
+3. Send exactly ${amount} USDT to the address
+4. Click 'I have paid'
+5. Wait for automatic verification
+6. Subscription becomes ACTIVE
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎯 **Lottery Process:**
+• All active subscribers participate
+• Fair random selection
+• Multiple winners possible
+• Winners announced via broadcast
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚡ **Automatic Verification:**
+• Blockchain transaction check
+• Multiple API verification
+• Fast & accurate
+• 99.99% reliability
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💰 **Important Notes:**
+• Participation is completely VOLUNTARY
+• You may win or not win
+• System is 100% FAIR
+• No guarantees of winning
+• Don't participate if unsure
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🤝 **Referral Program:**
+• Share your referral link
+• Earn bonuses
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📌 **Support:**
+• Contact admin for help
+• Fair and transparent system
+
+🍀 **Good luck to all participants!**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+""",
+                "admin_stats": "📊 **System Statistics**\n\n👥 Total Users: {users}\n✅ Active Subs: {active}\n💰 Total Prizes: ${prizes}\n🏆 Winners: {winners}\n🔑 API Keys: {apis}",
+                "broadcast_sent": "✅ Broadcast sent to {count} users.",
+                "manual_verify_done": "✅ User {user_id} verified manually.",
+                "api_added": "✅ New API key added. Total: {total}"
+            },
+            "fa": {
+                "welcome": "🎉 به ربات {bot_name} خوش آمدید!\n\nلطفاً یکی از گزینه‌ها را انتخاب کنید:",
+                "join_lottery": "🎰 شرکت در قرعه‌کشی",
+                "referral": "👥 رفرال",
+                "guidance": "📖 راهنمایی",
+                "change_language": "🌐 تغییر زبان",
+                "lottery_join": "💰 لطفاً آدرس کیف پول مبدا TRC20 خود را وارد کنید:",
+                "wallet_saved": "✅ کیف پول ذخیره شد!\n\n📤 لطفاً دقیقاً ${amount} USDT به آدرس زیر ارسال کنید:\n`{wallet}`\n\n⏳ پس از ارسال، روی 'پرداخت کردم' کلیک کنید.",
+                "payment_verified": "✅ پرداخت تایید شد!\n\n🎉 اشتراک شما فعال شد!",
+                "payment_failed": "❌ تایید پرداخت ناموفق بود. لطفاً دوباره تلاش کنید.",
+                "already_paid": "ℹ️ شما قبلاً اشتراک فعال دارید.",
+                "not_subscribed": "❌ برای شرکت در قرعه‌کشی به اشتراک فعال نیاز دارید.",
+                "admin_panel": "🔧 پنل مدیریت",
+                "broadcast": "📢 پیام همگانی",
+                "manual_verify": "✅ تایید دستی",
+                "add_api": "🔑 اضافه کردن API",
+                "view_stats": "📊 آمار",
+                "i_have_paid": "✅ پرداخت کردم",
+                "checking_payment": "⏳ در حال بررسی پرداخت شما...",
+                "invalid_wallet": "❌ آدرس کیف پول TRC20 نامعتبر است.",
+                "language_changed": "🌐 زبان به فارسی تغییر یافت",
+                "referral_text": "🔗 لینک رفرال شما:\n`https://t.me/{bot_username}?start=ref_{code}`\n\n👥 تعداد رفرال: {count}",
+                "guidance_text": """📚 **راهنمای کامل** 📚
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔰 **شرکت در قرعه‌کشی کاملاً داوطلبانه است**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✅ **نحوه شرکت:**
+۱. روی 'شرکت در قرعه‌کشی' کلیک کنید
+۲. آدرس کیف پول مبدا TRC20 خود را وارد کنید
+۳. دقیقاً ${amount} USDT به آدرس زیر ارسال کنید
+۴. روی 'پرداخت کردم' کلیک کنید
+۵. منتظر تایید خودکار باشید
+۶. اشتراک شما فعال می‌شود
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎯 **فرآیند قرعه‌کشی:**
+• تمام کاربران با اشتراک فعال شرکت می‌کنند
+• انتخاب تصادفی عادلانه
+• امکان چند برنده
+• برندگان از طریق پیام همگانی اعلام می‌شوند
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚡ **تایید خودکار:**
+• بررسی تراکنش در بلاکچین
+• تایید با چندین API
+• سریع و دقیق
+• ۹۹.۹۹٪ اطمینان
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💰 **نکات مهم:**
+• شرکت کاملاً داوطلبانه است
+• ممکن است برنده شوید یا نشوید
+• سیستم ۱۰۰٪ عادلانه است
+• هیچ تضمینی برای برنده شدن نیست
+• اگر مطمئن نیستید شرکت نکنید
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🤝 **برنامه رفرال:**
+• لینک رفرال خود را به اشتراک بگذارید
+• پاداش دریافت کنید
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📌 **پشتیبانی:**
+• برای کمک با ادمین تماس بگیرید
+• سیستم عادلانه و شفاف
+
+🍀 **برای همه شرکت‌کنندگان آرزوی موفقیت داریم!**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+""",
+                "admin_stats": "📊 **آمار سیستم**\n\n👥 کل کاربران: {users}\n✅ اشتراک فعال: {active}\n💰 مجموع جوایز: ${prizes}\n🏆 برندگان: {winners}\n🔑 تعداد API: {apis}",
+                "broadcast_sent": "✅ پیام به {count} کاربر ارسال شد.",
+                "manual_verify_done": "✅ کاربر {user_id} به صورت دستی تایید شد.",
+                "api_added": "✅ API جدید اضافه شد. تعداد کل: {total}"
+            },
+            "tr": {
+                "welcome": "🎉 {bot_name} hoş geldiniz!\n\nLütfen bir seçenek seçin:",
+                "join_lottery": "🎰 Piyangoya Katıl",
+                "referral": "👥 Davet",
+                "guidance": "📖 Rehber",
+                "change_language": "🌐 Dil Değiştir",
+                "lottery_join": "💰 Lütfen TRC20 cüzdan adresinizi girin:",
+                "wallet_saved": "✅ Cüzdan kaydedildi!\n\n📤 Tam olarak ${amount} USDT'yi şu adrese gönderin:\n`{wallet}`\n\n⏳ Gönderdikten sonra 'Ödedim' butonuna tıklayın.",
+                "payment_verified": "✅ Ödeme doğrulandı!\n\n🎉 Aboneliğiniz AKTİF!",
+                "payment_failed": "❌ Ödeme doğrulaması başarısız. Tekrar deneyin.",
+                "already_paid": "ℹ️ Zaten aktif aboneliğiniz var.",
+                "not_subscribed": "❌ Piyangoya katılmak için aktif aboneliğiniz olmalı.",
+                "admin_panel": "🔧 Yönetim Paneli",
+                "broadcast": "📢 Toplu Mesaj",
+                "manual_verify": "✅ Manuel Doğrula",
+                "add_api": "🔑 API Ekle",
+                "view_stats": "📊 İstatistikler",
+                "i_have_paid": "✅ Ödedim",
+                "checking_payment": "⏳ Ödemeniz kontrol ediliyor...",
+                "invalid_wallet": "❌ Geçersiz TRC20 cüzdan adresi.",
+                "language_changed": "🌐 Dil Türkçe olarak değiştirildi",
+                "referral_text": "🔗 Davet bağlantınız:\n`https://t.me/{bot_username}?start=ref_{code}`\n\n👥 Toplam davet: {count}",
+                "guidance_text": """📚 **TAM REHBER** 📚
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔰 **KATILIM GÖNÜLLÜDÜR**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✅ **Nasıl Katılırım:**
+1. 'Piyangoya Katıl' butonuna tıklayın
+2. TRC20 cüzdan adresinizi girin
+3. Tam olarak ${amount} USDT gönderin
+4. 'Ödedim' butonuna tıklayın
+5. Otomatik doğrulamayı bekleyin
+6. Aboneliğiniz AKTİF olur
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎯 **Piyango Süreci:**
+• Tüm aktif aboneler katılır
+• Adil rastgele seçim
+• Birden fazla kazanan mümkün
+• Kazananlar duyuru ile bildirilir
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚡ **Otomatik Doğrulama:**
+• Blockchain işlem kontrolü
+• Çoklu API doğrulaması
+• Hızlı ve doğru
+• %99.99 güvenilirlik
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💰 **Önemli Notlar:**
+• Katılım tamamen GÖNÜLLÜDÜR
+• Kazanabilir veya kazanamayabilirsiniz
+• Sistem %100 ADİL'dir
+• Kazanma garantisi yoktur
+• Emin değilseniz katılmayın
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🤝 **Davet Programı:**
+• Davet bağlantınızı paylaşın
+• Bonus kazanın
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📌 **Destek:**
+• Yardım için yöneticiyle iletişime geçin
+• Adil ve şeffaf sistem
+
+🍀 **Tüm katılımcılara iyi şanslar!**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+""",
+                "admin_stats": "📊 **Sistem İstatistikleri**\n\n👥 Toplam Kullanıcı: {users}\n✅ Aktif Abone: {active}\n💰 Toplam Ödül: ${prizes}\n🏆 Kazananlar: {winners}\n🔑 API Sayısı: {apis}",
+                "broadcast_sent": "✅ Mesaj {count} kullanıcıya gönderildi.",
+                "manual_verify_done": "✅ {user_id} kullanıcısı manuel doğrulandı.",
+                "api_added": "✅ Yeni API eklendi. Toplam: {total}"
+            }
+        }
+    
+    def get_text(self, lang, key, **kwargs):
+        if lang not in self.translations:
+            lang = "en"
+        text = self.translations[lang].get(key, self.translations["en"].get(key, key))
+        for k, v in kwargs.items():
+            text = text.replace(f"{{{k}}}", str(v))
+        return text
+
+# ==================== سیستم پرداخت ====================
+class PaymentSystem:
+    def __init__(self, db):
+        self.db = db
+        self.api_keys = Config.API_KEYS.copy()
+        self.api_key_index = 0
+        self.verification_queue = Queue()
         self.session = None
-        
-    async def get_session(self):
-        if self.session is None or self.session.closed:
-            self.session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=30),
-                connector=aiohttp.TCPConnector(limit=100, limit_per_host=20)
-            )
-        return self.session
-        
-    async def verify_transaction(self, from_address, to_address, amount, tx_id=None):
-        session = await self.get_session()
-        
-        if tx_id:
-            return await self._verify_by_txid(session, tx_id, from_address, to_address, amount)
-        return await self._search_transactions(session, from_address, to_address, amount)
-        
-    async def _verify_by_txid(self, session, tx_id, from_address, to_address, amount):
-        for api in self.apis:
-            try:
-                url = f"https://api.trongrid.io/v1/transactions/{tx_id}"
-                headers = {"TRON-PRO-API-KEY": api}
-                
-                async with session.get(url, headers=headers) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        if self._validate_transaction_data(data, from_address, to_address, amount):
-                            self._update_api_stats(api, True)
-                            return True, tx_id, "Verified"
-                    else:
-                        self._update_api_stats(api, False)
-            except Exception as e:
-                logger.error(f"API error for {api}: {e}")
-                self._update_api_stats(api, False)
-        return False, None, "Transaction not found or invalid"
-        
-    async def _search_transactions(self, session, from_address, to_address, amount):
-        for api in self.apis:
-            try:
-                url = f"https://api.trongrid.io/v1/accounts/{from_address}/transactions"
-                params = {"limit": 50, "order_by": "block_timestamp,desc"}
-                headers = {"TRON-PRO-API-KEY": api}
-                
-                async with session.get(url, headers=headers, params=params) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        for tx in data.get('data', []):
-                            if self._validate_transaction_data(tx, from_address, to_address, amount):
-                                self._update_api_stats(api, True)
-                                return True, tx.get('txID'), "Verified"
-                    else:
-                        self._update_api_stats(api, False)
-            except Exception as e:
-                logger.error(f"API search error for {api}: {e}")
-                self._update_api_stats(api, False)
-        return False, None, "No matching transaction found"
-        
-    def _validate_transaction_data(self, tx_data, from_address, to_address, amount):
+        self.is_processing = False
+        self.executor = ThreadPoolExecutor(max_workers=Config.MAX_WORKERS)
+    
+    async def initialize(self):
+        self.session = aiohttp.ClientSession()
+        asyncio.create_task(self._process_queue())
+        logger.info(f"Payment system initialized with {len(self.api_keys)} API keys")
+    
+    async def verify_payment(self, user_id, from_address, to_address, amount):
         try:
-            if tx_data.get('to') != to_address:
-                return False
-            tx_amount = tx_data.get('amount', 0) / 1_000_000
-            if abs(tx_amount - amount) > 0.01:
-                return False
-            status = tx_data.get('status', '')
-            if status and status != 'SUCCESS':
-                return False
+            await self.verification_queue.put((user_id, from_address, to_address, amount))
+            if not self.is_processing:
+                asyncio.create_task(self._process_queue())
             return True
         except Exception as e:
-            logger.error(f"Validation error: {e}")
+            logger.error(f"Verification error: {e}")
             return False
-            
-    def _update_api_stats(self, api, success):
-        with self.lock:
-            if api in self.api_stats:
-                self.api_stats[api]['requests'] += 1
-                if success:
-                    self.api_stats[api]['success'] += 1
+    
+    async def _process_queue(self):
+        if self.is_processing:
+            return
+        
+        self.is_processing = True
+        try:
+            while not self.verification_queue.empty():
+                user_id, from_address, to_address, amount = await self.verification_queue.get()
+                
+                verified = False
+                for attempt in range(Config.MAX_RETRY):
+                    api_key = self.api_keys[self.api_key_index % len(self.api_keys)]
+                    self.api_key_index += 1
+                    
+                    verified = await self._verify_with_api(from_address, to_address, amount, api_key)
+                    
+                    if verified:
+                        break
+                    
+                    await asyncio.sleep(5 * (attempt + 1))
+                
+                if verified:
+                    subscription_end = int(time.time()) + 30 * 24 * 3600
+                    await self.db.execute_query(
+                        user_id,
+                        "UPDATE users SET subscription_end = ? WHERE user_id = ?",
+                        (subscription_end, user_id)
+                    )
+                    
+                    await self.db.execute_query(
+                        user_id,
+                        "INSERT OR REPLACE INTO lottery_participants (user_id, participated_at) VALUES (?, ?)",
+                        (user_id, int(time.time()))
+                    )
+                    
+                    logger.info(f"✅ Payment verified for user {user_id}")
                 else:
-                    self.api_stats[api]['errors'] += 1
+                    logger.warning(f"❌ Payment verification failed for user {user_id}")
+                
+                await asyncio.sleep(0.01)
+        except Exception as e:
+            logger.error(f"Queue error: {e}")
+        finally:
+            self.is_processing = False
+    
+    async def _verify_with_api(self, from_address, to_address, amount, api_key):
+        try:
+            url = f"{Config.TRONGRID_API}/v1/accounts/{from_address}/transactions"
+            headers = {"TRON-PRO-API-KEY": api_key}
+            
+            async with self.session.get(url, headers=headers) as response:
+                if response.status == 200:
+                    data = await response.json()
                     
-    def add_api(self, api_key):
-        if api_key not in self.apis:
-            self.apis.append(api_key)
-            self.api_stats[api_key] = {'requests': 0, 'success': 0, 'errors': 0, 'last_reset': time.time()}
-            return True
-        return False
-
-payment_verifier = PaymentVerifier()
-
-# ============================================================
-# سیستم قرعه‌کشی
-# ============================================================
-class LotterySystem:
-    def __init__(self):
-        self.current_lottery = None
-        self.is_running = False
-        self.lock = threading.Lock()
-        
-    def start_lottery(self, winners_count, prize_per_winner):
-        with self.lock:
-            if self.is_running:
-                return False, "Lottery is already running"
-                
-            eligible_users = self._get_eligible_users()
+                    for tx in data.get("data", []):
+                        if self._check_transaction(tx, to_address, amount):
+                            return True
             
-            if not eligible_users:
-                return False, "No eligible users found"
-                
-            if len(eligible_users) < winners_count:
-                return False, f"Eligible users ({len(eligible_users)}) less than winners ({winners_count})"
-                
-            winners = self._smart_select_winners(eligible_users, winners_count)
+            url = f"{Config.TRONSCAN_API}/api/transaction"
+            params = {"address": from_address, "limit": 50}
             
-            if not winners or len(winners) < winners_count:
-                return False, "Error selecting winners"
-                
-            lottery_id = self._save_lottery(winners_count, prize_per_winner, winners)
-            
-            if not lottery_id:
-                return False, "Error saving lottery"
-                
-            self._save_winners(lottery_id, winners, prize_per_winner)
-            
-            for winner in winners:
-                self._update_winner_stats(winner)
-                
-            self.current_lottery = {
-                'id': lottery_id,
-                'winners': winners,
-                'prize_per_winner': prize_per_winner,
-                'winners_count': winners_count,
-                'timestamp': datetime.now()
-            }
-            
-            self.is_running = False
-            
-            return True, {
-                'lottery_id': lottery_id,
-                'winners': winners,
-                'prize_per_winner': prize_per_winner
-            }
-            
-    def _get_eligible_users(self):
-        cursor = db.execute_global(
-            """SELECT user_id FROM users 
-               WHERE has_subscription = 1 
-               AND subscription_end >= date('now')"""
-        )
-        return [row['user_id'] for row in cursor]
-        
-    def _smart_select_winners(self, eligible_users, winners_count):
-        weighted_users = []
-        for user_id in eligible_users:
-            weight = self._calculate_user_weight(user_id)
-            if weight > 0:
-                weighted_users.extend([user_id] * weight)
-                
-        if not weighted_users:
-            return random.sample(eligible_users, min(winners_count, len(eligible_users)))
-            
-        if len(weighted_users) < winners_count:
-            return random.sample(eligible_users, min(winners_count, len(eligible_users)))
-            
-        selected = []
-        temp_users = weighted_users.copy()
-        
-        for _ in range(min(winners_count, len(set(temp_users)))):
-            if not temp_users:
-                break
-            winner = random.choice(temp_users)
-            temp_users = [u for u in temp_users if u != winner]
-            selected.append(winner)
-            
-        return selected
-        
-    def _calculate_user_weight(self, user_id):
-        try:
-            cursor = db.execute(user_id,
-                """SELECT total_participations, wins_count, last_win_date 
-                   FROM users WHERE user_id = ?""",
-                (user_id,)
-            )
-            user_data = cursor.fetchone()
-            
-            if not user_data:
-                return 1
-                
-            weight = 1
-            
-            if user_data['total_participations'] > 0:
-                weight += min(user_data['total_participations'] / 5, 3)
-                
-            if user_data['wins_count'] > 0:
-                weight = max(1, weight - user_data['wins_count'] * 0.5)
-                
-            if user_data['last_win_date']:
-                try:
-                    last_win = datetime.strptime(user_data['last_win_date'], '%Y-%m-%d')
-                    days_since_win = (datetime.now() - last_win).days
-                    if days_since_win < 3:
-                        weight *= 0.3
-                    elif days_since_win < 7:
-                        weight *= 0.6
-                except:
-                    pass
+            async with self.session.get(url, params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
                     
-            return max(1, int(weight))
+                    for tx in data.get("data", []):
+                        if self._check_transaction(tx, to_address, amount):
+                            return True
             
-        except Exception as e:
-            logger.error(f"Error calculating weight for {user_id}: {e}")
-            return 1
-            
-    def _save_lottery(self, winners_count, prize_per_winner, winners):
-        try:
-            total_prize = winners_count * prize_per_winner
-            cursor = db.execute(0,
-                """INSERT INTO lotteries 
-                   (winners_count, prize_per_winner, total_prize, status, started_at) 
-                   VALUES (?, ?, ?, 'running', CURRENT_TIMESTAMP)""",
-                (winners_count, prize_per_winner, total_prize)
-            )
-            return cursor.lastrowid
-        except Exception as e:
-            logger.error(f"Error saving lottery: {e}")
-            return None
-            
-    def _save_winners(self, lottery_id, winners, prize_amount):
-        try:
-            for user_id in winners:
-                cursor = db.execute(user_id,
-                    "SELECT wallet_address FROM users WHERE user_id = ?",
-                    (user_id,)
-                )
-                user_data = cursor.fetchone()
-                wallet_address = user_data['wallet_address'] if user_data else None
-                
-                db.execute(user_id,
-                    """INSERT INTO winners 
-                       (lottery_id, user_id, prize_amount, wallet_address, paid_status) 
-                       VALUES (?, ?, ?, ?, 0)""",
-                    (lottery_id, user_id, prize_amount, wallet_address)
-                )
-            return True
-        except Exception as e:
-            logger.error(f"Error saving winners: {e}")
-            return False
-            
-    def _update_winner_stats(self, user_id):
-        try:
-            db.execute(user_id,
-                """UPDATE users 
-                   SET wins_count = wins_count + 1, 
-                       last_win_date = CURRENT_TIMESTAMP,
-                       updated_at = CURRENT_TIMESTAMP 
-                   WHERE user_id = ?""",
-                (user_id,)
-            )
-        except Exception as e:
-            logger.error(f"Error updating winner stats for {user_id}: {e}")
-
-lottery_system = LotterySystem()
-
-# ============================================================
-# سیستم مدیریت کاربران
-# ============================================================
-class UserManager:
-    @staticmethod
-    def register_user(user_id, username=None, first_name=None, last_name=None):
-        try:
-            cursor = db.execute(user_id,
-                "SELECT user_id FROM users WHERE user_id = ?",
-                (user_id,)
-            )
-            
-            if not cursor.fetchone():
-                referral_code = UserManager._generate_referral_code(user_id)
-                db.execute(user_id,
-                    """INSERT INTO users 
-                       (user_id, username, first_name, last_name, referral_code) 
-                       VALUES (?, ?, ?, ?, ?)""",
-                    (user_id, username, first_name, last_name, referral_code)
-                )
-                return True
             return False
         except Exception as e:
-            logger.error(f"Error registering user {user_id}: {e}")
+            logger.error(f"API verification error: {e}")
             return False
-            
-    @staticmethod
-    def _generate_referral_code(user_id):
-        import hashlib
-        base = f"UTYOB_{user_id}_{time.time()}_{random.randint(1000, 9999)}"
-        hash_obj = hashlib.sha256(base.encode())
-        return hash_obj.hexdigest()[:10].upper()
-        
-    @staticmethod
-    def get_user(user_id):
-        try:
-            cursor = db.execute(user_id,
-                "SELECT * FROM users WHERE user_id = ?",
-                (user_id,)
-            )
-            return cursor.fetchone()
-        except Exception as e:
-            logger.error(f"Error getting user {user_id}: {e}")
-            return None
-            
-    @staticmethod
-    def update_user(user_id, **kwargs):
-        try:
-            set_clause = ", ".join([f"{key} = ?" for key in kwargs.keys()])
-            values = list(kwargs.values()) + [user_id]
-            db.execute(user_id,
-                f"UPDATE users SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?",
-                values
-            )
-            return True
-        except Exception as e:
-            logger.error(f"Error updating user {user_id}: {e}")
-            return False
-            
-    @staticmethod
-    def get_user_count():
-        try:
-            total = 0
-            for conn in db.connections.values():
-                cursor = conn.cursor()
-                cursor.execute("SELECT COUNT(*) as count FROM users")
-                total += cursor.fetchone()['count']
-            return total
-        except Exception as e:
-            logger.error(f"Error getting user count: {e}")
-            return 0
-            
-    @staticmethod
-    def get_active_users():
-        try:
-            results = db.execute_global(
-                """SELECT user_id FROM users 
-                   WHERE has_subscription = 1 
-                   AND subscription_end >= date('now')"""
-            )
-            return [row['user_id'] for row in results]
-        except Exception as e:
-            logger.error(f"Error getting active users: {e}")
-            return []
-
-user_manager = UserManager()
-
-# ============================================================
-# کلاس اصلی ربات
-# ============================================================
-class UTYOBot:
-    def __init__(self):
-        self.application = Application.builder().token(BOT_TOKEN).build()
-        self._setup_handlers()
-        
-    def _setup_handlers(self):
-        app = self.application
-        
-        # دستورات عمومی
-        app.add_handler(CommandHandler("start", self.start_command))
-        app.add_handler(CommandHandler("help", self.help_command))
-        app.add_handler(CommandHandler("referral", self.referral_command))
-        app.add_handler(CommandHandler("language", self.language_command))
-        
-        # دکمه‌های منو
-        app.add_handler(CallbackQueryHandler(self.main_menu_callback, pattern="^main_menu$"))
-        app.add_handler(CallbackQueryHandler(self.lottery_callback, pattern="^lottery$"))
-        app.add_handler(CallbackQueryHandler(self.referral_callback, pattern="^referral$"))
-        app.add_handler(CallbackQueryHandler(self.guide_callback, pattern="^guide$"))
-        app.add_handler(CallbackQueryHandler(self.language_callback, pattern="^language$"))
-        
-        # دکمه‌های قرعه‌کشی
-        app.add_handler(CallbackQueryHandler(self.join_lottery_callback, pattern="^join_lottery$"))
-        app.add_handler(CallbackQueryHandler(self.verify_payment_callback, pattern="^verify_payment$"))
-        app.add_handler(CallbackQueryHandler(self.confirm_payment_callback, pattern="^confirm_payment$"))
-        
-        # دکمه‌های پنل مدیریت
-        app.add_handler(CallbackQueryHandler(self.admin_panel_callback, pattern="^admin_panel$"))
-        app.add_handler(CallbackQueryHandler(self.admin_broadcast_callback, pattern="^admin_broadcast$"))
-        app.add_handler(CallbackQueryHandler(self.admin_start_lottery_callback, pattern="^admin_start_lottery$"))
-        app.add_handler(CallbackQueryHandler(self.admin_manual_verify_callback, pattern="^admin_manual_verify$"))
-        app.add_handler(CallbackQueryHandler(self.admin_poll_callback, pattern="^admin_poll$"))
-        app.add_handler(CallbackQueryHandler(self.admin_pay_winners_callback, pattern="^admin_pay_winners$"))
-        app.add_handler(CallbackQueryHandler(self.admin_add_api_callback, pattern="^admin_add_api$"))
-        app.add_handler(CallbackQueryHandler(self.admin_stats_callback, pattern="^admin_stats$"))
-        
-        # مراحل قرعه‌کشی
-        app.add_handler(CallbackQueryHandler(self.start_lottery_confirm_callback, pattern="^start_lottery_confirm$"))
-        app.add_handler(CallbackQueryHandler(self.start_lottery_final_callback, pattern="^start_lottery_final$"))
-        
-        # برداشت جایزه
-        app.add_handler(CallbackQueryHandler(self.withdraw_prize_callback, pattern="^withdraw_prize$"))
-        app.add_handler(CallbackQueryHandler(self.confirm_withdraw_callback, pattern="^confirm_withdraw$"))
-        
-        # تغییر زبان
-        app.add_handler(CallbackQueryHandler(self.set_language_callback, pattern="^set_lang_"))
-        
-        # مدیریت پیام‌ها
-        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
-        app.add_handler(MessageHandler(filters.PHOTO, self.handle_photo))
-        
-        # مدیریت خطاها
-        app.add_error_handler(self.error_handler)
-
-    # ============================================================
-    # توابع کمکی
-    # ============================================================
     
-    def _get_user_language(self, user_id):
-        """دریافت زبان کاربر از دیتابیس"""
-        user = user_manager.get_user(user_id)
-        if user and user['language']:
-            return user['language']
-        return 'en'
-    
-    def _set_user_language(self, user_id, lang_code):
-        """تنظیم زبان کاربر"""
-        if lang_code in LanguageManager.LANGUAGES:
-            user_manager.update_user(user_id, language=lang_code)
-            return True
-        return False
-    
-    def _get_text(self, user_id, key, *args, **kwargs):
-        """دریافت متن به زبان کاربر"""
-        lang = self._get_user_language(user_id)
-        return LanguageManager.get_text(lang, key, *args, **kwargs)
-    
-    def _validate_wallet_address(self, address):
-        """اعتبارسنجی آدرس کیف پول TRC20"""
+    def _check_transaction(self, tx, to_address, amount):
         try:
-            if len(address) != 34:
+            tx_to = tx.get("to", "")
+            if tx_to.lower() != to_address.lower():
                 return False
-            valid_chars = set('123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz')
-            if not all(c in valid_chars for c in address):
-                return False
-            try:
-                decoded = base58.b58decode(address)
-                return True
-            except:
-                return False
-        except Exception as e:
-            logger.error(f"Error validating address: {e}")
-            return False
-    
-    async def _auto_verify_payment(self, user_id, from_address, to_address, amount):
-        """تایید خودکار پرداخت"""
-        try:
-            # بررسی کش
-            cache_key = f"payment_{from_address}_{to_address}_{amount}"
-            cached_result = cache.get(cache_key)
-            if cached_result:
-                return cached_result
             
-            # تایید با سیستم پرداخت
-            success, tx_id, message = await payment_verifier.verify_transaction(
-                from_address, to_address, amount
-            )
-            
-            if success:
-                # ثبت تراکنش موفق
-                db.execute(user_id,
-                    """INSERT INTO transactions 
-                       (user_id, from_address, to_address, amount, tx_id, status, verified_at) 
-                       VALUES (?, ?, ?, ?, ?, 'verified', CURRENT_TIMESTAMP)""",
-                    (user_id, from_address, to_address, amount, tx_id)
-                )
-                
-                # به‌روزرسانی کاربر
-                db.execute(user_id,
-                    "UPDATE users SET total_participations = total_participations + 1 WHERE user_id = ?",
-                    (user_id,)
-                )
-                
-                result = {
-                    'success': True,
-                    'tx_id': tx_id,
-                    'message': 'Verified'
-                }
+            tx_amount = tx.get("amount", 0)
+            if tx_amount > 0:
+                tx_amount = tx_amount / 1_000_000
             else:
-                # ثبت تراکنش ناموفق
-                db.execute(user_id,
-                    """INSERT INTO transactions 
-                       (user_id, from_address, to_address, amount, status) 
-                       VALUES (?, ?, ?, ?, 'failed')""",
-                    (user_id, from_address, to_address, amount)
-                )
-                
-                result = {
-                    'success': False,
-                    'tx_id': None,
-                    'message': message or 'Verification failed'
-                }
+                token_info = tx.get("token_info", {})
+                if token_info.get("tokenId") == Config.USDT_CONTRACT:
+                    tx_amount = tx.get("value", 0) / 1_000_000
             
-            # ذخیره در کش
-            cache.set(cache_key, result, ttl=60)
-            return result
+            min_amount = amount * 0.98
+            max_amount = amount * 1.02
             
+            return min_amount <= tx_amount <= max_amount
         except Exception as e:
-            logger.error(f"Error in auto verify payment: {e}")
-            return {
-                'success': False,
-                'tx_id': None,
-                'message': str(e)
-            }
+            logger.error(f"Transaction check error: {e}")
+            return False
     
-    def _get_pending_transactions(self):
-        """دریافت تراکنش‌های تایید نشده"""
-        results = db.execute_global(
-            "SELECT * FROM transactions WHERE status = 'pending' OR status = 'failed'"
-        )
-        return results
+    async def add_api_key(self, api_key):
+        if api_key not in self.api_keys:
+            self.api_keys.append(api_key)
+            logger.info(f"New API key added. Total: {len(self.api_keys)}")
+            return True
+        return False
     
-    def _get_unpaid_winners(self):
-        """دریافت برندگان پرداخت نشده"""
-        results = db.execute_global(
-            "SELECT * FROM winners WHERE paid_status = 0"
-        )
-        return results
-    
-    def _check_winner(self, user_id):
-        """بررسی برنده بودن کاربر"""
-        cursor = db.execute(user_id,
-            """SELECT * FROM winners 
-               WHERE user_id = ? 
-               AND paid_status = 0 
-               ORDER BY created_at DESC LIMIT 1""",
-            (user_id,)
-        )
-        return cursor.fetchone()
-    
-    def _get_transaction_stats(self):
-        """آمار تراکنش‌ها"""
-        results = db.execute_global(
-            "SELECT status, COUNT(*) as count FROM transactions GROUP BY status"
-        )
-        stats = {'total': 0, 'verified': 0, 'pending': 0, 'failed': 0}
-        for row in results:
-            stats['total'] += row['count']
-            if row['status'] == 'verified':
-                stats['verified'] += row['count']
-            elif row['status'] == 'pending':
-                stats['pending'] += row['count']
-            elif row['status'] == 'failed':
-                stats['failed'] += row['count']
-        return stats
-    
-    def _get_lottery_stats(self):
-        """آمار قرعه‌کشی"""
-        cursor = db.execute(0, "SELECT COUNT(*) as total FROM lotteries")
-        total = cursor.fetchone()['total']
-        
-        cursor = db.execute(0, "SELECT COUNT(*) as total_winners FROM winners")
-        total_winners = cursor.fetchone()['total_winners']
-        
-        cursor = db.execute(0, "SELECT started_at FROM lotteries ORDER BY started_at DESC LIMIT 1")
-        last = cursor.fetchone()
-        
-        return {
-            'total': total,
-            'total_winners': total_winners,
-            'last': last['started_at'] if last else None
-        }
-    
-    async def _get_winner_amount(self, user_id):
-        """دریافت مبلغ جایزه برنده"""
-        cursor = db.execute(user_id,
-            "SELECT prize_amount FROM winners WHERE user_id = ? AND paid_status = 0",
-            (user_id,)
-        )
-        result = cursor.fetchone()
-        return result['prize_amount'] if result else 0
+    async def close(self):
+        if self.session:
+            await self.session.close()
 
-    # ============================================================
-    # دستورات عمومی
-    # ============================================================
+# ==================== ربات اصلی ====================
+class LotteryBot:
+    def __init__(self):
+        self.db = ShardedDatabase()
+        self.translations = TranslationSystem()
+        self.payment = PaymentSystem(self.db)
+        self.application = None
+        self.bot_username = "UTYOB_Bot"
+        self.user_states = {}
+        
+        self.WAITING_WALLET, self.WAITING_BROADCAST, \
+        self.WAITING_MANUAL_VERIFY, self.WAITING_API_KEY = range(4)
     
+    async def start(self):
+        await self.payment.initialize()
+        
+        self.application = Application.builder().token(Config.BOT_TOKEN).build()
+        self._register_handlers()
+        
+        await self.application.initialize()
+        await self.application.start()
+        await self.application.updater.start_polling()
+        
+        logger.info("🚀 Bot started successfully!")
+        
+        self._start_flask_server()
+        
+        while True:
+            await asyncio.sleep(1)
+    
+    def _register_handlers(self):
+        self.application.add_handler(CommandHandler("start", self.start_command))
+        
+        self.application.add_handler(CallbackQueryHandler(self.button_callback))
+        
+        conv_handler = ConversationHandler(
+            entry_points=[
+                MessageHandler(filters.Regex("^🎰 شرکت در قرعه‌کشی$|^🎰 Join Lottery$|^🎰 Piyangoya Katıl$"), self.start_lottery_join),
+                MessageHandler(filters.Regex("^👥 رفرال$|^👥 Referral$|^👥 Davet$"), self.handle_referral),
+                MessageHandler(filters.Regex("^📖 راهنمایی$|^📖 Guidance$|^📖 Rehber$"), self.handle_guidance),
+                MessageHandler(filters.Regex("^🌐 تغییر زبان$|^🌐 Change Language$|^🌐 Dil Değiştir$"), self.handle_language_change),
+                MessageHandler(filters.Regex("^🔧 پنل مدیریت$|^🔧 Admin Panel$|^🔧 Yönetim Paneli$"), self.show_admin_panel),
+                MessageHandler(filters.Regex("^✅ پرداخت کردم$|^✅ I have paid$|^✅ Ödedim$"), self.handle_payment_confirmation),
+            ],
+            states={
+                self.WAITING_WALLET: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_wallet_input)],
+                self.WAITING_BROADCAST: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_broadcast)],
+                self.WAITING_MANUAL_VERIFY: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_manual_verify)],
+                self.WAITING_API_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_add_api)],
+            },
+            fallbacks=[CommandHandler("cancel", self.cancel_command)]
+        )
+        self.application.add_handler(conv_handler)
+        
+        self.application.add_error_handler(self.error_handler)
+    
+    # ==================== Start Command ====================
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """دستور /start"""
         user = update.effective_user
+        user_id = user.id
         
-        # ثبت کاربر
-        user_manager.register_user(
-            user.id,
-            user.username,
-            user.first_name,
-            user.last_name
+        if context.args:
+            ref_code = context.args[0]
+            if ref_code.startswith("ref_"):
+                await self._process_referral(user_id, ref_code[4:])
+        
+        db_user = await self.db.get_user(user_id)
+        if not db_user:
+            await self.db.create_user(
+                user_id,
+                user.username or "",
+                user.first_name or "",
+                user.last_name or ""
+            )
+            db_user = await self.db.get_user(user_id)
+        
+        lang = db_user.get("language", "en")
+        
+        keyboard = [
+            [KeyboardButton(self.translations.get_text(lang, "join_lottery"))],
+            [KeyboardButton(self.translations.get_text(lang, "referral")), 
+             KeyboardButton(self.translations.get_text(lang, "guidance"))],
+            [KeyboardButton(self.translations.get_text(lang, "change_language"))]
+        ]
+        
+        if user_id in Config.ADMIN_IDS:
+            keyboard.append([KeyboardButton("🔧 پنل مدیریت")])
+        
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
+        welcome_text = self.translations.get_text(
+            lang, "welcome", bot_name="UTYOB Lottery Bot"
         )
         
-        # زبان پیش‌فرض انگلیسی
-        lang = self._get_user_language(user.id)
+        await update.message.reply_text(welcome_text, reply_markup=reply_markup)
+    
+    # ==================== Lottery Join ====================
+    async def start_lottery_join(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        user_id = user.id
         
-        # دکمه پلی
-        keyboard = [[InlineKeyboardButton(
-            LanguageManager.get_text(lang, 'play_button'),
-            callback_data="main_menu"
-        )]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        db_user = await self.db.get_user(user_id)
+        if not db_user:
+            await self.start_command(update, context)
+            return ConversationHandler.END
         
+        lang = db_user.get("language", "en")
+        
+        if db_user.get("subscription_end", 0) > int(time.time()):
+            await update.message.reply_text(
+                self.translations.get_text(lang, "already_paid")
+            )
+            return ConversationHandler.END
+        
+        context.user_data["state"] = self.WAITING_WALLET
         await update.message.reply_text(
-            LanguageManager.get_text(lang, 'welcome'),
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """دستور /help"""
-        user_id = update.effective_user.id
-        lang = self._get_user_language(user_id)
-        
-        keyboard = [[InlineKeyboardButton(
-            LanguageManager.get_text(lang, 'back'),
-            callback_data="main_menu"
-        )]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(
-            LanguageManager.get_text(lang, 'guide_text'),
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    async def referral_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """دستور /referral"""
-        user_id = update.effective_user.id
-        await self._show_referral(update, user_id)
-    
-    async def language_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """دستور /language"""
-        user_id = update.effective_user.id
-        await self._show_language_selector(update, user_id)
-    
-    async def _show_referral(self, update, user_id):
-        """نمایش اطلاعات رفرال"""
-        user = user_manager.get_user(user_id)
-        if not user:
-            return
-        
-        lang = self._get_user_language(user_id)
-        referral_code = user['referral_code']
-        bot_username = "UTYOB_Bot"
-        referral_link = f"https://t.me/{bot_username}?start=ref_{referral_code}"
-        
-        referred_count = len(db.execute_global(
-            "SELECT user_id FROM users WHERE referred_by = ?",
-            (user_id,)
-        ))
-        
-        text = LanguageManager.get_text(lang, 'referral_text',
-            user['first_name'] or user_id,
-            referred_count,
-            referral_code,
-            referral_link
+            self.translations.get_text(lang, "lottery_join")
         )
         
-        keyboard = [
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'share'),
-                url=f"https://t.me/share/url?url={referral_link}"
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'back'),
-                callback_data="main_menu"
-            )]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        if isinstance(update, Update):
-            if update.callback_query:
-                await update.callback_query.edit_message_text(
-                    text,
-                    reply_markup=reply_markup,
-                    parse_mode=ParseMode.MARKDOWN
-                )
-            else:
-                await update.message.reply_text(
-                    text,
-                    reply_markup=reply_markup,
-                    parse_mode=ParseMode.MARKDOWN
-                )
+        return self.WAITING_WALLET
     
-    async def _show_language_selector(self, update, user_id):
-        """نمایش انتخابگر زبان"""
-        current_lang = self._get_user_language(user_id)
-        lang = current_lang
+    async def handle_wallet_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        user_id = user.id
+        wallet = update.message.text.strip()
         
-        languages = {
-            'en': LanguageManager.get_text(lang, 'name', lang='en'),
-            'fa': LanguageManager.get_text(lang, 'name', lang='fa'),
-            'tr': LanguageManager.get_text(lang, 'name', lang='tr')
-        }
+        db_user = await self.db.get_user(user_id)
+        lang = db_user.get("language", "en") if db_user else "en"
         
-        keyboard = []
-        for code, name in languages.items():
-            if code == current_lang:
-                name = f"✅ {name}"
-            keyboard.append([InlineKeyboardButton(
-                f"{LanguageManager.get_language_emoji(code)} {name}",
-                callback_data=f"set_lang_{code}"
-            )])
-        
-        keyboard.append([InlineKeyboardButton(
-            LanguageManager.get_text(lang, 'back'),
-            callback_data="main_menu"
-        )])
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        text = LanguageManager.get_text(lang, 'language_selector',
-            LanguageManager.get_language_name(current_lang)
-        )
-        
-        if isinstance(update, Update):
-            if update.callback_query:
-                await update.callback_query.edit_message_text(
-                    text,
-                    reply_markup=reply_markup,
-                    parse_mode=ParseMode.MARKDOWN
-                )
-            else:
-                await update.message.reply_text(
-                    text,
-                    reply_markup=reply_markup,
-                    parse_mode=ParseMode.MARKDOWN
-                )
-    
-    async def set_language_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """تنظیم زبان کاربر"""
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang_code = query.data.replace('set_lang_', '')
-        
-        if self._set_user_language(user_id, lang_code):
-            lang = self._get_user_language(user_id)
-            
-            keyboard = [[InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'main_menu_btn'),
-                callback_data="main_menu"
-            )]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                f"✅ Language changed to {LanguageManager.get_language_name(lang_code)}!\n\n"
-                f"🌐 زبان به {LanguageManager.get_language_name(lang_code)} تغییر یافت!",
-                reply_markup=reply_markup
+        if not self._validate_tron_address(wallet):
+            await update.message.reply_text(
+                self.translations.get_text(lang, "invalid_wallet")
             )
-
-    # ============================================================
-    # کالبک‌های منوی اصلی
-    # ============================================================
-    
-    async def main_menu_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """نمایش منوی اصلی"""
-        query = update.callback_query
-        await query.answer()
+            return self.WAITING_WALLET
         
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        
-        keyboard = [
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'lottery'),
-                callback_data="lottery"
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'referral'),
-                callback_data="referral"
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'guide'),
-                callback_data="guide"
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'language'),
-                callback_data="language"
-            )]
-        ]
-        
-        if user_id in ADMIN_IDS:
-            keyboard.append([InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'admin_panel'),
-                callback_data="admin_panel"
-            )])
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            LanguageManager.get_text(lang, 'main_menu'),
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    async def lottery_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """مدیریت قرعه‌کشی"""
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        
-        user = user_manager.get_user(user_id)
-        if not user or not user['has_subscription']:
-            keyboard = [
-                [InlineKeyboardButton(
-                    LanguageManager.get_text(lang, 'renew_subscription'),
-                    callback_data="main_menu"
-                )],
-                [InlineKeyboardButton(
-                    LanguageManager.get_text(lang, 'back'),
-                    callback_data="main_menu"
-                )]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                LanguageManager.get_text(lang, 'no_subscription'),
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-        
-        keyboard = [
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'lottery'),
-                callback_data="join_lottery"
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'back'),
-                callback_data="main_menu"
-            )]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            f"🎰 **UTYOB {LanguageManager.get_text(lang, 'lottery')}**\n\n"
-            f"👤 {LanguageManager.get_text(lang, 'user', lang=lang)}: {user['first_name'] or user_id}\n\n"
-            f"💰 {LanguageManager.get_text(lang, 'prize', lang=lang)}: Up to $10,000\n"
-            f"🎯 {LanguageManager.get_text(lang, 'fair', lang=lang)}: Yes",
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    async def referral_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """نمایش اطلاعات رفرال"""
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        await self._show_referral(update, user_id)
-    
-    async def guide_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """نمایش راهنمایی"""
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        
-        keyboard = [[InlineKeyboardButton(
-            LanguageManager.get_text(lang, 'back'),
-            callback_data="main_menu"
-        )]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            LanguageManager.get_text(lang, 'guide_text'),
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    async def language_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """تغییر زبان"""
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        await self._show_language_selector(update, user_id)
-
-    # ============================================================
-    # کالبک‌های شرکت در قرعه‌کشی
-    # ============================================================
-    
-    async def join_lottery_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """شرکت در قرعه‌کشی - دریافت آدرس کیف پول"""
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        
-        user = user_manager.get_user(user_id)
-        if not user or not user['has_subscription']:
-            keyboard = [[InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'back'),
-                callback_data="main_menu"
-            )]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                LanguageManager.get_text(lang, 'no_subscription'),
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-        
-        # ذخیره وضعیت برای دریافت آدرس
-        context.user_data['waiting_for_wallet'] = True
-        
-        keyboard = [
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'confirm_payment'),
-                callback_data="verify_payment"
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'cancel'),
-                callback_data="main_menu"
-            )]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            LanguageManager.get_text(lang, 'enter_wallet', DESTINATION_WALLET),
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    async def verify_payment_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """بررسی و تایید پرداخت"""
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        
-        if not context.user_data.get('waiting_for_wallet'):
-            keyboard = [[InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'back'),
-                callback_data="main_menu"
-            )]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                "⚠️ " + LanguageManager.get_text(lang, 'enter_wallet', DESTINATION_WALLET),
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-        
-        user = user_manager.get_user(user_id)
-        if not user or not user['wallet_address']:
-            keyboard = [[InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'back'),
-                callback_data="main_menu"
-            )]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                "❌ " + LanguageManager.get_text(lang, 'enter_wallet', DESTINATION_WALLET),
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-        
-        # نمایش پیام در حال بررسی
-        await query.edit_message_text(
-            LanguageManager.get_text(lang, 'verifying'),
-            parse_mode=ParseMode.MARKDOWN
-        )
-        
-        # تایید خودکار پرداخت
-        result = await self._auto_verify_payment(
+        await self.db.execute_query(
             user_id,
-            user['wallet_address'],
-            DESTINATION_WALLET,
-            PAYMENT_AMOUNT
+            "UPDATE users SET wallet_address = ? WHERE user_id = ?",
+            (wallet, user_id)
         )
         
-        if result['success']:
-            keyboard = [
-                [InlineKeyboardButton(
-                    LanguageManager.get_text(lang, 'lottery_back'),
-                    callback_data="lottery"
-                )],
-                [InlineKeyboardButton(
-                    LanguageManager.get_text(lang, 'main_menu_btn'),
-                    callback_data="main_menu"
-                )]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                LanguageManager.get_text(lang, 'payment_success', PAYMENT_AMOUNT, result['tx_id']),
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-            
-            # اطلاع به ادمین
-            for admin_id in ADMIN_IDS:
-                try:
-                    await self.application.bot.send_message(
-                        chat_id=admin_id,
-                        text=f"✅ Payment verified!\nUser: {user_id}\nAmount: ${PAYMENT_AMOUNT}\nTx: {result['tx_id']}"
-                    )
-                except:
-                    pass
-        else:
-            keyboard = [
-                [InlineKeyboardButton(
-                    LanguageManager.get_text(lang, 'retry'),
-                    callback_data="join_lottery"
-                )],
-                [InlineKeyboardButton(
-                    LanguageManager.get_text(lang, 'support'),
-                    callback_data="main_menu"
-                )],
-                [InlineKeyboardButton(
-                    LanguageManager.get_text(lang, 'main_menu_btn'),
-                    callback_data="main_menu"
-                )]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                LanguageManager.get_text(lang, 'payment_failed', result['message']),
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-            
-            # اطلاع به ادمین
-            for admin_id in ADMIN_IDS:
-                try:
-                    await self.application.bot.send_message(
-                        chat_id=admin_id,
-                        text=f"⚠️ Payment failed!\nUser: {user_id}\nFrom: {user['wallet_address']}\nReason: {result['message']}"
-                    )
-                except:
-                    pass
-    
-    async def confirm_payment_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """تایید نهایی پرداخت"""
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        
-        await query.edit_message_text(
-            LanguageManager.get_text(lang, 'verifying'),
-            parse_mode=ParseMode.MARKDOWN
-        )
-        
-        await self.verify_payment_callback(update, context)
-
-    # ============================================================
-    # کالبک‌های پنل مدیریت
-    # ============================================================
-    
-    async def admin_panel_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """نمایش پنل مدیریت"""
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        
-        if user_id not in ADMIN_IDS:
-            keyboard = [[InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'back'),
-                callback_data="main_menu"
-            )]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                "⛔ Access Denied!",
-                reply_markup=reply_markup
-            )
-            return
-        
-        user_count = user_manager.get_user_count()
-        active_users = len(user_manager.get_active_users())
-        cache_stats = cache.get_stats()
+        context.user_data.pop("state", None)
         
         keyboard = [
             [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'broadcast'),
-                callback_data="admin_broadcast"
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'start_lottery'),
-                callback_data="admin_start_lottery"
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'manual_verify'),
-                callback_data="admin_manual_verify"
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'poll'),
-                callback_data="admin_poll"
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'pay_winners'),
-                callback_data="admin_pay_winners"
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'add_api'),
-                callback_data="admin_add_api"
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'stats'),
-                callback_data="admin_stats"
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'back'),
-                callback_data="main_menu"
+                self.translations.get_text(lang, "i_have_paid"),
+                callback_data="paid"
             )]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await query.edit_message_text(
-            LanguageManager.get_text(lang, 'admin_panel_text',
-                user_count, active_users, cache_stats['size'], len(payment_verifier.apis)
+        await update.message.reply_text(
+            self.translations.get_text(
+                lang, "wallet_saved",
+                amount=Config.AMOUNT_USD,
+                wallet=Config.WALLET_ADDRESS
             ),
             reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
+            parse_mode="Markdown"
         )
+        
+        context.user_data["pending_wallet"] = wallet
+        
+        return ConversationHandler.END
     
-    async def admin_broadcast_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """ارسال پیام همگانی"""
-        query = update.callback_query
-        await query.answer()
+    async def handle_payment_confirmation(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        user_id = user.id
         
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
+        db_user = await self.db.get_user(user_id)
+        lang = db_user.get("language", "en") if db_user else "en"
+        wallet = db_user.get("wallet_address")
         
-        if user_id not in ADMIN_IDS:
-            return
-        
-        context.user_data['admin_action'] = 'broadcast'
-        
-        keyboard = [[InlineKeyboardButton(
-            LanguageManager.get_text(lang, 'back'),
-            callback_data="admin_panel"
-        )]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            "📢 **Send Broadcast Message**\n\n"
-            "Please send the message text:\n\n"
-            "⚠️ This will be sent to ALL users.",
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    async def admin_start_lottery_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """شروع قرعه‌کشی"""
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        
-        if user_id not in ADMIN_IDS:
-            return
-        
-        if lottery_system.is_running:
-            keyboard = [[InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'back'),
-                callback_data="admin_panel"
-            )]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                "⚠️ Lottery is already running!",
-                reply_markup=reply_markup
+        if not wallet:
+            await update.message.reply_text(
+                "❌ Please first enter your wallet address."
             )
             return
         
-        context.user_data['admin_action'] = 'start_lottery'
-        context.user_data['lottery_step'] = 1
+        status_msg = await update.message.reply_text(
+            self.translations.get_text(lang, "checking_payment")
+        )
         
-        eligible = lottery_system._get_eligible_users()
+        await self.payment.verify_payment(
+            user_id, wallet, Config.WALLET_ADDRESS, Config.AMOUNT_USD
+        )
         
-        keyboard = [
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'confirm'),
-                callback_data="start_lottery_confirm"
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'cancel'),
-                callback_data="admin_panel"
-            )]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            LanguageManager.get_text(lang, 'lottery_confirm', len(eligible)),
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
+        await status_msg.edit_text(
+            self.translations.get_text(lang, "payment_verified")
         )
     
-    async def admin_manual_verify_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """تایید دستی کاربران"""
-        query = update.callback_query
-        await query.answer()
+    # ==================== Referral ====================
+    async def handle_referral(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        user_id = user.id
         
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        
-        if user_id not in ADMIN_IDS:
+        db_user = await self.db.get_user(user_id)
+        if not db_user:
+            await self.start_command(update, context)
             return
         
-        transactions = self._get_pending_transactions()
+        lang = db_user.get("language", "en")
+        referral_code = db_user.get("referral_code", "")
+        referral_count = db_user.get("referral_count", 0)
         
-        if not transactions:
-            keyboard = [[InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'back'),
-                callback_data="admin_panel"
-            )]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                LanguageManager.get_text(lang, 'no_pending'),
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-        
-        text = ""
-        for tx in transactions[:10]:
-            text += f"👤 User: {tx['user_id']}\n"
-            text += f"💰 Amount: ${tx['amount']}\n"
-            text += f"📤 From: {tx['from_address']}\n\n"
-        
-        keyboard = [[InlineKeyboardButton(
-            LanguageManager.get_text(lang, 'back'),
-            callback_data="admin_panel"
-        )]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            LanguageManager.get_text(lang, 'manual_verify_text', text, len(transactions)),
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    async def admin_poll_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """ارسال نظرسنجی"""
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        
-        if user_id not in ADMIN_IDS:
-            return
-        
-        context.user_data['admin_action'] = 'create_poll'
-        
-        keyboard = [[InlineKeyboardButton(
-            LanguageManager.get_text(lang, 'back'),
-            callback_data="admin_panel"
-        )]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            LanguageManager.get_text(lang, 'poll_create'),
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    async def admin_pay_winners_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """واریز به برندگان"""
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        
-        if user_id not in ADMIN_IDS:
-            return
-        
-        winners = self._get_unpaid_winners()
-        
-        if not winners:
-            keyboard = [[InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'back'),
-                callback_data="admin_panel"
-            )]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                LanguageManager.get_text(lang, 'no_winners'),
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-        
-        text = ""
-        for winner in winners[:10]:
-            text += f"👤 User: {winner['user_id']}\n"
-            text += f"💰 Amount: ${winner['prize_amount']}\n"
-            text += f"📤 Address: {winner['wallet_address'] or 'Unknown'}\n\n"
-        
-        keyboard = [[InlineKeyboardButton(
-            LanguageManager.get_text(lang, 'back'),
-            callback_data="admin_panel"
-        )]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            LanguageManager.get_text(lang, 'pay_winners_text', text, len(winners)),
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    async def admin_add_api_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """اضافه کردن API جدید"""
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        
-        if user_id not in ADMIN_IDS:
-            return
-        
-        context.user_data['admin_action'] = 'add_api'
-        
-        keyboard = [[InlineKeyboardButton(
-            LanguageManager.get_text(lang, 'back'),
-            callback_data="admin_panel"
-        )]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            LanguageManager.get_text(lang, 'add_api_text'),
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    async def admin_stats_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """نمایش آمار کامل"""
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        
-        if user_id not in ADMIN_IDS:
-            return
-        
-        user_count = user_manager.get_user_count()
-        active_users = len(user_manager.get_active_users())
-        cache_stats = cache.get_stats()
-        tx_stats = self._get_transaction_stats()
-        lottery_stats = self._get_lottery_stats()
-        
-        keyboard = [
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'refresh'),
-                callback_data="admin_stats"
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'back'),
-                callback_data="admin_panel"
-            )]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            LanguageManager.get_text(lang, 'admin_stats',
-                user_count,
-                active_users,
-                (active_users/user_count*100) if user_count > 0 else 0,
-                tx_stats['total'],
-                tx_stats['verified'],
-                tx_stats['pending'],
-                lottery_stats['total'],
-                lottery_stats['total_winners'],
-                lottery_stats['last'] or 'None',
-                cache_stats['size'],
-                cache_stats['hit_rate'],
-                len(payment_verifier.apis),
-                DB_SHARDS
+        await update.message.reply_text(
+            self.translations.get_text(
+                lang, "referral_text",
+                bot_username=self.bot_username,
+                code=referral_code,
+                count=referral_count
             ),
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
+            parse_mode="Markdown"
         )
-
-    # ============================================================
-    # کالبک‌های مراحل قرعه‌کشی
-    # ============================================================
     
-    async def start_lottery_confirm_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """تایید شروع قرعه‌کشی - دریافت تعداد برندگان"""
-        query = update.callback_query
-        await query.answer()
+    # ==================== Guidance ====================
+    async def handle_guidance(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        db_user = await self.db.get_user(user.id)
+        lang = db_user.get("language", "en") if db_user else "en"
         
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
+        await update.message.reply_text(
+            self.translations.get_text(lang, "guidance_text", amount=Config.AMOUNT_USD),
+            parse_mode="Markdown"
+        )
+    
+    # ==================== Language Change ====================
+    async def handle_language_change(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        languages = [
+            [InlineKeyboardButton("🇬🇧 English", callback_data="lang_en")],
+            [InlineKeyboardButton("🇮🇷 فارسی", callback_data="lang_fa")],
+            [InlineKeyboardButton("🇹🇷 Türkçe", callback_data="lang_tr")]
+        ]
         
-        if user_id not in ADMIN_IDS:
+        reply_markup = InlineKeyboardMarkup(languages)
+        
+        await update.message.reply_text(
+            "🌐 Select your language / زبان خود را انتخاب کنید / Dil seçin:",
+            reply_markup=reply_markup
+        )
+    
+    # ==================== Admin Panel ====================
+    async def show_admin_panel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        user_id = user.id
+        
+        if user_id not in Config.ADMIN_IDS:
+            await update.message.reply_text("⛔ Access Denied!")
             return
         
-        context.user_data['lottery_step'] = 2
+        keyboard = [
+            [InlineKeyboardButton("📢 پیام همگانی", callback_data="admin_broadcast")],
+            [InlineKeyboardButton("✅ تایید دستی", callback_data="admin_manual_verify")],
+            [InlineKeyboardButton("🔑 اضافه کردن API", callback_data="admin_add_api")],
+            [InlineKeyboardButton("📊 آمار", callback_data="admin_stats")]
+        ]
         
-        keyboard = [[InlineKeyboardButton(
-            LanguageManager.get_text(lang, 'back'),
-            callback_data="admin_panel"
-        )]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await query.edit_message_text(
-            LanguageManager.get_text(lang, 'enter_winners'),
+        await update.message.reply_text(
+            "🔧 **پنل مدیریت**",
             reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
+            parse_mode="Markdown"
         )
     
-    async def start_lottery_final_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """مرحله نهایی شروع قرعه‌کشی"""
+    # ==================== Button Callback ====================
+    async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
         
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
+        user = query.from_user
+        user_id = user.id
+        data = query.data
         
-        if user_id not in ADMIN_IDS:
-            return
+        db_user = await self.db.get_user(user_id)
+        lang = db_user.get("language", "en") if db_user else "en"
         
-        winners_count = context.user_data.get('lottery_winners', 1)
-        prize_per_winner = context.user_data.get('lottery_prize', 100)
-        
-        success, result = lottery_system.start_lottery(winners_count, prize_per_winner)
-        
-        if success:
-            # ارسال پیام به برندگان
-            for winner_id in result['winners']:
-                winner_lang = self._get_user_language(winner_id)
-                keyboard = [
-                    [InlineKeyboardButton(
-                        LanguageManager.get_text(winner_lang, 'withdraw_prize'),
-                        callback_data="withdraw_prize"
-                    )],
-                    [InlineKeyboardButton(
-                        LanguageManager.get_text(winner_lang, 'next_lottery'),
-                        callback_data="main_menu"
-                    )]
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
+        # ============ تغییر زبان ============
+        if data.startswith("lang_"):
+            lang_code = data.split("_")[1]
+            if lang_code in ["en", "fa", "tr"]:
+                await self.db.execute_query(
+                    user_id,
+                    "UPDATE users SET language = ? WHERE user_id = ?",
+                    (lang_code, user_id)
+                )
                 
-                try:
-                    await self.application.bot.send_message(
-                        chat_id=winner_id,
-                        text=LanguageManager.get_text(winner_lang, 'winner_message',
-                            prize_per_winner, result['lottery_id']
-                        ),
-                        reply_markup=reply_markup,
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-                except Exception as e:
-                    logger.error(f"Error sending to {winner_id}: {e}")
-            
-            winners_list = "\n".join([f"• User {uid}" for uid in result['winners']])
-            
-            keyboard = [[InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'back'),
-                callback_data="admin_panel"
-            )]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                LanguageManager.get_text(lang, 'lottery_success',
-                    result['lottery_id'],
-                    winners_count,
-                    prize_per_winner,
-                    winners_count * prize_per_winner,
-                    winners_list
-                ),
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-        else:
-            keyboard = [
-                [InlineKeyboardButton(
-                    LanguageManager.get_text(lang, 'retry'),
-                    callback_data="admin_start_lottery"
-                )],
-                [InlineKeyboardButton(
-                    LanguageManager.get_text(lang, 'back'),
-                    callback_data="admin_panel"
-                )]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                LanguageManager.get_text(lang, 'lottery_error', result),
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-
-    # ============================================================
-    # کالبک‌های برداشت جایزه
-    # ============================================================
-    
-    async def withdraw_prize_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """برداشت جایزه"""
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        
-        winner = self._check_winner(user_id)
-        if not winner:
-            keyboard = [
-                [InlineKeyboardButton(
-                    LanguageManager.get_text(lang, 'lottery'),
-                    callback_data="lottery"
-                )],
-                [InlineKeyboardButton(
-                    LanguageManager.get_text(lang, 'main_menu_btn'),
-                    callback_data="main_menu"
-                )]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                LanguageManager.get_text(lang, 'no_winner'),
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-        
-        if winner['paid_status'] == 1:
-            keyboard = [[InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'main_menu_btn'),
-                callback_data="main_menu"
-            )]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                LanguageManager.get_text(lang, 'already_paid',
-                    winner['prize_amount'], winner['paid_at']
-                ),
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-        
-        context.user_data['withdraw_pending'] = True
-        context.user_data['winner_id'] = winner['id']
-        
-        keyboard = [
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'confirm_payment'),
-                callback_data="confirm_withdraw"
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'cancel'),
-                callback_data="main_menu"
-            )]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            LanguageManager.get_text(lang, 'enter_withdraw_wallet', winner['prize_amount']),
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    async def confirm_withdraw_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """تایید برداشت"""
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        
-        if not context.user_data.get('withdraw_pending'):
-            keyboard = [[InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'main_menu_btn'),
-                callback_data="main_menu"
-            )]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                "⚠️ No pending withdrawal.",
-                reply_markup=reply_markup
-            )
-            return
-        
-        user = user_manager.get_user(user_id)
-        if not user or not user['wallet_address']:
-            keyboard = [[InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'back'),
-                callback_data="main_menu"
-            )]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                "❌ No wallet address found!",
-                reply_markup=reply_markup
-            )
-            return
-        
-        winner_id = context.user_data.get('winner_id')
-        if winner_id:
-            db.execute(user_id,
-                """UPDATE winners 
-                   SET wallet_address = ?, paid_status = 1, paid_at = CURRENT_TIMESTAMP 
-                   WHERE id = ?""",
-                (user['wallet_address'], winner_id)
-            )
-            
-            context.user_data['withdraw_pending'] = False
-            
-            keyboard = [
-                [InlineKeyboardButton(
-                    LanguageManager.get_text(lang, 'next_lottery'),
-                    callback_data="lottery"
-                )],
-                [InlineKeyboardButton(
-                    LanguageManager.get_text(lang, 'main_menu_btn'),
-                    callback_data="main_menu"
-                )]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                LanguageManager.get_text(lang, 'withdraw_success',
-                    await self._get_winner_amount(user_id),
-                    user['wallet_address']
-                ),
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-            
-            # اطلاع به ادمین
-            for admin_id in ADMIN_IDS:
-                try:
-                    await self.application.bot.send_message(
-                        chat_id=admin_id,
-                        text=f"💰 Withdrawal request\nUser: {user_id}\nAmount: ${await self._get_winner_amount(user_id)}\nAddress: {user['wallet_address']}"
-                    )
-                except:
-                    pass
-
-    # ============================================================
-    # مدیریت پیام‌ها
-    # ============================================================
-    
-    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """مدیریت پیام‌های دریافتی"""
-        user_id = update.effective_user.id
-        text = update.message.text
-        lang = self._get_user_language(user_id)
-        
-        # بررسی اقدامات ادمین
-        admin_action = context.user_data.get('admin_action')
-        
-        if admin_action == 'broadcast':
-            await self._send_broadcast(update, text, context)
-            return
-        
-        elif admin_action == 'start_lottery':
-            await self._handle_lottery_steps(update, text, context)
-            return
-        
-        elif admin_action == 'add_api':
-            await self._handle_add_api(update, text, context)
-            return
-        
-        elif admin_action == 'create_poll':
-            await self._handle_create_poll(update, text, context)
-            return
-        
-        # بررسی انتظار برای آدرس کیف پول
-        if context.user_data.get('waiting_for_wallet'):
-            await self._handle_wallet_address(update, text, context)
-            return
-        
-        # بررسی انتظار برای آدرس برداشت
-        if context.user_data.get('withdraw_pending'):
-            await self._handle_withdraw_address(update, text, context)
-            return
-        
-        # پیام معمولی
-        keyboard = [[InlineKeyboardButton(
-            LanguageManager.get_text(lang, 'main_menu_btn'),
-            callback_data="main_menu"
-        )]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(
-            LanguageManager.get_text(lang, 'invalid_command'),
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    async def _handle_wallet_address(self, update, text, context):
-        """مدیریت آدرس کیف پول برای شرکت در قرعه‌کشی"""
-        user_id = update.effective_user.id
-        lang = self._get_user_language(user_id)
-        wallet_address = text.strip()
-        
-        if not self._validate_wallet_address(wallet_address):
-            await update.message.reply_text(
-                "❌ Invalid wallet address!\n\n"
-                "Please enter a valid TRC20 address.\n"
-                "Example: `TV61aTh98MGqmteYzda5AaBzdXgGqreG6A`",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-        
-        # ذخیره آدرس
-        user_manager.update_user(user_id, wallet_address=wallet_address)
-        context.user_data['waiting_for_wallet'] = False
-        
-        # نمایش پیام در حال بررسی
-        await update.message.reply_text(
-            LanguageManager.get_text(lang, 'verifying'),
-            parse_mode=ParseMode.MARKDOWN
-        )
-        
-        # تایید خودکار پرداخت
-        result = await self._auto_verify_payment(
-            user_id,
-            wallet_address,
-            DESTINATION_WALLET,
-            PAYMENT_AMOUNT        )
-        
-        if result['success']:
-            keyboard = [
-                [InlineKeyboardButton(
-                    LanguageManager.get_text(lang, 'lottery_back'),
-                    callback_data="lottery"
-                )],
-                [InlineKeyboardButton(
-                    LanguageManager.get_text(lang, 'main_menu_btn'),
-                    callback_data="main_menu"
-                )]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await update.message.reply_text(
-                LanguageManager.get_text(lang, 'payment_success', PAYMENT_AMOUNT, result['tx_id']),
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-        else:
-            keyboard = [
-                [InlineKeyboardButton(
-                    LanguageManager.get_text(lang, 'retry'),
-                    callback_data="join_lottery"
-                )],
-                [InlineKeyboardButton(
-                    LanguageManager.get_text(lang, 'support'),
-                    callback_data="main_menu"
-                )],
-                [InlineKeyboardButton(
-                    LanguageManager.get_text(lang, 'main_menu_btn'),
-                    callback_data="main_menu"
-                )]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await update.message.reply_text(
-                LanguageManager.get_text(lang, 'payment_failed', result['message']),
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-    
-    async def _handle_withdraw_address(self, update, text, context):
-        """مدیریت آدرس برای برداشت جایزه"""
-        user_id = update.effective_user.id
-        lang = self._get_user_language(user_id)
-        wallet_address = text.strip()
-        
-        if not self._validate_wallet_address(wallet_address):
-            await update.message.reply_text(
-                "❌ Invalid wallet address!\n\n"
-                "Please enter a valid TRC20 address.",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-        
-        # ذخیره آدرس
-        user_manager.update_user(user_id, wallet_address=wallet_address)
-        
-        winner_id = context.user_data.get('winner_id')
-        if winner_id:
-            db.execute(user_id,
-                """UPDATE winners 
-                   SET wallet_address = ?, paid_status = 1, paid_at = CURRENT_TIMESTAMP 
-                   WHERE id = ?""",
-                (wallet_address, winner_id)
-            )
-            
-            context.user_data['withdraw_pending'] = False
-            
-            keyboard = [
-                [InlineKeyboardButton(
-                    LanguageManager.get_text(lang, 'next_lottery'),
-                    callback_data="lottery"
-                )],
-                [InlineKeyboardButton(
-                    LanguageManager.get_text(lang, 'main_menu_btn'),
-                    callback_data="main_menu"
-                )]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await update.message.reply_text(
-                LanguageManager.get_text(lang, 'withdraw_success',
-                    await self._get_winner_amount(user_id),
-                    wallet_address
-                ),
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-            
-            # اطلاع به ادمین
-            for admin_id in ADMIN_IDS:
-                try:
-                    await self.application.bot.send_message(
-                        chat_id=admin_id,
-                        text=f"💰 Withdrawal request\nUser: {user_id}\nAmount: ${await self._get_winner_amount(user_id)}\nAddress: {wallet_address}"
-                    )
-                except:
-                    pass
-    
-    async def _handle_lottery_steps(self, update, text, context):
-        """مدیریت مراحل شروع قرعه‌کشی"""
-        user_id = update.effective_user.id
-        lang = self._get_user_language(user_id)
-        step = context.user_data.get('lottery_step', 1)
-        
-        if step == 2:
-            try:
-                winners_count = int(text)
-                if 1 <= winners_count <= 100:
-                    context.user_data['lottery_winners'] = winners_count
-                    context.user_data['lottery_step'] = 3
-                    
-                    await update.message.reply_text(
-                        LanguageManager.get_text(lang, 'enter_prize', winners_count),
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-                else:
-                    await update.message.reply_text(
-                        "❌ Invalid number!\nPlease enter a number between 1 and 100."
-                    )
-            except ValueError:
-                await update.message.reply_text(
-                    "❌ Please enter a valid number!"
+                cache_key = f"user_{user_id}"
+                if cache_key in self.db.cache:
+                    del self.db.cache[cache_key]
+                
+                # دریافت نام زبان
+                lang_names = {"en": "English 🇬🇧", "fa": "فارسی 🇮🇷", "tr": "Türkçe 🇹🇷"}
+                
+                await query.edit_message_text(
+                    f"🌐 Language changed to {lang_names.get(lang_code, lang_code)}"
                 )
+                
+                # ارسال منوی جدید با زبان جدید
+                await self.start_command(query.message, context)
+            return
         
-        elif step == 3:
-            try:
-                prize = float(text)
-                if prize >= 10:
-                    context.user_data['lottery_prize'] = prize
-                    context.user_data['lottery_step'] = 4
-                    
-                    winners = context.user_data['lottery_winners']
-                    total_prize = winners * prize
-                    
-                    keyboard = [
-                        [InlineKeyboardButton(
-                            LanguageManager.get_text(lang, 'confirm'),
-                            callback_data="start_lottery_final"
-                        )],
-                        [InlineKeyboardButton(
-                            LanguageManager.get_text(lang, 'cancel'),
-                            callback_data="admin_panel"
-                        )]
-                    ]
-                    reply_markup = InlineKeyboardMarkup(keyboard)
-                    
-                    await update.message.reply_text(
-                        LanguageManager.get_text(lang, 'lottery_final',
-                            winners, prize, total_prize
-                        ),
-                        reply_markup=reply_markup,
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-                else:
-                    await update.message.reply_text(
-                        "❌ Prize amount must be at least $10!"
-                    )
-            except ValueError:
-                await update.message.reply_text(
-                    "❌ Please enter a valid number!"
+        # ============ پرداخت ============
+        if data == "paid":
+            await query.edit_message_text(
+                self.translations.get_text(lang, "checking_payment")
+            )
+            
+            db_user = await self.db.get_user(user_id)
+            wallet = db_user.get("wallet_address")
+            
+            if wallet:
+                await self.payment.verify_payment(
+                    user_id, wallet, Config.WALLET_ADDRESS, Config.AMOUNT_USD
                 )
-    
-    async def _handle_add_api(self, update, text, context):
-        """اضافه کردن API جدید"""
-        user_id = update.effective_user.id
-        lang = self._get_user_language(user_id)
-        api_key = text.strip()
+                
+                await query.message.reply_text(
+                    self.translations.get_text(lang, "payment_verified")
+                )
+            return
         
-        if payment_verifier.add_api(api_key):
-            context.user_data['admin_action'] = None
+        # ============ مدیریت ============
+        if data.startswith("admin_"):
+            if user_id not in Config.ADMIN_IDS:
+                await query.edit_message_text("⛔ Access Denied!")
+                return
+            
+            action = data.replace("admin_", "")
+            
+            if action == "broadcast":
+                context.user_data["state"] = self.WAITING_BROADCAST
+                await query.edit_message_text("📢 پیام همگانی خود را وارد کنید:")
+                return self.WAITING_BROADCAST
+            
+            elif action == "manual_verify":
+                context.user_data["state"] = self.WAITING_MANUAL_VERIFY
+                await query.edit_message_text("✅ آیدی کاربر مورد نظر را وارد کنید:")
+                return self.WAITING_MANUAL_VERIFY
+            
+            elif action == "add_api":
+                context.user_data["state"] = self.WAITING_API_KEY
+                await query.edit_message_text("🔑 API Key جدید را وارد کنید:")
+                return self.WAITING_API_KEY
+            
+            elif action == "stats":
+                await self._show_admin_stats(query)
+    
+    # ==================== Admin Handlers ====================
+    async def handle_broadcast(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        if user.id not in Config.ADMIN_IDS:
+            await update.message.reply_text("⛔ Access Denied!")
+            return ConversationHandler.END
+        
+        message = update.message.text
+        await self._send_broadcast(message)
+        await update.message.reply_text("✅ پیام همگانی ارسال شد!")
+        
+        context.user_data.pop("state", None)
+        return ConversationHandler.END
+    
+    async def handle_manual_verify(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        if user.id not in Config.ADMIN_IDS:
+            await update.message.reply_text("⛔ Access Denied!")
+            return ConversationHandler.END
+        
+        try:
+            user_id = int(update.message.text.strip())
+            subscription_end = int(time.time()) + 30 * 24 * 3600
+            await self.db.execute_query(
+                user_id,
+                "UPDATE users SET subscription_end = ? WHERE user_id = ?",
+                (subscription_end, user_id)
+            )
+            await update.message.reply_text(f"✅ کاربر {user_id} با موفقیت تایید شد!")
+        except ValueError:
+            await update.message.reply_text("❌ آیدی نامعتبر است.")
+        
+        context.user_data.pop("state", None)
+        return ConversationHandler.END
+    
+    async def handle_add_api(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        if user.id not in Config.ADMIN_IDS:
+            await update.message.reply_text("⛔ Access Denied!")
+            return ConversationHandler.END
+        
+        api_key = update.message.text.strip()
+        
+        if await self.payment.add_api_key(api_key):
             await update.message.reply_text(
-                LanguageManager.get_text(lang, 'api_added',
-                    api_key, len(payment_verifier.apis)
-                ),
-                parse_mode=ParseMode.MARKDOWN
+                f"✅ API جدید اضافه شد! تعداد کل: {len(self.payment.api_keys)}"
             )
         else:
-            await update.message.reply_text(
-                LanguageManager.get_text(lang, 'api_error'),
-                parse_mode=ParseMode.MARKDOWN
-            )
+            await update.message.reply_text("❌ این API قبلاً وجود دارد.")
+        
+        context.user_data.pop("state", None)
+        return ConversationHandler.END
     
-    async def _handle_create_poll(self, update, text, context):
-        """ایجاد نظرسنجی"""
-        user_id = update.effective_user.id
-        lang = self._get_user_language(user_id)
-        
-        context.user_data['poll_question'] = text
-        context.user_data['poll_step'] = 2
-        
-        await update.message.reply_text(
-            LanguageManager.get_text(lang, 'poll_options'),
-            parse_mode=ParseMode.MARKDOWN
-        )
+    async def cancel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        self.user_states.pop(user.id, None)
+        context.user_data.pop("state", None)
+        await update.message.reply_text("❌ لغو شد.")
+        return ConversationHandler.END
     
-    async def _send_broadcast(self, update, text, context):
-        """ارسال پیام همگانی"""
-        user_id = update.effective_user.id
-        lang = self._get_user_language(user_id)
+    # ==================== Admin Stats ====================
+    async def _show_admin_stats(self, query):
+        stats = await self._get_stats()
+        users = await self.db.get_all_users()
         
-        await update.message.reply_text(
-            "⏳ Sending broadcast...\nPlease wait.",
-            parse_mode=ParseMode.MARKDOWN
-        )
+        user_list = ""
+        for u in users[:20]:
+            name = u[1] or u[2] or "Unknown"
+            user_list += f"• {u[0]} - {name}\n"
+        if len(users) > 20:
+            user_list += f"... و {len(users) - 20} نفر دیگر"
         
-        users = db.execute_global("SELECT user_id FROM users")
+        stats_text = f"""📊 **آمار سیستم**
+
+👥 کل کاربران: {stats['users']}
+✅ اشتراک فعال: {stats['active']}
+💰 مجموع جوایز: ${stats['prizes']}
+🏆 برندگان: {stats['winners']}
+🔑 تعداد API: {len(self.payment.api_keys)}
+
+👥 **لیست کاربران:**
+{user_list}"""
         
-        sent = 0
-        failed = 0
+        await query.edit_message_text(stats_text, parse_mode="Markdown")
+    
+    # ==================== Utility Methods ====================
+    def _validate_tron_address(self, address):
+        if not address or len(address) != 34:
+            return False
+        if not address.startswith("T"):
+            return False
+        try:
+            decoded = base58.b58decode(address)
+            return len(decoded) == 21
+        except:
+            return False
+    
+    async def _process_referral(self, user_id, ref_code):
+        try:
+            referrer_id = None
+            for shard_id in range(Config.SHARD_COUNT):
+                cursor = self.db.shards[shard_id].cursor()
+                cursor.execute(
+                    "SELECT user_id FROM users WHERE referral_code = ?",
+                    (ref_code,)
+                )
+                result = cursor.fetchone()
+                if result:
+                    referrer_id = result[0]
+                    break
+            
+            if referrer_id and referrer_id != user_id:
+                await self.db.execute_query(
+                    user_id,
+                    "UPDATE users SET referred_by = ? WHERE user_id = ?",
+                    (referrer_id, user_id)
+                )
+                
+                await self.db.execute_query(
+                    referrer_id,
+                    "UPDATE users SET referral_count = referral_count + 1 WHERE user_id = ?",
+                    (referrer_id,)
+                )
+                
+                logger.info(f"Referral: {referrer_id} -> {user_id}")
+        except Exception as e:
+            logger.error(f"Referral error: {e}")
+    
+    async def _send_broadcast(self, message):
+        users = await self.db.get_all_users()
+        count = 0
         
         for user in users:
             try:
-                await self.application.bot.send_message(
-                    chat_id=user['user_id'],
-                    text=text,
-                    parse_mode=ParseMode.MARKDOWN
-                )
-                sent += 1
-                if sent % 30 == 0:
-                    await asyncio.sleep(0.5)
+                await self.application.bot.send_message(user[0], message)
+                count += 1
+                await asyncio.sleep(0.1)
             except Exception as e:
-                logger.error(f"Error sending to {user['user_id']}: {e}")
-                failed += 1
+                logger.error(f"Broadcast error for {user[0]}: {e}")
         
-        context.user_data['admin_action'] = None
-        
-        keyboard = [[InlineKeyboardButton(
-            LanguageManager.get_text(lang, 'back'),
-            callback_data="admin_panel"
-        )]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(
-            f"✅ Broadcast complete!\n\n"
-            f"📤 Sent: {sent:,}\n"
-            f"❌ Failed: {failed:,}\n"
-            f"📊 Total: {sent + failed:,}",
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
+        logger.info(f"Broadcast sent to {count} users")
     
-    async def handle_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """مدیریت عکس‌ها"""
-        user_id = update.effective_user.id
-        lang = self._get_user_language(user_id)
+    async def _get_stats(self):
+        stats = {"users": 0, "active": 0, "prizes": 0, "winners": 0}
         
-        keyboard = [[InlineKeyboardButton(
-            LanguageManager.get_text(lang, 'main_menu_btn'),
-            callback_data="main_menu"
-        )]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        for shard_id in range(Config.SHARD_COUNT):
+            cursor = self.db.shards[shard_id].cursor()
+            
+            cursor.execute("SELECT COUNT(*) FROM users")
+            stats["users"] += cursor.fetchone()[0]
+            
+            cursor.execute(
+                "SELECT COUNT(*) FROM users WHERE subscription_end > ?",
+                (int(time.time()),)
+            )
+            stats["active"] += cursor.fetchone()[0]
+            
+            cursor.execute("SELECT SUM(won_amount) FROM users")
+            result = cursor.fetchone()[0]
+            if result:
+                stats["prizes"] += result
+            
+            cursor.execute("SELECT COUNT(*) FROM previous_winners")
+            stats["winners"] += cursor.fetchone()[0]
         
-        await update.message.reply_text(
-            LanguageManager.get_text(lang, 'photo_not_supported'),
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
+        return stats
     
+    # ==================== Error Handler ====================
     async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """مدیریت خطاها"""
-        logger.error(f"Update {update} caused error {context.error}")
-        
+        logger.error(f"Error: {context.error}")
         try:
             if update and update.effective_user:
-                user_id = update.effective_user.id
-                lang = self._get_user_language(user_id)
-                
-                keyboard = [[InlineKeyboardButton(
-                    LanguageManager.get_text(lang, 'main_menu_btn'),
-                    callback_data="main_menu"
-                )]]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                
-                await self.application.bot.send_message(
-                    chat_id=user_id,
-                    text=LanguageManager.get_text(lang, 'error_message'),
-                    reply_markup=reply_markup
+                await update.message.reply_text(
+                    "❌ خطایی رخ داد. لطفاً دوباره تلاش کنید."
                 )
         except:
             pass
+    
+    # ==================== Flask API ====================
+    def _start_flask_server(self):
+        app = Flask(__name__)
+        
+        @app.route('/api/health', methods=['GET'])
+        def health():
+            return jsonify({
+                "status": "healthy",
+                "shards": Config.SHARD_COUNT,
+                "api_keys": len(self.payment.api_keys),
+                "queue_size": self.payment.verification_queue.qsize()
+            })
+        
+        def run_flask():
+            app.run(host='0.0.0.0', port=5000, debug=False)
+        
+        flask_thread = threading.Thread(target=run_flask, daemon=True)
+        flask_thread.start()
 
-# ============================================================
-# اجرای ربات
-# ============================================================
-
+# ==================== اجرا ====================
 async def main():
-    try:
-        bot = UTYOBot()
-        
-        logger.info("🚀 UTYOB Bot starting...")
-        logger.info(f"👥 Admins: {len(ADMIN_IDS)}")
-        logger.info(f"🗄️ Shards: {DB_SHARDS}")
-        logger.info(f"🔑 APIs: {len(TRONGRID_APIS)}")
-        
-        await bot.application.initialize()
-        await bot.application.start()
-        await bot.application.updater.start_polling()
-        
-        logger.info("✅ Bot started successfully!")
-        
-        while True:
-            await asyncio.sleep(3600)
-            
-    except KeyboardInterrupt:
-        logger.info("🛑 Bot stopped")
-    except Exception as e:
-        logger.error(f"❌ Error: {e}")
-        raise
+    bot = LotteryBot()
+    await bot.start()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("🛑 Program stopped")
+        logger.info("Bot stopped")
     except Exception as e:
-        logger.error(f"❌ Unexpected error: {e}")
+        logger.error(f"Fatal: {e}")
