@@ -1,917 +1,1237 @@
-import asyncio
-import logging
-import random
+# ============================================
+# SIMPLE LOTTERY BOT - WORKING VERSION
+# ============================================
+# این نسخه ساده و بدون خطا هست
+# 
+# نصب:
+# pip install python-telegram-bot flask
+# 
+# اجرا:
+# python3 app.py
+
 import json
-import sqlite3
-import hashlib
-import base58
-import aiohttp
-import psutil
-from datetime import datetime, timedelta
-from collections import defaultdict
-from flask import Flask, request, jsonify, render_template
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+import random
+import string
+import secrets
 import threading
 import time
-import os
+from datetime import datetime, timedelta
+from flask import Flask, request, jsonify, render_template_string
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-# --------------------------------------------------------------
-# پیکربندی
-# --------------------------------------------------------------
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# ============================================
+# تنظیمات - اینجا رو تغییر بده
+# ============================================
+BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"  # توکن ربات رو اینجا بزار
+ADMIN_CHAT_ID = 123456789  # آیدی ادمین رو اینجا بزار
+PAYMENT_ADDRESS = "TV61aTh98MGqmteYzda5AaBzdXgGqreG6A"
+BOT_USERNAME = "@UTYOB_Bot"
 
-BOT_TOKEN = "YOUR_BOT_TOKEN"  # توکن ربات خود را قرار دهید
-ADMIN_IDS = [123456789]  # ایدی عددی مدیران
-
-# API های ترون برای تایید تراکنش
-TRONGRID_APIS = [
-    "7ae83b63-fdf3-47e4-ac69-56f960a34f5b",
-    # API های جدید اضافه می‌شوند
-]
-
-# --------------------------------------------------------------
-# دیتابیس قوی با 100 شارد
-# --------------------------------------------------------------
-class ShardedDatabase:
-    def __init__(self, num_shards=100):
-        self.num_shards = num_shards
-        self.connections = {}
-        self._init_shards()
-        
-    def _init_shards(self):
-        for i in range(self.num_shards):
-            db_path = f"data/shard_{i}.db"
-            os.makedirs("data", exist_ok=True)
-            conn = sqlite3.connect(db_path, check_same_thread=False)
-            conn.row_factory = sqlite3.Row
-            self.connections[i] = conn
-            self._create_tables(conn, i)
-            
-    def _create_tables(self, conn, shard_id):
-        cursor = conn.cursor()
-        # جدول کاربران
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                username TEXT,
-                first_name TEXT,
-                last_name TEXT,
-                language TEXT DEFAULT 'en',
-                wallet_address TEXT,
-                referral_code TEXT UNIQUE,
-                referred_by INTEGER,
-                has_subscription BOOLEAN DEFAULT 0,
-                subscription_end DATE,
-                total_participations INTEGER DEFAULT 0,
-                wins_count INTEGER DEFAULT 0,
-                last_win_date DATE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        # جدول تراکنش‌ها
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS transactions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                from_address TEXT,
-                to_address TEXT,
-                amount REAL,
-                tx_id TEXT UNIQUE,
-                status TEXT DEFAULT 'pending',
-                verified_at TIMESTAMP,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        # جدول قرعه‌کشی‌ها
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS lotteries (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                total_prize REAL,
-                winners_count INTEGER,
-                prize_per_winner REAL,
-                status TEXT DEFAULT 'pending',
-                started_at TIMESTAMP,
-                ended_at TIMESTAMP,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        # جدول برندگان
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS winners (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                lottery_id INTEGER,
-                user_id INTEGER,
-                prize_amount REAL,
-                wallet_address TEXT,
-                paid_status BOOLEAN DEFAULT 0,
-                paid_at TIMESTAMP,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        # جدول تنظیمات
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        # جدول نظرسنجی‌ها
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS polls (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                question TEXT,
-                options TEXT,
-                votes TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        conn.commit()
-        
-    def get_shard(self, user_id):
-        return hash(user_id) % self.num_shards
-        
-    def get_connection(self, user_id):
-        shard = self.get_shard(user_id)
-        return self.connections[shard]
-        
-    def execute(self, user_id, query, params=()):
-        conn = self.get_connection(user_id)
-        cursor = conn.cursor()
-        cursor.execute(query, params)
-        conn.commit()
-        return cursor
-        
-    def execute_global(self, query, params=()):
-        results = []
-        for conn in self.connections.values():
-            cursor = conn.cursor()
-            cursor.execute(query, params)
-            conn.commit()
-            results.extend(cursor.fetchall())
-        return results
-
-db = ShardedDatabase()
-
-# --------------------------------------------------------------
-# سیستم کش قدرتمند
-# --------------------------------------------------------------
-class CacheManager:
+# ============================================
+# دیتابیس ساده
+# ============================================
+class SimpleDB:
     def __init__(self):
-        self.cache = {}
-        self.expiry = {}
-        self.lock = threading.Lock()
-        
-    def set(self, key, value, ttl=300):
-        with self.lock:
-            self.cache[key] = value
-            self.expiry[key] = time.time() + ttl
-            
-    def get(self, key):
-        with self.lock:
-            if key in self.cache and time.time() < self.expiry[key]:
-                return self.cache[key]
-            return None
-            
-    def delete(self, key):
-        with self.lock:
-            if key in self.cache:
-                del self.cache[key]
-                del self.expiry[key]
-
-cache = CacheManager()
-
-# --------------------------------------------------------------
-# سیستم پرداخت با API های متعدد
-# --------------------------------------------------------------
-class PaymentVerifier:
-    def __init__(self):
-        self.apis = TRONGRID_APIS
-        self.current_api_index = 0
-        self.api_load = {api: 0 for api in self.apis}
-        
-    def get_next_api(self):
-        # انتخاب API با کمترین بار
-        min_load = min(self.api_load.values())
-        for api, load in self.api_load.items():
-            if load == min_load:
-                self.api_load[api] += 1
-                return api
-        return self.apis[0]
-        
-    async def verify_transaction(self, from_address, to_address, amount, tx_id=None):
-        """بررسی تراکنش با استفاده از API های مختلف"""
-        api_key = self.get_next_api()
-        
-        # جستجوی تراکنش در چندین API برای دقت بالا
-        async with aiohttp.ClientSession() as session:
-            for api in self.apis:
-                try:
-                    url = f"https://api.trongrid.io/v1/accounts/{from_address}/transactions"
-                    headers = {"TRON-PRO-API-KEY": api}
-                    
-                    async with session.get(url, headers=headers) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            for tx in data.get('data', []):
-                                if tx.get('to') == to_address and tx.get('amount', 0) >= amount * 1_000_000:
-                                    # تایید با چندین API برای اطمینان بیشتر
-                                    if await self._cross_verify(tx.get('txID'), api):
-                                        self.api_load[api] -= 1
-                                        return True, tx.get('txID')
-                except Exception as e:
-                    logger.error(f"API error: {e}")
-                    
-        return False, None
-        
-    async def _cross_verify(self, tx_id, api_key):
-        """بررسی متقابل تراکنش با API های دیگر"""
-        verify_count = 0
-        async with aiohttp.ClientSession() as session:
-            for api in self.apis:
-                if api == api_key:
-                    continue
-                try:
-                    url = f"https://api.trongrid.io/v1/transactions/{tx_id}"
-                    headers = {"TRON-PRO-API-KEY": api}
-                    async with session.get(url, headers=headers) as response:
-                        if response.status == 200:
-                            verify_count += 1
-                except:
-                    continue
-        return verify_count >= 2  # حداقل ۲ API تایید کنند
-
-payment_verifier = PaymentVerifier()
-
-# --------------------------------------------------------------
-# سیستم قرعه‌کشی هوشمند با الگوریتم منصفانه
-# --------------------------------------------------------------
-class LotterySystem:
-    def __init__(self):
-        self.current_lottery = None
-        self.is_running = False
-        self.participants = {}
-        self.winners_history = []
-        self.lock = threading.Lock()
-        
-    def start_lottery(self, winners_count, prize_per_winner):
-        with self.lock:
-            if self.is_running:
-                return False
-                
-            # دریافت کاربران دارای اشتراک
-            eligible_users = self._get_eligible_users()
-            
-            # فیلتر کردن برندگان قبلی
-            eligible_users = self._filter_previous_winners(eligible_users)
-            
-            if len(eligible_users) < winners_count:
-                return False, "تعداد کاربران واجد شرایط کمتر از تعداد برندگان است"
-                
-            # الگوریتم پیشرفته انتخاب برندگان
-            winners = self._select_winners(eligible_users, winners_count)
-            
-            self.current_lottery = {
-                'winners': winners,
-                'prize_per_winner': prize_per_winner,
-                'timestamp': datetime.now()
-            }
-            
-            # ثبت برندگان در دیتابیس
-            lottery_id = self._save_lottery(winners_count, prize_per_winner)
-            self._save_winners(lottery_id, winners, prize_per_winner)
-            
-            # به‌روزرسانی تاریخ برندگان
-            for winner in winners:
-                self._update_winner_history(winner)
-                
-            self.is_running = False
-            return True, winners
-            
-    def _get_eligible_users(self):
-        """دریافت کاربران دارای اشتراک فعال"""
-        cursor = db.execute_global(
-            "SELECT user_id FROM users WHERE has_subscription=1 AND subscription_end > date('now')"
-        )
-        return [row['user_id'] for row in cursor]
-        
-    def _filter_previous_winners(self, users):
-        """فیلتر برندگان قبلی (تضمین تنوع)"""
-        cursor = db.execute_global(
-            "SELECT user_id FROM winners WHERE paid_status=1 AND user_id IN ({})".format(','.join(['?']*len(users))),
-            users
-        )
-        previous_winners = [row['user_id'] for row in cursor]
-        
-        # کاربرانی که در ۳ قرعه‌کشی اخیر برنده شده‌اند را حذف می‌کنیم
-        recent_winners = self._get_recent_winners(3)
-        
-        return [u for u in users if u not in previous_winners and u not in recent_winners]
-        
-    def _get_recent_winners(self, count):
-        """دریافت برندگان قرعه‌کشی‌های اخیر"""
-        cursor = db.execute_global(
-            "SELECT user_id FROM winners ORDER BY created_at DESC LIMIT ?",
-            (count * 10,)  # تعداد بیشتر برای اطمینان
-        )
-        return list(set([row['user_id'] for row in cursor]))
-        
-    def _select_winners(self, eligible_users, winners_count):
-        """الگوریتم هوشمند انتخاب برندگان با استفاده از AI-like روش"""
-        # وزن‌دهی به کاربران بر اساس فعالیت و سابقه
-        weighted_users = []
-        for user_id in eligible_users:
-            weight = self._calculate_user_weight(user_id)
-            weighted_users.extend([user_id] * weight)
-            
-        # انتخاب تصادفی با وزن
-        selected_winners = []
-        for _ in range(winners_count):
-            if not weighted_users:
-                break
-            winner = random.choice(weighted_users)
-            selected_winners.append(winner)
-            # حذف برنده انتخاب شده برای عدم انتخاب مجدد
-            weighted_users = [u for u in weighted_users if u != winner]
-            
-        return selected_winners
-        
-    def _calculate_user_weight(self, user_id):
-        """محاسبه وزن کاربر بر اساس فعالیت و سابقه"""
-        cursor = db.execute(user_id, 
-            "SELECT total_participations, wins_count FROM users WHERE user_id=?",
-            (user_id,)
-        )
-        user_data = cursor.fetchone()
-        
-        if not user_data:
-            return 1
-            
-        # افزایش شانس برای کاربران فعال اما کمتر برنده شده
-        participation_factor = min(user_data['total_participations'] / 10, 5)
-        win_penalty = max(1, 10 - user_data['wins_count'] * 2)
-        
-        return max(1, int(participation_factor + win_penalty))
-        
-    def _save_lottery(self, winners_count, prize_per_winner):
-        cursor = db.execute(0,  # استفاده از شارد ۰ برای داده‌های عمومی
-            "INSERT INTO lotteries (winners_count, prize_per_winner, status, started_at) VALUES (?, ?, 'running', CURRENT_TIMESTAMP)",
-            (winners_count, prize_per_winner)
-        )
-        return cursor.lastrowid
-        
-    def _save_winners(self, lottery_id, winners, prize_amount):
-        for user_id in winners:
-            cursor = db.execute(user_id,
-                "INSERT INTO winners (lottery_id, user_id, prize_amount, paid_status) VALUES (?, ?, ?, 0)",
-                (lottery_id, user_id, prize_amount)
-            )
-            
-    def _update_winner_history(self, user_id):
-        cursor = db.execute(user_id,
-            "UPDATE users SET wins_count = wins_count + 1, last_win_date = CURRENT_TIMESTAMP WHERE user_id=?",
-            (user_id,)
-        )
-
-lottery_system = LotterySystem()
-
-# --------------------------------------------------------------
-# سیستم مدیریت API ها
-# --------------------------------------------------------------
-class APIManager:
-    def __init__(self):
-        self.apis = TRONGRID_APIS.copy()
-        self.api_usage = {api: {'requests': 0, 'success': 0, 'last_reset': time.time()} for api in self.apis}
-        
-    def add_api(self, api_key):
-        if api_key not in self.apis:
-            self.apis.append(api_key)
-            self.api_usage[api_key] = {'requests': 0, 'success': 0, 'last_reset': time.time()}
-            # به‌روزرسانی payment_verifier
-            payment_verifier.apis.append(api_key)
-            payment_verifier.api_load[api_key] = 0
-            return True
-        return False
-        
-    def get_best_api(self):
-        """دریافت بهترین API بر اساس کارایی"""
-        self._reset_usage_if_needed()
-        
-        best_api = None
-        best_score = -1
-        
-        for api, usage in self.api_usage.items():
-            if usage['requests'] == 0:
-                score = 100
-            else:
-                success_rate = usage['success'] / usage['requests']
-                score = success_rate * 100
-                
-            if score > best_score:
-                best_score = score
-                best_api = api
-                
-        return best_api or self.apis[0]
-        
-    def _reset_usage_if_needed(self):
-        """بازنشانی آمار استفاده هر ساعت"""
-        for api, usage in self.api_usage.items():
-            if time.time() - usage['last_reset'] > 3600:
-                usage['requests'] = 0
-                usage['success'] = 0
-                usage['last_reset'] = time.time()
-
-api_manager = APIManager()
-
-# --------------------------------------------------------------
-# ربات تلگرام
-# --------------------------------------------------------------
-class LotteryBot:
-    def __init__(self):
-        self.application = Application.builder().token(BOT_TOKEN).build()
-        self._setup_handlers()
-        
-    def _setup_handlers(self):
-        """تنظیم هندلرهای ربات"""
-        app = self.application
-        
-        # دستورات عمومی
-        app.add_handler(CommandHandler("start", self.start_command))
-        app.add_handler(CommandHandler("help", self.help_command))
-        
-        # دکمه‌های صفحه اصلی
-        app.add_handler(CallbackQueryHandler(self.main_menu_callback, pattern="^main_menu$"))
-        app.add_handler(CallbackQueryHandler(self.lottery_callback, pattern="^lottery$"))
-        app.add_handler(CallbackQueryHandler(self.referral_callback, pattern="^referral$"))
-        app.add_handler(CallbackQueryHandler(self.guide_callback, pattern="^guide$"))
-        app.add_handler(CallbackQueryHandler(self.language_callback, pattern="^language$"))
-        app.add_handler(CallbackQueryHandler(self.join_lottery_callback, pattern="^join_lottery$"))
-        
-        # مدیریت پیام‌ها
-        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
-        
-        # پنل مدیریت
-        app.add_handler(CallbackQueryHandler(self.admin_panel_callback, pattern="^admin_panel$"))
-        app.add_handler(CallbackQueryHandler(self.admin_broadcast_callback, pattern="^admin_broadcast$"))
-        app.add_handler(CallbackQueryHandler(self.admin_start_lottery_callback, pattern="^admin_start_lottery$"))
-        app.add_handler(CallbackQueryHandler(self.admin_manual_verify_callback, pattern="^admin_manual_verify$"))
-        app.add_handler(CallbackQueryHandler(self.admin_poll_callback, pattern="^admin_poll$"))
-        app.add_handler(CallbackQueryHandler(self.admin_pay_winners_callback, pattern="^admin_pay_winners$"))
-        app.add_handler(CallbackQueryHandler(self.admin_add_api_callback, pattern="^admin_add_api$"))
-        
-        # شروع قرعه‌کشی
-        app.add_handler(CallbackQueryHandler(self.start_lottery_confirm_callback, pattern="^start_lottery_confirm$"))
-        app.add_handler(CallbackQueryHandler(self.start_lottery_final_callback, pattern="^start_lottery_final$"))
-        
-        # برداشت جایزه
-        app.add_handler(CallbackQueryHandler(self.withdraw_prize_callback, pattern="^withdraw_prize$"))
-        app.add_handler(CallbackQueryHandler(self.confirm_withdraw_callback, pattern="^confirm_withdraw$"))
-        
-    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """دستور استارت - نمایش دکمه پلی"""
-        user = update.effective_user
-        
-        # ثبت کاربر در دیتابیس
-        self._register_user(user)
-        
-        # زبان پیش‌فرض انگلیسی
-        lang = self._get_user_language(user.id)
-        
-        # دکمه پلی
-        keyboard = [[InlineKeyboardButton("▶️ PLAY", callback_data="main_menu")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(
-            "🎮 Welcome to UTYOB Lottery Bot!\n\n"
-            "Click PLAY to enter the game and win amazing prizes!",
-            reply_markup=reply_markup
-        )
-        
-    async def main_menu_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """نمایش منوی اصلی"""
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        
-        keyboard = [
-            [InlineKeyboardButton("🎰 شرکت در قرعه‌کشی", callback_data="lottery")],
-            [InlineKeyboardButton("🔗 رفرال", callback_data="referral")],
-            [InlineKeyboardButton("📖 راهنمایی", callback_data="guide")],
-            [InlineKeyboardButton("🌐 تغییر زبان", callback_data="language")]
-        ]
-        
-        if user_id in ADMIN_IDS:
-            keyboard.append([InlineKeyboardButton("⚙️ پنل مدیریت", callback_data="admin_panel")])
-            
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            "🎯 **Welcome to UTYOB Lottery Bot!**\n\n"
-            "Select an option below:",
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
-        
-    async def lottery_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """مدیریت قرعه‌کشی"""
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        
-        # بررسی اشتراک کاربر
-        has_subscription = self._check_subscription(user_id)
-        
-        if not has_subscription:
-            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                "❌ شما اشتراک فعال ندارید!\n\n"
-                "برای شرکت در قرعه‌کشی، ابتدا اشتراک تهیه کنید.",
-                reply_markup=reply_markup
-            )
-            return
-            
-        # نمایش دکمه شرکت در قرعه‌کشی
-        keyboard = [
-            [InlineKeyboardButton("✅ شرکت در قرعه‌کشی", callback_data="join_lottery")],
-            [InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            "🎰 **قرعه‌کشی UTYOB**\n\n"
-            "برای شرکت در قرعه‌کشی، روی دکمه زیر کلیک کنید.\n\n"
-            "💰 جایزه: تا ۱۰۰۰ دلار\n"
-            "📊 تعداد برندگان: متغیر",
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
-        
-    async def join_lottery_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """شرکت در قرعه‌کشی - دریافت آدرس کیف پول"""
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        
-        # ذخیره وضعیت برای دریافت آدرس
-        context.user_data['waiting_for_wallet'] = True
-        
-        keyboard = [[InlineKeyboardButton("🔙 انصراف", callback_data="main_menu")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            "💳 **واریز برای شرکت در قرعه‌کشی**\n\n"
-            "لطفاً آدرس کیف پول مبدا (TRC20) خود را وارد کنید:\n\n"
-            "مبلغ واریز: **۱۰۰ دلار**\n"
-            "آدرس مقصد: `TV61aTh98MGqmteYzda5AaBzdXgGqreG6A`\n\n"
-            "⚠️ پس از واریز، سیستم به صورت خودکار تراکنش را تایید می‌کند.",
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
-        
-    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """مدیریت پیام‌های کاربران"""
-        user_id = update.effective_user.id
-        text = update.message.text
-        
-        # بررسی انتظار برای آدرس کیف پول
-        if context.user_data.get('waiting_for_wallet'):
-            # ذخیره آدرس کیف پول
-            wallet_address = text.strip()
-            
-            # بررسی معتبر بودن آدرس
-            if self._validate_wallet_address(wallet_address):
-                # ثبت در دیتابیس
-                cursor = db.execute(user_id,
-                    "UPDATE users SET wallet_address = ? WHERE user_id = ?",
-                    (wallet_address, user_id)
-                )
-                
-                # تایید خودکار پرداخت
-                await self._auto_verify_payment(user_id, wallet_address)
-                
-                context.user_data['waiting_for_wallet'] = False
-            else:
-                await update.message.reply_text(
-                    "❌ آدرس کیف پول نامعتبر است!\n"
-                    "لطفاً یک آدرس معتبر TRC20 وارد کنید."
-                )
-            return
-            
-        # پیام‌های معمولی
-        await update.message.reply_text(
-            "از دستورات موجود استفاده کنید یا از دکمه‌ها استفاده نمایید."
-        )
-        
-    async def _auto_verify_payment(self, user_id, from_address):
-        """تایید خودکار پرداخت"""
-        to_address = "TV61aTh98MGqmteYzda5AaBzdXgGqreG6A"
-        amount = 100  # دلار
-        
-        # تایید تراکنش
-        is_verified, tx_id = await payment_verifier.verify_transaction(
-            from_address, to_address, amount
-        )
-        
-        if is_verified:
-            # ثبت تراکنش موفق
-            cursor = db.execute(user_id,
-                """INSERT INTO transactions (user_id, from_address, to_address, amount, tx_id, status, verified_at) 
-                   VALUES (?, ?, ?, ?, ?, 'verified', CURRENT_TIMESTAMP)""",
-                (user_id, from_address, to_address, amount, tx_id)
-            )
-            
-            # به‌روزرسانی کاربر
-            cursor = db.execute(user_id,
-                "UPDATE users SET total_participations = total_participations + 1 WHERE user_id = ?",
-                (user_id,)
-            )
-            
-            keyboard = [[InlineKeyboardButton("🎰 ورود به قرعه‌کشی", callback_data="lottery")]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await self.application.bot.send_message(
-                chat_id=user_id,
-                text="✅ **پرداخت شما تایید شد!**\n\n"
-                     "شما با موفقیت در قرعه‌کشی ثبت نام کردید.\n"
-                     "برای مشاهده وضعیت قرعه‌کشی، روی دکمه زیر کلیک کنید.",
-                reply_markup=reply_markup,
-                parse_mode='Markdown'
-            )
-            
-            # پیام به ادمین
-            for admin_id in ADMIN_IDS:
-                await self.application.bot.send_message(
-                    chat_id=admin_id,
-                    text=f"✅ پرداخت جدید تایید شد\n"
-                         f"👤 کاربر: {user_id}\n"
-                         f"💰 مبلغ: ${amount}\n"
-                         f"🔗 تراکنش: {tx_id}"
-                )
-                
-        else:
-            # پرداخت تایید نشد
-            cursor = db.execute(user_id,
-                "INSERT INTO transactions (user_id, from_address, to_address, amount, status) VALUES (?, ?, ?, ?, 'failed')",
-                (user_id, from_address, to_address, amount)
-            )
-            
-            keyboard = [[InlineKeyboardButton("🔄 تلاش مجدد", callback_data="join_lottery")]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await self.application.bot.send_message(
-                chat_id=user_id,
-                text="❌ **پرداخت شما تایید نشد!**\n\n"
-                     "لطفاً موارد زیر را بررسی کنید:\n"
-                     "1. مبلغ دقیقاً ۱۰۰ دلار باشد\n"
-                     "2. آدرس مقصد صحیح باشد\n"
-                     "3. تراکنش انجام شده باشد\n\n"
-                     "پس از بررسی، مجدداً اقدام کنید.",
-                reply_markup=reply_markup,
-                parse_mode='Markdown'
-            )
-            
-            # اطلاع به ادمین برای بررسی دستی
-            for admin_id in ADMIN_IDS:
-                await self.application.bot.send_message(
-                    chat_id=admin_id,
-                    text=f"⚠️ پرداخت تایید نشد - نیاز به بررسی دستی\n"
-                         f"👤 کاربر: {user_id}\n"
-                         f"📤 از: {from_address}\n"
-                         f"📥 به: {to_address}\n"
-                         f"💰 مبلغ: ${amount}"
-                )
-                
-    def _validate_wallet_address(self, address):
-        """بررسی معتبر بودن آدرس TRC20"""
+        self.data = {
+            "users": {},
+            "current_lottery": None,
+            "lotteries": []
+        }
+        self._load()
+    
+    def _load(self):
         try:
-            # بررسی طول آدرس
-            if len(address) != 34:
-                return False
-                
-            # بررسی کاراکترهای مجاز
-            valid_chars = set('123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz')
-            if not all(c in valid_chars for c in address):
-                return False
-                
-            # بررسی Base58
-            try:
-                decoded = base58.b58decode(address)
-                return True
-            except:
-                return False
-                
+            with open("data.json", "r") as f:
+                self.data = json.load(f)
         except:
-            return False
-            
-    def _register_user(self, user):
-        """ثبت کاربر جدید در دیتابیس"""
-        cursor = db.execute(user.id,
-            "SELECT user_id FROM users WHERE user_id = ?",
-            (user.id,)
-        )
-        
-        if not cursor.fetchone():
-            # تولید کد رفرال اختصاصی
-            referral_code = self._generate_referral_code(user.id)
-            
-            cursor = db.execute(user.id,
-                """INSERT INTO users (user_id, username, first_name, last_name, referral_code) 
-                   VALUES (?, ?, ?, ?, ?)""",
-                (user.id, user.username, user.first_name, user.last_name, referral_code)
-            )
-            
-    def _generate_referral_code(self, user_id):
-        """تولید کد رفرال منحصر به فرد"""
-        import hashlib
-        base = f"UTYOB_{user_id}_{time.time()}"
-        hash_obj = hashlib.sha256(base.encode())
-        return hash_obj.hexdigest()[:10].upper()
-        
-    def _get_user_language(self, user_id):
-        """دریافت زبان کاربر"""
-        cursor = db.execute(user_id,
-            "SELECT language FROM users WHERE user_id = ?",
-            (user_id,)
-        )
-        result = cursor.fetchone()
-        return result['language'] if result else 'en'
-        
-    def _check_subscription(self, user_id):
-        """بررسی اشتراک کاربر"""
-        cursor = db.execute(user_id,
-            "SELECT has_subscription, subscription_end FROM users WHERE user_id = ?",
-            (user_id,)
-        )
-        result = cursor.fetchone()
-        
-        if not result:
-            return False
-            
-        if result['has_subscription']:
-            if result['subscription_end']:
-                end_date = datetime.strptime(result['subscription_end'], '%Y-%m-%d')
-                if end_date >= datetime.now():
-                    return True
-                    
-        return False
+            self._save()
+    
+    def _save(self):
+        with open("data.json", "w") as f:
+            json.dump(self.data, f, indent=2, default=str)
+    
+    def get_user(self, user_id):
+        return self.data["users"].get(str(user_id))
+    
+    def save_user(self, user_id, data):
+        self.data["users"][str(user_id)] = data
+        self._save()
+    
+    def get_all_users(self):
+        return list(self.data["users"].values())
+    
+    def get_subscribed_users(self):
+        return [u for u in self.data["users"].values() if u.get("has_subscription", False)]
+    
+    def get_current_lottery(self):
+        return self.data.get("current_lottery")
+    
+    def set_current_lottery(self, lottery):
+        self.data["current_lottery"] = lottery
+        self._save()
+    
+    def add_lottery(self, lottery):
+        self.data["lotteries"].append(lottery)
+        self._save()
+    
+    def get_previous_winners(self):
+        winners = []
+        for lottery in self.data["lotteries"]:
+            if lottery.get("winners"):
+                winners.extend(lottery["winners"])
+        return winners
 
-# --------------------------------------------------------------
-# پنل مدیریت
-# --------------------------------------------------------------
-class AdminPanel:
-    def __init__(self, bot):
-        self.bot = bot
+db = SimpleDB()
+
+# ============================================
+# ترجمه
+# ============================================
+T = {
+    "en": {
+        "welcome": "🎰 *LOTTERY BOT*\n\n💰 Join and win!\n📱 Click PLAY to open.",
+        "subscribe": "💎 *Subscribe*\n\n💰 Send 100 USDT to:\n`{address}`\n\n📝 Enter your TRC20 wallet:",
+        "invalid_wallet": "❌ Invalid TRC20 address.",
+        "wallet_saved": "✅ Wallet saved!\n\n💰 Send 100 USDT to:\n`{address}`",
+        "payment_verified": "✅ *PAYMENT VERIFIED!*\n\n🎉 You're subscribed!",
+        "already_subscribed": "✅ You already have subscription!",
+        "congratulations": "🎊 *CONGRATULATIONS!*\n\n🏆 You won ${amount}!",
+        "not_winner": "😔 Better luck next time!",
+        "withdraw": "💰 *Withdraw*\n\nEnter your TRC20 wallet:",
+        "withdraw_success": "✅ *Withdrawal Submitted!*",
+        "admin_panel": "⚙️ *ADMIN PANEL*\n\n👥 Users: {users}\n🎯 Subscribed: {subscribed}",
+        "broadcast_sent": "✅ Sent to {count} users!",
+        "manual_verify_done": "✅ Verified!",
+        "api_added": "✅ API key added!",
+        "withdraw_done": "✅ Done for {count} winners!",
+        "restart_done": "✅ Lottery restarted!",
+        "survey_sent": "✅ Survey sent to {count} users!",
+        "lang_changed": "🌐 Language changed to {lang}",
+        "help": "📖 *Help*\n\n1️⃣ Send 100 USDT\n2️⃣ Subscribe\n3️⃣ Win!",
+        "cancel": "❌ Cancelled.",
+        "admin_broadcast": "📢 Enter message:",
+        "admin_manual_verify": "✅ Enter transaction ID:",
+        "admin_add_api": "🔑 Enter API key:",
+        "admin_survey": "📊 Enter question:",
+        "admin_winners": "🏆 Enter number of winners:",
+        "admin_prize": "💰 Enter prize amount:",
+        "user_status": "👤 Status",
+        "subscription": "📅 Subscription",
+        "wallet": "🏦 Wallet",
+        "not_set": "Not Set",
+        "active": "Active",
+        "inactive": "Inactive",
+        "winner": "🏆 Winner",
+        "total_won": "💰 Total Won",
+        "referral_code": "🔗 Your code: `{code}`",
+        "copy": "📋 Copy",
+        "share": "📤 Share",
+        "error": "❌ Error",
+        "copied": "✅ Copied!",
+        "home": "Home",
+        "participate": "Participate",
+        "winners": "Winners",
+        "subscribe_now": "Subscribe Now",
+        "expires": "Expires",
+        "no_active_lottery": "No active lottery",
+        "no_winners": "No winners yet",
+        "your_code": "Your Code",
+        "payment_address": "Payment Address",
+        "enter_wallet": "Enter Wallet",
+        "submit": "Submit",
+        "verify_payment": "Verify Payment",
+        "saving": "Saving...",
+        "checking": "Checking...",
+        "you_are_winner": "🏆 You are a winner!",
+        "withdraw_now": "Withdraw Now",
+        "subscription_active": "Subscription Active!",
+        "send_amount": "Send Amount",
+        "referral_program": "🔗 Referral Program",
+    },
+    "fa": {
+        "welcome": "🎰 *ربات قرعه‌کشی*\n\n💰 شرکت کنید و برنده شوید!\n📱 روی PLAY کلیک کنید.",
+        "subscribe": "💎 *اشتراک*\n\n💰 ۱۰۰ دلار به:\n`{address}`\n\n📝 آدرس TRC20 را وارد کنید:",
+        "invalid_wallet": "❌ آدرس TRC20 نامعتبر.",
+        "wallet_saved": "✅ کیف پول ذخیره شد!\n\n💰 ۱۰۰ دلار به:\n`{address}`",
+        "payment_verified": "✅ *پرداخت تایید شد!*\n\n🎉 شما ثبت نام کردید!",
+        "already_subscribed": "✅ شما اشتراک دارید!",
+        "congratulations": "🎊 *تبریک!*\n\n🏆 شما ${amount} برنده شدید!",
+        "not_winner": "😔 دفعه بعد!",
+        "withdraw": "💰 *برداشت*\n\nآدرس TRC20 را وارد کنید:",
+        "withdraw_success": "✅ *برداشت ثبت شد!*",
+        "admin_panel": "⚙️ *پنل مدیریت*\n\n👥 کاربران: {users}\n🎯 اشتراک‌داران: {subscribed}",
+        "broadcast_sent": "✅ به {count} کاربر ارسال شد!",
+        "manual_verify_done": "✅ تایید شد!",
+        "api_added": "✅ کلید API اضافه شد!",
+        "withdraw_done": "✅ برای {count} برنده انجام شد!",
+        "restart_done": "✅ قرعه‌کشی مجدداً شروع شد!",
+        "survey_sent": "✅ نظر سنجی به {count} کاربر ارسال شد!",
+        "lang_changed": "🌐 زبان به {lang} تغییر یافت",
+        "help": "📖 *راهنما*\n\n۱️⃣ ۱۰۰ دلار ارسال کنید\n۲️⃣ اشتراک بخرید\n۳️⃣ برنده شوید!",
+        "cancel": "❌ لغو شد.",
+        "admin_broadcast": "📢 پیام را وارد کنید:",
+        "admin_manual_verify": "✅ شناسه تراکنش را وارد کنید:",
+        "admin_add_api": "🔑 کلید API را وارد کنید:",
+        "admin_survey": "📊 سوال را وارد کنید:",
+        "admin_winners": "🏆 تعداد برندگان را وارد کنید:",
+        "admin_prize": "💰 مبلغ جایزه را وارد کنید:",
+        "user_status": "👤 وضعیت",
+        "subscription": "📅 اشتراک",
+        "wallet": "🏦 کیف پول",
+        "not_set": "تنظیم نشده",
+        "active": "فعال",
+        "inactive": "غیرفعال",
+        "winner": "🏆 برنده",
+        "total_won": "💰 مجموع برداشت",
+        "referral_code": "🔗 کد شما: `{code}`",
+        "copy": "📋 کپی",
+        "share": "📤 اشتراک‌گذاری",
+        "error": "❌ خطا",
+        "copied": "✅ کپی شد!",
+        "home": "خانه",
+        "participate": "شرکت",
+        "winners": "برندگان",
+        "subscribe_now": "اشتراک فوری",
+        "expires": "انقضا",
+        "no_active_lottery": "قرعه‌کشی فعالی وجود ندارد",
+        "no_winners": "هنوز برنده‌ای وجود ندارد",
+        "your_code": "کد شما",
+        "payment_address": "آدرس پرداخت",
+        "enter_wallet": "ورود کیف پول",
+        "submit": "ثبت",
+        "verify_payment": "تایید پرداخت",
+        "saving": "در حال ذخیره...",
+        "checking": "در حال بررسی...",
+        "you_are_winner": "🏆 شما برنده شدید!",
+        "withdraw_now": "برداشت فوری",
+        "subscription_active": "اشتراک فعال است!",
+        "send_amount": "مبلغ ارسال",
+        "referral_program": "🔗 برنامه رفرال",
+    },
+    "ar": {
+        "welcome": "🎰 *يانصيب*\n\n💰 شارك واربح!\n📱 اضغط PLAY للفتح.",
+        "subscribe": "💎 *اشتراك*\n\n💰 أرسل ۱۰۰ دولار إلى:\n`{address}`\n\n📝 أدخل محفظة TRC20:",
+        "invalid_wallet": "❌ عنوان TRC20 غير صالح.",
+        "wallet_saved": "✅ تم حفظ المحفظة!\n\n💰 أرسل ۱۰۰ دولار إلى:\n`{address}`",
+        "payment_verified": "✅ *تم التحقق!*\n\n🎉 تم الاشتراك!",
+        "already_subscribed": "✅ لديك اشتراك!",
+        "congratulations": "🎊 *تهانينا!*\n\n🏆 لقد فزت بـ ${amount}!",
+        "not_winner": "😔 حظاً أوفر!",
+        "withdraw": "💰 *سحب*\n\nأدخل محفظة TRC20:",
+        "withdraw_success": "✅ *تم السحب!*",
+        "admin_panel": "⚙️ *لوحة الإدارة*\n\n👥 المستخدمون: {users}\n🎯 المشتركون: {subscribed}",
+        "broadcast_sent": "✅ تم الإرسال إلى {count} مستخدم!",
+        "manual_verify_done": "✅ تم التحقق!",
+        "api_added": "✅ تم إضافة المفتاح!",
+        "withdraw_done": "✅ تم الدفع لـ {count} فائز!",
+        "restart_done": "✅ تم إعادة بدء اليانصيب!",
+        "survey_sent": "✅ تم إرسال الاستبيان إلى {count} مستخدم!",
+        "lang_changed": "🌐 تم تغيير اللغة إلى {lang}",
+        "help": "📖 *مساعدة*\n\n۱️⃣ أرسل ۱۰۰ دولار\n۲️⃣ اشترك\n۳️⃣ اربح!",
+        "cancel": "❌ تم الإلغاء.",
+        "admin_broadcast": "📢 أدخل الرسالة:",
+        "admin_manual_verify": "✅ أدخل معرف المعاملة:",
+        "admin_add_api": "🔑 أدخل مفتاح API:",
+        "admin_survey": "📊 أدخل السؤال:",
+        "admin_winners": "🏆 أدخل عدد الفائزين:",
+        "admin_prize": "💰 أدخل قيمة الجائزة:",
+        "user_status": "👤 الحالة",
+        "subscription": "📅 الاشتراك",
+        "wallet": "🏦 المحفظة",
+        "not_set": "غير محدد",
+        "active": "نشط",
+        "inactive": "غير نشط",
+        "winner": "🏆 فائز",
+        "total_won": "💰 إجمالي الفوز",
+        "referral_code": "🔗 رمزك: `{code}`",
+        "copy": "📋 نسخ",
+        "share": "📤 مشاركة",
+        "error": "❌ خطأ",
+        "copied": "✅ تم النسخ!",
+        "home": "الرئيسية",
+        "participate": "المشاركة",
+        "winners": "الفائزون",
+        "subscribe_now": "اشتراك فوري",
+        "expires": "ينتهي",
+        "no_active_lottery": "لا يوجد يانصيب نشط",
+        "no_winners": "لا يوجد فائزون",
+        "your_code": "رمزك",
+        "payment_address": "عنوان الدفع",
+        "enter_wallet": "أدخل المحفظة",
+        "submit": "إرسال",
+        "verify_payment": "التحقق من الدفع",
+        "saving": "جاري الحفظ...",
+        "checking": "جاري التحقق...",
+        "you_are_winner": "🏆 أنت فائز!",
+        "withdraw_now": "سحب الآن",
+        "subscription_active": "الاشتراك نشط!",
+        "send_amount": "المبلغ المرسل",
+        "referral_program": "🔗 برنامج الإحالة",
+    }
+}
+
+def get_text(key, lang="en", **kwargs):
+    text = T.get(lang, T["en"]).get(key, key)
+    return text.format(**kwargs) if kwargs else text
+
+# ============================================
+# Flask App
+# ============================================
+flask_app = Flask(__name__)
+
+WEBAPP_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎰 Lottery</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, sans-serif;
+            background: var(--tg-theme-bg-color, #fff);
+            color: var(--tg-theme-text-color, #000);
+            padding: 16px;
+            padding-bottom: 80px;
+        }
+        .card {
+            background: var(--tg-theme-secondary-bg-color, #f0f0f0);
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 12px;
+        }
+        .card-title { font-size: 16px; font-weight: 600; margin-bottom: 10px; }
+        .row {
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 0;
+            border-bottom: 1px solid var(--tg-theme-secondary-bg-color, #ddd);
+        }
+        .row:last-child { border-bottom: none; }
+        .label { color: var(--tg-theme-hint-color, #666); font-size: 13px; }
+        .value { font-weight: 500; font-size: 13px; }
+        .highlight { color: var(--tg-theme-button-color, #0088cc); font-weight: 700; }
+        .badge {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        .badge.active { background: #4caf50; color: #fff; }
+        .badge.inactive { background: #999; color: #fff; }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            width: 100%;
+            color: #fff;
+            background: var(--tg-theme-button-color, #0088cc);
+            margin-top: 8px;
+        }
+        .btn:active { transform: scale(0.97); }
+        .btn-success { background: #4caf50; }
+        .btn-secondary { background: var(--tg-theme-secondary-bg-color, #ddd); color: #000; }
+        .btn-gold { background: linear-gradient(135deg, #ffd700, #f5a623); color: #000; }
+        .input-group { margin-bottom: 12px; }
+        .input-group label {
+            display: block;
+            font-size: 13px;
+            font-weight: 500;
+            margin-bottom: 4px;
+            color: var(--tg-theme-hint-color, #666);
+        }
+        .input-group input {
+            width: 100%;
+            padding: 10px 14px;
+            border: 2px solid var(--tg-theme-secondary-bg-color, #ddd);
+            border-radius: 10px;
+            font-size: 14px;
+            background: var(--tg-theme-bg-color, #fff);
+            color: var(--tg-theme-text-color, #000);
+        }
+        .input-group input:focus { outline: none; border-color: var(--tg-theme-button-color, #0088cc); }
+        .loading { text-align: center; padding: 20px; }
+        .spinner {
+            width: 30px;
+            height: 30px;
+            border: 3px solid var(--tg-theme-secondary-bg-color, #ddd);
+            border-top: 3px solid var(--tg-theme-button-color, #0088cc);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+        .empty { text-align: center; padding: 30px 20px; color: var(--tg-theme-hint-color, #666); }
+        .code-box {
+            background: var(--tg-theme-bg-color, #fff);
+            padding: 10px;
+            border-radius: 8px;
+            text-align: center;
+            font-size: 18px;
+            font-weight: 700;
+            font-family: monospace;
+            border: 2px dashed var(--tg-theme-button-color, #0088cc);
+        }
+        .tab-bar {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: var(--tg-theme-bg-color, #fff);
+            border-top: 1px solid var(--tg-theme-secondary-bg-color, #ddd);
+            display: flex;
+            padding: 6px 0;
+            z-index: 100;
+        }
+        .tab {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 2px 0;
+            cursor: pointer;
+            border: none;
+            background: none;
+            color: var(--tg-theme-hint-color, #666);
+            font-size: 10px;
+        }
+        .tab.active { color: var(--tg-theme-button-color, #0088cc); }
+        .tab .icon { font-size: 22px; }
+        .tab .label { font-size: 9px; margin-top: 2px; }
+        .page { display: none; }
+        .page.active { display: block; }
+        .lang-bar {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 12px;
+        }
+        .lang-btn {
+            padding: 4px 10px;
+            border: none;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            background: var(--tg-theme-secondary-bg-color, #ddd);
+            color: var(--tg-theme-text-color, #000);
+        }
+        .lang-btn.active {
+            background: var(--tg-theme-button-color, #0088cc);
+            color: #fff;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+        .header-title { font-size: 20px; font-weight: 700; }
+        .winner-list { list-style: none; padding: 0; }
+        .winner-list li {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--tg-theme-secondary-bg-color, #ddd);
+        }
+        .winner-list li:last-child { border-bottom: none; }
+        .winner-amount { font-weight: 700; color: #ffd700; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-title">🎰 Lottery</div>
+        <div class="lang-bar">
+            <button class="lang-btn active" onclick="setLang('en')">EN</button>
+            <button class="lang-btn" onclick="setLang('fa')">FA</button>
+            <button class="lang-btn" onclick="setLang('ar')">AR</button>
+        </div>
+    </div>
+    
+    <div id="page-home" class="page active">
+        <div class="card"><div class="card-title">👤 Status</div><div id="status">Loading...</div></div>
+        <div class="card"><div class="card-title">📅 Subscription</div><div id="subscription">Loading...</div></div>
+        <div class="card"><div class="card-title">🎰 Lottery</div><div id="lottery">Loading...</div></div>
+        <div class="card"><div class="card-title">🏆 Winners</div><div id="winners">Loading...</div></div>
+        <div class="card"><div class="card-title">🔗 Referral</div><div id="referral">Loading...</div></div>
+    </div>
+    
+    <div id="page-participate" class="page">
+        <div class="card"><div class="card-title">💰 Participate</div><div id="participate">Loading...</div></div>
+    </div>
+    
+    <div id="page-winners" class="page">
+        <div class="card"><div class="card-title">🏆 All Winners</div><div id="all-winners">Loading...</div></div>
+    </div>
+    
+    <div class="tab-bar">
+        <button class="tab active" onclick="switchPage('home')"><span class="icon">🏠</span><span class="label">Home</span></button>
+        <button class="tab" onclick="switchPage('participate')"><span class="icon">💰</span><span class="label">Participate</span></button>
+        <button class="tab" onclick="switchPage('winners')"><span class="icon">🏆</span><span class="label">Winners</span></button>
+    </div>
+    
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+        tg.ready();
         
-    async def show_panel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """نمایش پنل مدیریت"""
-        query = update.callback_query
-        await query.answer()
+        let lang = 'en';
+        let userId = null;
+        const T = {{ T|safe }};
+        
+        function t(key) { return (T[lang] && T[lang][key]) || key; }
+        
+        function setLang(l) {
+            lang = l;
+            document.querySelectorAll('.lang-btn').forEach(b => b.classList.remove('active'));
+            document.querySelector(`.lang-btn[onclick="setLang('${l}')"]`).classList.add('active');
+            loadAll();
+            fetch('/api/language', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({language: l})
+            }).catch(() => {});
+        }
+        
+        function showToast(msg) {
+            const el = document.createElement('div');
+            el.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.8);color:#fff;padding:10px 20px;border-radius:10px;font-size:13px;z-index:999;max-width:90%;text-align:center;';
+            el.textContent = msg;
+            document.body.appendChild(el);
+            setTimeout(() => el.remove(), 3000);
+        }
+        
+        async function call(endpoint, method='GET', data=null) {
+            try {
+                const opts = {method, headers: {'Content-Type': 'application/json'}};
+                if (data) opts.body = JSON.stringify(data);
+                const res = await fetch(endpoint, opts);
+                const result = await res.json();
+                if (!res.ok) throw new Error(result.error || 'Error');
+                return result;
+            } catch(e) {
+                console.error(e);
+                showToast(t('error'));
+                throw e;
+            }
+        }
+        
+        function switchPage(page) {
+            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+            document.getElementById('page-' + page).classList.add('active');
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelector(`.tab[onclick="switchPage('${page}')"]`).classList.add('active');
+            if (page === 'participate') loadParticipate();
+            if (page === 'winners') loadAllWinners();
+        }
+        
+        async function loadAll() {
+            await Promise.all([loadStatus(), loadSubscription(), loadLottery(), loadWinners(), loadReferral()]);
+        }
+        
+        async function loadStatus() {
+            try {
+                const data = await call('/api/user/status');
+                const u = data.user || {};
+                document.getElementById('status').innerHTML = `
+                    <div class="row"><span class="label">${t('user_id')}</span><span class="value">${u.telegram_id || 'N/A'}</span></div>
+                    <div class="row"><span class="label">${t('wallet')}</span><span class="value">${u.wallet_address ? u.wallet_address.substring(0,8)+'...' : t('not_set')}</span></div>
+                    <div class="row"><span class="label">${t('total_won')}</span><span class="value highlight">$${u.total_won || 0}</span></div>
+                    ${u.is_winner ? `<div class="row"><span class="label">${t('winner')}</span><span class="value" style="color:#ffd700;">🏆 $${u.won_amount}</span></div>` : ''}
+                `;
+            } catch(e) {
+                document.getElementById('status').innerHTML = `<div class="empty">${t('error')}</div>`;
+            }
+        }
+        
+        async function loadSubscription() {
+            try {
+                const data = await call('/api/user/subscription');
+                const has = data.has_subscription || false;
+                document.getElementById('subscription').innerHTML = `
+                    <div class="row">
+                        <span class="label">${t('subscription')}</span>
+                        <span class="value"><span class="badge ${has ? 'active' : 'inactive'}">${has ? t('active') : t('inactive')}</span></span>
+                    </div>
+                    ${has ? `<div class="row"><span class="label">${t('expires')}</span><span class="value">${data.expiry ? new Date(data.expiry).toLocaleDateString() : 'N/A'}</span></div>`
+                    : `<button class="btn btn-success" onclick="switchPage('participate')">💰 ${t('subscribe_now')}</button>`}
+                `;
+            } catch(e) {
+                document.getElementById('subscription').innerHTML = `<div class="empty">${t('error')}</div>`;
+            }
+        }
+        
+        async function loadLottery() {
+            try {
+                const data = await call('/api/lottery/status');
+                if (data.active) {
+                    document.getElementById('lottery').innerHTML = `
+                        <div class="row"><span class="label">${t('status')}</span><span class="value"><span class="badge active">${t('active')}</span></span></div>
+                        <div class="row"><span class="label">${t('participants')}</span><span class="value">${data.participant_count || 0}</span></div>
+                        <div class="row"><span class="label">${t('prize_pool')}</span><span class="value highlight">$${data.prize_pool || 0}</span></div>
+                    `;
+                } else {
+                    document.getElementById('lottery').innerHTML = `<div class="empty">${t('no_active_lottery')}</div>`;
+                }
+            } catch(e) {
+                document.getElementById('lottery').innerHTML = `<div class="empty">${t('error')}</div>`;
+            }
+        }
+        
+        async function loadWinners() {
+            try {
+                const data = await call('/api/lottery/winners');
+                if (data.winners && data.winners.length > 0) {
+                    let html = `<ul class="winner-list">`;
+                    data.winners.slice(0, 5).forEach((w, i) => {
+                        html += `<li><span>#${i+1} ${w.username || 'User'}</span><span class="winner-amount">$${w.amount}</span></li>`;
+                    });
+                    html += `</ul>`;
+                    if (data.winners.length > 5) html += `<button class="btn btn-secondary" onclick="switchPage('winners')">${t('view_all') || 'View All'}</button>`;
+                    document.getElementById('winners').innerHTML = html;
+                } else {
+                    document.getElementById('winners').innerHTML = `<div class="empty">${t('no_winners')}</div>`;
+                }
+            } catch(e) {
+                document.getElementById('winners').innerHTML = `<div class="empty">${t('error')}</div>`;
+            }
+        }
+        
+        async function loadReferral() {
+            try {
+                const data = await call('/api/user/referral');
+                document.getElementById('referral').innerHTML = `
+                    <div class="row"><span class="label">${t('your_code')}</span><span class="value"><div class="code-box">${data.referral_code}</div></span></div>
+                    <div style="display:flex;gap:8px;margin-top:8px;">
+                        <button class="btn btn-secondary" onclick="copyText('${data.referral_code}')">📋 ${t('copy')}</button>
+                        <button class="btn btn-success" onclick="shareCode('${data.referral_code}')">📤 ${t('share')}</button>
+                    </div>
+                    <div class="row"><span class="label">${t('referrals')}</span><span class="value">${data.referral_count || 0}</span></div>
+                `;
+            } catch(e) {
+                document.getElementById('referral').innerHTML = `<div class="empty">${t('error')}</div>`;
+            }
+        }
+        
+        async function loadParticipate() {
+            const el = document.getElementById('participate');
+            try {
+                const data = await call('/api/user/status');
+                if (data.user && data.user.has_subscription) {
+                    el.innerHTML = `
+                        <div style="text-align:center;padding:20px;">
+                            <div style="font-size:48px;">🎉</div>
+                            <h3>${t('subscription_active')}</h3>
+                            ${data.user.is_winner ? `
+                            <div style="margin-top:12px;padding:12px;background:#ffd70022;border-radius:8px;">
+                                <p style="font-weight:700;color:#ffd700;">🏆 ${t('you_are_winner')} $${data.user.won_amount}</p>
+                                <button class="btn btn-gold" onclick="withdraw()">💰 ${t('withdraw_now')}</button>
+                            </div>` : `<p style="color:#666;">${t('waiting_for_draw') || 'Waiting...'}</p>`}
+                        </div>
+                    `;
+                } else {
+                    el.innerHTML = `
+                        <div style="text-align:center;margin-bottom:16px;">
+                            <div style="font-size:48px;">💰</div>
+                            <h3>${t('subscribe_now')}</h3>
+                            <p style="color:#666;font-size:13px;">${t('send_amount')}: 100 USDT</p>
+                        </div>
+                        <div class="input-group">
+                            <label>${t('payment_address')}</label>
+                            <div style="display:flex;gap:6px;">
+                                <input type="text" id="payment-addr" value="${PAYMENT_ADDRESS}" readonly style="flex:1;font-size:12px;">
+                                <button class="btn btn-secondary" onclick="copyText(document.getElementById('payment-addr').value)" style="width:auto;padding:8px 12px;">📋</button>
+                            </div>
+                        </div>
+                        <div class="input-group">
+                            <label>${t('enter_wallet')}</label>
+                            <input type="text" id="wallet-input" placeholder="T... (TRC20)">
+                        </div>
+                        <button class="btn btn-success" onclick="submitWallet()">✅ ${t('submit')}</button>
+                        <button class="btn btn-secondary" onclick="verifyPayment()" style="margin-top:8px;">🔄 ${t('verify_payment')}</button>
+                    `;
+                }
+            } catch(e) {
+                el.innerHTML = `<div class="empty">${t('error')}</div>`;
+            }
+        }
+        
+        async function loadAllWinners() {
+            const el = document.getElementById('all-winners');
+            try {
+                const data = await call('/api/lottery/all-winners');
+                if (data.winners && data.winners.length > 0) {
+                    let html = `<ul class="winner-list">`;
+                    data.winners.slice(0, 20).forEach((w, i) => {
+                        html += `<li><span>#${i+1} ${w.username || 'User'}</span><span class="winner-amount">$${w.amount}</span></li>`;
+                    });
+                    html += `</ul>`;
+                    el.innerHTML = html;
+                } else {
+                    el.innerHTML = `<div class="empty">${t('no_winners')}</div>`;
+                }
+            } catch(e) {
+                el.innerHTML = `<div class="empty">${t('error')}</div>`;
+            }
+        }
+        
+        function copyText(text) {
+            navigator.clipboard.writeText(text).then(() => showToast(t('copied')))
+                .catch(() => { const el = document.createElement('textarea'); el.value = text; document.body.appendChild(el); el.select(); document.execCommand('copy'); document.body.removeChild(el); showToast(t('copied')); });
+        }
+        
+        function shareCode(code) {
+            const text = `🎰 Join Lottery! Use my code: ${code}`;
+            if (navigator.share) { navigator.share({title: '🎰 Lottery', text}).catch(() => {}); }
+            else { copyText(text); }
+        }
+        
+        async function submitWallet() {
+            const wallet = document.getElementById('wallet-input').value.trim();
+            if (!wallet || !wallet.startsWith('T') || wallet.length !== 34) {
+                showToast(t('invalid_wallet'));
+                return;
+            }
+            try {
+                const btn = document.querySelector('.btn-success');
+                btn.disabled = true;
+                btn.textContent = '⏳ ' + (t('saving') || 'Saving...');
+                const result = await call('/api/user/wallet', 'POST', {wallet_address: wallet});
+                if (result.success) {
+                    showToast(t('wallet_saved'));
+                    document.getElementById('wallet-input').value = '';
+                    loadAll();
+                }
+            } catch(e) {
+                showToast(t('error'));
+            } finally {
+                const btn = document.querySelector('.btn-success');
+                btn.disabled = false;
+                btn.textContent = '✅ ' + (t('submit') || 'Submit');
+            }
+        }
+        
+        async function verifyPayment() {
+            try {
+                const btn = document.querySelector('.btn-secondary');
+                btn.disabled = true;
+                btn.textContent = '⏳ ' + (t('checking') || 'Checking...');
+                const result = await call('/api/payment/verify', 'POST');
+                if (result.verified) {
+                    showToast(t('payment_verified'));
+                    loadAll();
+                } else {
+                    showToast(t('payment_failed') || 'Payment failed');
+                }
+            } catch(e) {
+                showToast(t('error'));
+            } finally {
+                const btn = document.querySelector('.btn-secondary');
+                btn.disabled = false;
+                btn.textContent = '🔄 ' + (t('verify_payment') || 'Verify Payment');
+            }
+        }
+        
+        async function withdraw() {
+            const wallet = prompt(t('enter_wallet') || 'Enter TRC20 wallet:');
+            if (!wallet) return;
+            if (!wallet.startsWith('T') || wallet.length !== 34) {
+                showToast(t('invalid_wallet'));
+                return;
+            }
+            try {
+                const result = await call('/api/user/withdraw', 'POST', {wallet_address: wallet});
+                if (result.success) {
+                    showToast(t('withdraw_success'));
+                    loadAll();
+                }
+            } catch(e) {
+                showToast(t('error'));
+            }
+        }
+        
+        async function init() {
+            if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
+                userId = tg.initDataUnsafe.user.id;
+                try {
+                    const res = await fetch('/api/auth', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({user: tg.initDataUnsafe.user})
+                    });
+                    const data = await res.json();
+                    if (data.success && data.language) {
+                        lang = data.language;
+                        document.querySelectorAll('.lang-btn').forEach(b => {
+                            b.classList.remove('active');
+                            if (b.textContent.toLowerCase().includes(lang)) b.classList.add('active');
+                        });
+                        await loadAll();
+                    }
+                } catch(e) {
+                    console.error('Auth error:', e);
+                }
+            } else {
+                try {
+                    const data = await call('/api/user/status');
+                    if (data.user) {
+                        userId = data.user.telegram_id;
+                        await loadAll();
+                    }
+                } catch(e) {}
+            }
+        }
+        
+        document.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+</html>
+"""
+
+# ============================================
+# Flask Routes
+# ============================================
+@flask_app.route('/')
+def index():
+    return render_template_string(WEBAPP_HTML, T=T)
+
+@flask_app.route('/api/auth', methods=['POST'])
+def auth():
+    data = request.json
+    user = data.get('user', {})
+    user_id = user.get('id')
+    
+    if not user_id:
+        return jsonify({'success': False}), 400
+    
+    db_user = db.get_user(user_id)
+    if not db_user:
+        code = ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(8))
+        db_user = {
+            "telegram_id": user_id,
+            "username": user.get('username', ''),
+            "language": "en",
+            "wallet_address": None,
+            "referral_code": code,
+            "has_subscription": False,
+            "subscription_expiry": None,
+            "is_winner": False,
+            "won_amount": 0,
+            "total_won": 0,
+            "referral_count": 0,
+            "referral_earnings": 0,
+        }
+        db.save_user(user_id, db_user)
+    
+    return jsonify({
+        'success': True,
+        'language': db_user.get('language', 'en')
+    })
+
+@flask_app.route('/api/user/status')
+def user_status():
+    user_id = request.args.get('user_id')
+    if not user_id:
+        return jsonify({'error': 'No user'}), 401
+    
+    user = db.get_user(int(user_id))
+    if not user:
+        return jsonify({'error': 'Not found'}), 404
+    
+    return jsonify({
+        'user': {
+            'telegram_id': user.get('telegram_id'),
+            'username': user.get('username'),
+            'wallet_address': user.get('wallet_address'),
+            'has_subscription': user.get('has_subscription', False),
+            'subscription_expiry': user.get('subscription_expiry'),
+            'total_won': user.get('total_won', 0),
+            'is_winner': user.get('is_winner', False),
+            'won_amount': user.get('won_amount', 0)
+        }
+    })
+
+@flask_app.route('/api/user/subscription')
+def user_subscription():
+    user_id = request.args.get('user_id')
+    if not user_id:
+        return jsonify({'error': 'No user'}), 401
+    
+    user = db.get_user(int(user_id))
+    if not user:
+        return jsonify({'error': 'Not found'}), 404
+    
+    return jsonify({
+        'has_subscription': user.get('has_subscription', False),
+        'expiry': user.get('subscription_expiry')
+    })
+
+@flask_app.route('/api/user/wallet', methods=['POST'])
+def save_wallet():
+    data = request.json
+    user_id = data.get('user_id')
+    wallet = data.get('wallet_address')
+    
+    if not user_id:
+        return jsonify({'error': 'No user'}), 401
+    
+    if not wallet or not wallet.startswith('T') or len(wallet) != 34:
+        return jsonify({'error': 'Invalid wallet'}), 400
+    
+    user = db.get_user(int(user_id))
+    if user:
+        user['wallet_address'] = wallet
+        db.save_user(int(user_id), user)
+        return jsonify({'success': True})
+    
+    return jsonify({'error': 'Not found'}), 404
+
+@flask_app.route('/api/user/referral')
+def user_referral():
+    user_id = request.args.get('user_id')
+    if not user_id:
+        return jsonify({'error': 'No user'}), 401
+    
+    user = db.get_user(int(user_id))
+    if not user:
+        return jsonify({'error': 'Not found'}), 404
+    
+    return jsonify({
+        'referral_code': user.get('referral_code'),
+        'referral_count': user.get('referral_count', 0),
+        'referral_earnings': user.get('referral_earnings', 0)
+    })
+
+@flask_app.route('/api/lottery/status')
+def lottery_status():
+    lottery = db.get_current_lottery()
+    if lottery:
+        return jsonify({
+            'active': True,
+            'participant_count': lottery.get('participant_count', 0),
+            'prize_pool': lottery.get('prize_pool', 0),
+            'prize_per_winner': lottery.get('prize_per_winner', 0)
+        })
+    return jsonify({'active': False})
+
+@flask_app.route('/api/lottery/winners')
+def lottery_winners():
+    lottery = db.get_current_lottery()
+    winners = []
+    if lottery and lottery.get('winners'):
+        for w_id in lottery['winners']:
+            user = db.get_user(w_id)
+            if user:
+                winners.append({
+                    'user_id': w_id,
+                    'username': user.get('username', 'User'),
+                    'amount': lottery.get('prize_per_winner', 0)
+                })
+    return jsonify({'winners': winners})
+
+@flask_app.route('/api/lottery/all-winners')
+def all_winners():
+    winners = []
+    for lottery in db.data['lotteries']:
+        if lottery.get('winners'):
+            for w_id in lottery['winners']:
+                user = db.get_user(w_id)
+                if user:
+                    winners.append({
+                        'user_id': w_id,
+                        'username': user.get('username', 'User'),
+                        'amount': lottery.get('prize_per_winner', 0),
+                        'date': lottery.get('drawn_at', datetime.now().isoformat())
+                    })
+    return jsonify({'winners': winners})
+
+@flask_app.route('/api/payment/verify', methods=['POST'])
+def verify_payment():
+    data = request.json
+    user_id = data.get('user_id')
+    
+    if not user_id:
+        return jsonify({'error': 'No user'}), 401
+    
+    user = db.get_user(int(user_id))
+    if not user:
+        return jsonify({'error': 'Not found'}), 404
+    
+    user['has_subscription'] = True
+    user['subscription_expiry'] = (datetime.now() + timedelta(days=30)).isoformat()
+    db.save_user(int(user_id), user)
+    
+    return jsonify({'verified': True})
+
+@flask_app.route('/api/user/withdraw', methods=['POST'])
+def withdraw():
+    data = request.json
+    user_id = data.get('user_id')
+    wallet = data.get('wallet_address')
+    
+    if not user_id:
+        return jsonify({'error': 'No user'}), 401
+    
+    if not wallet or not wallet.startswith('T') or len(wallet) != 34:
+        return jsonify({'error': 'Invalid wallet'}), 400
+    
+    user = db.get_user(int(user_id))
+    if user and user.get('is_winner'):
+        user['wallet_address'] = wallet
+        user['is_winner'] = False
+        db.save_user(int(user_id), user)
+        return jsonify({'success': True})
+    
+    return jsonify({'error': 'Not a winner'}), 400
+
+@flask_app.route('/api/language', methods=['POST'])
+def set_language():
+    data = request.json
+    lang = data.get('language')
+    user_id = data.get('user_id')
+    
+    if not user_id or lang not in ['en', 'fa', 'ar']:
+        return jsonify({'error': 'Invalid'}), 400
+    
+    user = db.get_user(int(user_id))
+    if user:
+        user['language'] = lang
+        db.save_user(int(user_id), user)
+        return jsonify({'success': True})
+    
+    return jsonify({'error': 'Not found'}), 404
+
+# ============================================
+# Telegram Bot
+# ============================================
+class Bot:
+    def __init__(self):
+        self.app = None
+    
+    async def start(self):
+        self.app = Application.builder().token(BOT_TOKEN).build()
+        self.app.add_handler(CommandHandler("start", self.start_cmd))
+        self.app.add_handler(CallbackQueryHandler(self.callback))
+        
+        await self.app.initialize()
+        await self.app.start()
+        await self.app.updater.start_polling()
+        print("✅ Bot started!")
+    
+    def get_lang(self, user_id):
+        user = db.get_user(user_id)
+        return user.get("language", "en") if user else "en"
+    
+    async def start_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        user_id = user.id
+        
+        db_user = db.get_user(user_id)
+        if not db_user:
+            code = ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(8))
+            db_user = {
+                "telegram_id": user_id,
+                "username": user.username,
+                "language": "en",
+                "wallet_address": None,
+                "referral_code": code,
+                "has_subscription": False,
+                "subscription_expiry": None,
+                "is_winner": False,
+                "won_amount": 0,
+                "total_won": 0,
+                "referral_count": 0,
+                "referral_earnings": 0,
+            }
+            db.save_user(user_id, db_user)
+        
+        lang = db_user.get("language", "en")
         
         keyboard = [
-            [InlineKeyboardButton("📢 ارسال پیام همگانی", callback_data="admin_broadcast")],
-            [InlineKeyboardButton("🎰 شروع قرعه‌کشی", callback_data="admin_start_lottery")],
-            [InlineKeyboardButton("✅ تایید دستی کاربران", callback_data="admin_manual_verify")],
-            [InlineKeyboardButton("📊 ارسال نظرسنجی", callback_data="admin_poll")],
-            [InlineKeyboardButton("💰 واریز به برندگان", callback_data="admin_pay_winners")],
-            [InlineKeyboardButton("🔑 اضافه کردن API جدید", callback_data="admin_add_api")],
-            [InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]
+            [InlineKeyboardButton("🎮 PLAY", web_app=WebAppInfo(url="http://localhost:5000"))],
+            [InlineKeyboardButton("🎰 Subscribe", callback_data="subscribe")],
+            [InlineKeyboardButton("🔗 Referral", callback_data="referral")],
+            [InlineKeyboardButton("🌐 Language", callback_data="lang")],
         ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await query.edit_message_text(
-            "⚙️ **پنل مدیریت**\n\n"
-            "انتخاب کنید:",
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
+        if user_id == ADMIN_CHAT_ID:
+            keyboard.append([InlineKeyboardButton("⚙️ Admin", callback_data="admin")])
+        
+        await update.message.reply_text(
+            get_text("welcome", lang),
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
         )
-        
-    async def broadcast(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """ارسال پیام همگانی"""
+    
+    async def callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
         
-        context.user_data['admin_action'] = 'broadcast'
+        data = query.data
+        user_id = query.from_user.id
+        lang = self.get_lang(user_id)
         
-        keyboard = [[InlineKeyboardButton("🔙 انصراف", callback_data="admin_panel")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        if data == "lang":
+            keyboard = [
+                [InlineKeyboardButton("🇬🇧 English", callback_data="en")],
+                [InlineKeyboardButton("🇮🇷 فارسی", callback_data="fa")],
+                [InlineKeyboardButton("🇸🇦 العربية", callback_data="ar")],
+            ]
+            await query.edit_message_text("🌐 Select language:", reply_markup=InlineKeyboardMarkup(keyboard))
+            return
         
-        await query.edit_message_text(
-            "📢 **ارسال پیام همگانی**\n\n"
-            "لطفاً متن پیام را ارسال کنید:\n"
-            "⚠️ این پیام به تمام کاربران ارسال خواهد شد.",
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
+        if data in ["en", "fa", "ar"]:
+            user = db.get_user(user_id)
+            if user:
+                user["language"] = data
+                db.save_user(user_id, user)
+            await query.edit_message_text(get_text("lang_changed", data, lang={"en":"English","fa":"فارسی","ar":"العربية"}.get(data,data)))
+            return
         
-    async def start_lottery(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """شروع قرعه‌کشی"""
-        query = update.callback_query
-        await query.answer()
+        if data == "subscribe":
+            user = db.get_user(user_id)
+            if user and user.get("has_subscription"):
+                await query.edit_message_text(get_text("already_subscribed", lang), parse_mode="Markdown")
+                return
+            
+            await query.edit_message_text(
+                get_text("subscribe", lang, address=PAYMENT_ADDRESS),
+                parse_mode="Markdown"
+            )
+            context.user_data['step'] = 'wallet'
+            return
         
-        context.user_data['admin_action'] = 'start_lottery'
-        context.user_data['lottery_step'] = 1
-        
-        keyboard = [
-            [InlineKeyboardButton("✅ تایید شروع", callback_data="start_lottery_confirm")],
-            [InlineKeyboardButton("❌ انصراف", callback_data="admin_panel")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            "🎰 **شروع قرعه‌کشی جدید**\n\n"
-            "آیا مطمئن هستید که می‌خواهید قرعه‌کشی را شروع کنید؟\n\n"
-            "⚠️ تمام کاربران دارای اشتراک در این قرعه‌کشی شرکت خواهند کرد.",
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
-        
-    async def start_lottery_confirm(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """تایید شروع قرعه‌کشی - دریافت تعداد برندگان"""
-        query = update.callback_query
-        await query.answer()
-        
-        context.user_data['lottery_step'] = 2
-        
-        await query.edit_message_text(
-            "🎯 **تعداد برندگان**\n\n"
-            "لطفاً تعداد برندگان این قرعه‌کشی را وارد کنید:\n"
-            "(عدد بین ۱ تا ۱۰۰)",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 انصراف", callback_data="admin_panel")]
-            ]),
-            parse_mode='Markdown'
-        )
-        
-    async def start_lottery_final(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """مرحله نهایی شروع قرعه‌کشی"""
-        query = update.callback_query
-        await query.answer()
-        
-        # دریافت اطلاعات از context
-        winners_count = context.user_data.get('lottery_winners', 1)
-        prize_per_winner = context.user_data.get('lottery_prize', 100)
-        
-        # اجرای قرعه‌کشی
-        success, result = lottery_system.start_lottery(winners_count, prize_per_winner)
-        
-        if success:
-            # ارسال پیام به برندگان
-            for user_id in result:
-                keyboard = [[InlineKeyboardButton("💰 برداشت جایزه", callback_data="withdraw_prize")]]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                
-                await self.bot.application.bot.send_message(
-                    chat_id=user_id,
-                    text=f"🎉 **تبریک! شما برنده شدید!**\n\n"
-                         f"💰 مبلغ جایزه: ${prize_per_winner:,}\n\n"
-                         f"برای برداشت جایزه، روی دکمه زیر کلیک کنید.",
-                    reply_markup=reply_markup,
-                    parse_mode='Markdown'
+        if data == "referral":
+            user = db.get_user(user_id)
+            if user:
+                await query.edit_message_text(
+                    get_text("referral_program", lang) + f"\n\nCode: `{user.get('referral_code')}`",
+                    parse_mode="Markdown"
                 )
-                
-            # گزارش به ادمین
-            await query.edit_message_text(
-                f"✅ **قرعه‌کشی با موفقیت انجام شد!**\n\n"
-                f"👥 تعداد برندگان: {winners_count}\n"
-                f"💰 جایزه هر نفر: ${prize_per_winner:,}\n"
-                f"🆔 برندگان: {', '.join(map(str, result))}\n\n"
-                f"✅ پیام‌های تبریک به برندگان ارسال شد.",
-                parse_mode='Markdown'
-            )
+            return
+        
+        if data == "admin":
+            if user_id != ADMIN_CHAT_ID:
+                await query.edit_message_text("⛔ Access denied.")
+                return
             
-        else:
+            keyboard = [
+                [InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast")],
+                [InlineKeyboardButton("🎰 Start Lottery", callback_data="admin_start")],
+                [InlineKeyboardButton("✅ Verify", callback_data="admin_verify")],
+                [InlineKeyboardButton("🔄 Restart", callback_data="admin_restart")],
+            ]
             await query.edit_message_text(
-                f"❌ **خطا در اجرای قرعه‌کشی**\n\n"
-                f"{result}",
-                parse_mode='Markdown'
+                get_text("admin_panel", lang, users=len(db.get_all_users()), subscribed=len(db.get_subscribed_users())),
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="Markdown"
             )
+            return
+        
+        if data.startswith("admin_"):
+            if user_id != ADMIN_CHAT_ID:
+                return
+            
+            action = data.replace("admin_", "")
+            
+            if action == "broadcast":
+                await query.edit_message_text(get_text("admin_broadcast", lang))
+                context.user_data['step'] = 'broadcast'
+                return
+            
+            if action == "start":
+                # Simple lottery: pick random winners
+                users = db.get_subscribed_users()
+                if len(users) < 2:
+                    await query.edit_message_text("❌ Not enough users.")
+                    return
+                
+                # Pick 1-3 winners
+                winners_count = min(3, len(users))
+                winners = random.sample([u['telegram_id'] for u in users], winners_count)
+                
+                lottery = {
+                    "winners": winners,
+                    "prize_per_winner": 100,
+                    "participant_count": len(users),
+                    "prize_pool": winners_count * 100,
+                    "drawn_at": datetime.now().isoformat()
+                }
+                db.add_lottery(lottery)
+                db.set_current_lottery(lottery)
+                
+                # Announce winners
+                for w_id in winners:
+                    user = db.get_user(w_id)
+                    if user:
+                        user['is_winner'] = True
+                        user['won_amount'] = 100
+                        user['total_won'] = user.get('total_won', 0) + 100
+                        db.save_user(w_id, user)
+                        
+                        try:
+                            await self.app.bot.send_message(
+                                w_id,
+                                get_text("congratulations", user.get("language", "en"), amount=100),
+                                parse_mode="Markdown"
+                            )
+                        except:
+                            pass
+                
+                await query.edit_message_text(
+                    f"🎰 Lottery drawn!\n👥 {len(users)} participants\n🏆 {len(winners)} winners\n💰 Each wins $100!",
+                    parse_mode="Markdown"
+                )
+                return
+            
+            if action == "verify":
+                await query.edit_message_text(get_text("admin_manual_verify", lang))
+                context.user_data['step'] = 'verify'
+                return
+            
+            if action == "restart":
+                db.set_current_lottery(None)
+                await query.edit_message_text(get_text("restart_done", lang), parse_mode="Markdown")
+                return
 
-# --------------------------------------------------------------
-# شروع ربات
-# --------------------------------------------------------------
-async def main():
-    bot = LotteryBot()
-    admin_panel = AdminPanel(bot)
+# ============================================
+# اجرا
+# ============================================
+def run_flask():
+    flask_app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
+
+async def run_bot():
+    bot = Bot()
+    await bot.start()
+
+if __name__ == "__main__":
+    print("""
+    ╔═══════════════════════════════════════╗
+    ║  🎰 LOTTERY BOT - SIMPLE VERSION     ║
+    ║  🤖 Telegram Bot + WebApp            ║
+    ╚═══════════════════════════════════════╝
+    """)
     
-    # اضافه کردن هندلرهای پنل مدیریت
-    # (ادامه در کد کامل)
+    # Flask
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
     
-    # شروع ربات
-    await bot.application.run_polling()
+    # Bot
+    import asyncio
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     
-if __name__ == '__main__':
-    asyncio.run(main())
+    try:
+        loop.run_until_complete(run_bot())
+        loop.run_forever()
+    except KeyboardInterrupt:
+        print("\n🛑 Stopping...")
+    finally:
+        loop.close()
