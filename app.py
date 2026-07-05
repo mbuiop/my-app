@@ -1,3131 +1,3238 @@
-import asyncio
-import logging
-import sqlite3
-import json
-import hashlib
-import secrets
-import aiohttp
-import time
-import re
+"""
+ساده‌گرام - نسخه حرفه‌ای
+پلتفرم اشتراک ویدیو با مدیریت کامل
+"""
+
+# ============================================
+# کتابخانه‌ها
+# ============================================
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, BigInteger, Text, ForeignKey, Index, and_, or_
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, Session, relationship
+from sqlalchemy.sql import func
 from datetime import datetime, timedelta
-from typing import Dict, Optional, List, Tuple, Set, Any
-from dataclasses import dataclass
-from contextlib import asynccontextmanager
-from collections import OrderedDict
-from heapq import heappush, heappop
-import base58
-import random
-from threading import Lock
-import zlib
-import pickle
+import bcrypt
+import jwt
+import redis
+import boto3
+from botocore.config import Config
+import uuid
 import os
-import gc
-import psutil
-import resource
-import math
+import shutil
+import subprocess
+from typing import Optional, List, Dict, Any
+from pydantic import BaseModel, EmailStr
+import json
+import asyncio
+from contextlib import asynccontextmanager
+import logging
+from threading import Thread
+import time
 
-# ==================== تنظیمات سیستم ====================
+# ============================================
+# تنظیمات
+# ============================================
+SECRET_KEY = "your-super-secret-key-change-this-in-production"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 30  # ۳۰ روز
+
+# دیتابیس
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/sadegram")
+# برای تست با SQLite: "sqlite:///./sadegram.db"
+
+# Redis
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+
+# فضای ابری
+S3_ENDPOINT = os.getenv("S3_ENDPOINT", "")
+S3_ACCESS_KEY = os.getenv("S3_ACCESS_KEY", "")
+S3_SECRET_KEY = os.getenv("S3_SECRET_KEY", "")
+S3_BUCKET = os.getenv("S3_BUCKET", "sadegram-videos")
+
+# سرور
+SERVER_ID = int(os.getenv("SERVER_ID", 1))
+MAX_USERS_PER_SERVER = int(os.getenv("MAX_USERS_PER_SERVER", 10000))
+
+# ============================================
+# اتصالات
+# ============================================
+
+# دیتابیس
+engine = create_engine(
+    DATABASE_URL,
+    pool_size=20,
+    max_overflow=40,
+    pool_pre_ping=True
+)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+# Redis
 try:
-    resource.setrlimit(resource.RLIMIT_NOFILE, (65536, 65536))
-except:
-    pass
+    redis_client = redis.Redis(
+        host=REDIS_HOST,
+        port=REDIS_PORT,
+        decode_responses=True,
+        socket_connect_timeout=5
+    )
+    redis_client.ping()
+    REDIS_AVAILABLE = True
+    print("✅ Redis متصل شد")
+except Exception as e:
+    REDIS_AVAILABLE = False
+    print(f"⚠️ Redis در دسترس نیست: {e}")
 
-# ==================== importهای telegram ====================
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.constants import ParseMode
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    CallbackQueryHandler,
-    MessageHandler,
-    filters,
-    ContextTypes
+# S3
+if S3_ENDPOINT and S3_ACCESS_KEY and S3_SECRET_KEY:
+    s3_client = boto3.client(
+        's3',
+        endpoint_url=S3_ENDPOINT,
+        aws_access_key_id=S3_ACCESS_KEY,
+        aws_secret_access_key=S3_SECRET_KEY,
+        config=Config(signature_version='s3v4', max_pool_connections=50)
+    )
+    S3_AVAILABLE = True
+    print("✅ فضای ابری متصل شد")
+else:
+    S3_AVAILABLE = False
+    print("⚠️ فضای ابری تنظیم نشده")
+
+# ============================================
+# مدل‌های دیتابیس (کامل)
+# ============================================
+
+class User(Base):
+    __tablename__ = "users"
+    
+    id = Column(BigInteger, primary_key=True, index=True)
+    username = Column(String(50), unique=True, index=True, nullable=False)
+    email = Column(String(100), unique=True, index=True, nullable=False)
+    phone = Column(String(20), unique=True, nullable=True)
+    password_hash = Column(String(255), nullable=False)
+    full_name = Column(String(100))
+    bio = Column(Text)
+    avatar_url = Column(String(500))
+    website = Column(String(200))
+    location = Column(String(100))
+    
+    is_premium = Column(Boolean, default=False)
+    is_verified = Column(Boolean, default=False)  # نشان آبی
+    is_active = Column(Boolean, default=True)
+    is_admin = Column(Boolean, default=False)
+    
+    server_id = Column(Integer, default=1)
+    
+    # آمار
+    followers_count = Column(Integer, default=0)
+    following_count = Column(Integer, default=0)
+    videos_count = Column(Integer, default=0)
+    total_likes_received = Column(Integer, default=0)
+    
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    last_seen = Column(DateTime, default=func.now())
+    
+    # روابط
+    videos = relationship("Video", back_populates="user", cascade="all, delete-orphan")
+    comments = relationship("Comment", back_populates="user", cascade="all, delete-orphan")
+    likes = relationship("Like", back_populates="user", cascade="all, delete-orphan")
+    sent_messages = relationship("Message", foreign_keys="Message.sender_id", cascade="all, delete-orphan")
+    received_messages = relationship("Message", foreign_keys="Message.receiver_id", cascade="all, delete-orphan")
+    
+    # ایندکس‌ها
+    __table_args__ = (
+        Index('idx_users_username', 'username'),
+        Index('idx_users_email', 'email'),
+        Index('idx_users_server_id', 'server_id'),
+    )
+
+class Video(Base):
+    __tablename__ = "videos"
+    
+    id = Column(BigInteger, primary_key=True, index=True)
+    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
+    title = Column(String(200))
+    description = Column(Text)
+    video_url = Column(String(500), nullable=False)
+    thumbnail_url = Column(String(500))
+    duration = Column(Integer, default=0)
+    size_mb = Column(Integer, default=0)
+    
+    # آمار
+    views = Column(Integer, default=0)
+    likes_count = Column(Integer, default=0)
+    comments_count = Column(Integer, default=0)
+    shares_count = Column(Integer, default=0)
+    
+    is_active = Column(Boolean, default=True)
+    is_private = Column(Boolean, default=False)  # فقط فالوکنندگان ببینند
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    
+    # روابط
+    user = relationship("User", back_populates="videos")
+    comments = relationship("Comment", back_populates="video", cascade="all, delete-orphan")
+    likes = relationship("Like", back_populates="video", cascade="all, delete-orphan")
+    
+    __table_args__ = (
+        Index('idx_videos_user_id', 'user_id'),
+        Index('idx_videos_created_at', 'created_at'),
+        Index('idx_videos_views', 'views'),
+        Index('idx_videos_likes', 'likes_count'),
+    )
+
+class Comment(Base):
+    __tablename__ = "comments"
+    
+    id = Column(BigInteger, primary_key=True, index=True)
+    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
+    video_id = Column(BigInteger, ForeignKey("videos.id"), nullable=False)
+    parent_id = Column(BigInteger, ForeignKey("comments.id"), nullable=True)  # پاسخ به کامنت
+    content = Column(Text, nullable=False)
+    likes_count = Column(Integer, default=0)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    is_deleted = Column(Boolean, default=False)
+    
+    # روابط
+    user = relationship("User", back_populates="comments")
+    video = relationship("Video", back_populates="comments")
+    replies = relationship("Comment", backref="parent", remote_side=[id])
+    
+    __table_args__ = (
+        Index('idx_comments_video_id', 'video_id'),
+        Index('idx_comments_user_id', 'user_id'),
+        Index('idx_comments_created_at', 'created_at'),
+    )
+
+class Like(Base):
+    __tablename__ = "likes"
+    
+    id = Column(BigInteger, primary_key=True, index=True)
+    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
+    video_id = Column(BigInteger, ForeignKey("videos.id"), nullable=False)
+    created_at = Column(DateTime, default=func.now())
+    
+    user = relationship("User", back_populates="likes")
+    video = relationship("Video", back_populates="likes")
+    
+    __table_args__ = (
+        Index('idx_likes_user_video', 'user_id', 'video_id', unique=True),
+    )
+
+class Follow(Base):
+    __tablename__ = "follows"
+    
+    id = Column(BigInteger, primary_key=True, index=True)
+    follower_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
+    following_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, default=func.now())
+    
+    __table_args__ = (
+        Index('idx_follows_follower', 'follower_id'),
+        Index('idx_follows_following', 'following_id'),
+        Index('idx_follows_unique', 'follower_id', 'following_id', unique=True),
+    )
+
+class Message(Base):
+    __tablename__ = "messages"
+    
+    id = Column(BigInteger, primary_key=True, index=True)
+    sender_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
+    receiver_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
+    content = Column(Text, nullable=False)
+    is_read = Column(Boolean, default=False)
+    read_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=func.now())
+    
+    # روابط
+    sender = relationship("User", foreign_keys=[sender_id])
+    receiver = relationship("User", foreign_keys=[receiver_id])
+    
+    __table_args__ = (
+        Index('idx_messages_sender', 'sender_id'),
+        Index('idx_messages_receiver', 'receiver_id'),
+        Index('idx_messages_created', 'created_at'),
+        Index('idx_messages_conversation', 'sender_id', 'receiver_id'),
+    )
+
+class ServerMapping(Base):
+    __tablename__ = "server_mappings"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    server_name = Column(String(50), nullable=False)
+    server_ip = Column(String(50))
+    server_port = Column(Integer, default=8000)
+    max_users = Column(Integer, default=10000)
+    current_users = Column(Integer, default=0)
+    is_active = Column(Boolean, default=True)
+    load_avg = Column(Integer, default=0)  # بار سرور
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+class Report(Base):
+    __tablename__ = "reports"
+    
+    id = Column(BigInteger, primary_key=True, index=True)
+    reporter_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
+    video_id = Column(BigInteger, ForeignKey("videos.id"), nullable=True)
+    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=True)
+    comment_id = Column(BigInteger, ForeignKey("comments.id"), nullable=True)
+    reason = Column(String(100), nullable=False)
+    description = Column(Text)
+    status = Column(String(20), default="pending")  # pending, reviewed, rejected, resolved
+    created_at = Column(DateTime, default=func.now())
+    resolved_at = Column(DateTime, nullable=True)
+
+class Notification(Base):
+    __tablename__ = "notifications"
+    
+    id = Column(BigInteger, primary_key=True, index=True)
+    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
+    type = Column(String(50), nullable=False)  # like, comment, follow, message, system
+    content = Column(Text, nullable=False)
+    link = Column(String(500))
+    is_read = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=func.now())
+    
+    __table_args__ = (
+        Index('idx_notifications_user', 'user_id'),
+        Index('idx_notifications_read', 'is_read'),
+    )
+
+# ============================================
+# Pydantic Models
+# ============================================
+
+class UserCreate(BaseModel):
+    username: str
+    email: EmailStr
+    password: str
+    full_name: Optional[str] = None
+    phone: Optional[str] = None
+
+class UserUpdate(BaseModel):
+    full_name: Optional[str] = None
+    bio: Optional[str] = None
+    website: Optional[str] = None
+    location: Optional[str] = None
+    avatar_url: Optional[str] = None
+
+class UserResponse(BaseModel):
+    id: int
+    username: str
+    email: str
+    full_name: Optional[str] = None
+    bio: Optional[str] = None
+    avatar_url: Optional[str] = None
+    website: Optional[str] = None
+    location: Optional[str] = None
+    is_premium: bool
+    is_verified: bool
+    followers_count: int
+    following_count: int
+    videos_count: int
+    server_id: int
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+class VideoCreate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    is_private: bool = False
+
+class VideoResponse(BaseModel):
+    id: int
+    user_id: int
+    title: Optional[str] = None
+    description: Optional[str] = None
+    video_url: str
+    thumbnail_url: Optional[str] = None
+    duration: int
+    views: int
+    likes_count: int
+    comments_count: int
+    shares_count: int
+    is_private: bool
+    created_at: datetime
+    username: Optional[str] = None
+    user_avatar: Optional[str] = None
+    is_liked: bool = False
+    is_following: bool = False
+    
+    class Config:
+        from_attributes = True
+
+class CommentCreate(BaseModel):
+    content: str
+    parent_id: Optional[int] = None
+
+class CommentResponse(BaseModel):
+    id: int
+    user_id: int
+    video_id: int
+    parent_id: Optional[int] = None
+    content: str
+    likes_count: int
+    created_at: datetime
+    username: str
+    user_avatar: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+
+class MessageCreate(BaseModel):
+    receiver_id: int
+    content: str
+
+class MessageResponse(BaseModel):
+    id: int
+    sender_id: int
+    receiver_id: int
+    content: str
+    is_read: bool
+    created_at: datetime
+    sender_username: str
+    sender_avatar: Optional[str] = None
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+    user: UserResponse
+
+class AddServerRequest(BaseModel):
+    server_name: str
+    server_ip: str
+    server_port: int = 8000
+    max_users: int = 10000
+
+class AdminStatsResponse(BaseModel):
+    total_users: int
+    total_videos: int
+    total_views: int
+    total_comments: int
+    active_users_today: int
+    new_users_today: int
+    new_videos_today: int
+    premium_users: int
+    server_count: int
+    storage_used_gb: float
+
+# ============================================
+# توابع ابزاری
+# ============================================
+
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+def verify_password(password: str, hashed: str) -> bool:
+    return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
+
+def create_access_token(data: dict) -> str:
+    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    data.update({"exp": expire})
+    return jwt.encode(data, SECRET_KEY, algorithm=ALGORITHM)
+
+def decode_access_token(token: str) -> dict:
+    try:
+        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except:
+        return None
+
+def get_current_user(token: str, db: Session) -> Optional[User]:
+    payload = decode_access_token(token)
+    if not payload:
+        return None
+    return db.query(User).filter(User.id == payload.get("user_id"), User.is_active == True).first()
+
+def get_cache_or_query(key: str, query_func, expire: int = 300):
+    """کش کردن نتیجه کوئری"""
+    if REDIS_AVAILABLE:
+        cached = redis_client.get(key)
+        if cached:
+            return json.loads(cached)
+    
+    result = query_func()
+    
+    if REDIS_AVAILABLE:
+        redis_client.setex(key, expire, json.dumps(result))
+    
+    return result
+
+def invalidate_cache(pattern: str):
+    """پاک کردن کش با الگو"""
+    if REDIS_AVAILABLE:
+        keys = redis_client.keys(pattern)
+        if keys:
+            redis_client.delete(*keys)
+
+# ============================================
+# سرویس شاردینگ
+# ============================================
+
+class ShardingService:
+    
+    @staticmethod
+    def get_server_for_user(user_id: int, db: Session) -> int:
+        cache_key = f"user_server:{user_id}"
+        if REDIS_AVAILABLE:
+            cached = redis_client.get(cache_key)
+            if cached:
+                return int(cached)
+        
+        user = db.query(User).filter(User.id == user_id).first()
+        server_id = user.server_id if user else 1
+        
+        if REDIS_AVAILABLE:
+            redis_client.setex(cache_key, 3600, server_id)
+        
+        return server_id
+    
+    @staticmethod
+    def assign_user_to_server(db: Session) -> int:
+        servers = db.query(ServerMapping).filter(
+            ServerMapping.is_active == True
+        ).order_by(ServerMapping.current_users).all()
+        
+        if not servers:
+            default = ServerMapping(
+                server_name=f"server-1",
+                server_ip="127.0.0.1",
+                server_port=8000,
+                max_users=MAX_USERS_PER_SERVER,
+                current_users=0
+            )
+            db.add(default)
+            db.commit()
+            db.refresh(default)
+            servers = [default]
+        
+        selected = servers[0]
+        selected.current_users += 1
+        db.commit()
+        
+        if REDIS_AVAILABLE:
+            redis_client.publish("server_update", json.dumps({
+                "server_id": selected.id,
+                "current_users": selected.current_users
+            }))
+        
+        return selected.id
+    
+    @staticmethod
+    def add_new_server(db: Session, name: str, ip: str, port: int, max_users: int) -> int:
+        new_server = ServerMapping(
+            server_name=name,
+            server_ip=ip,
+            server_port=port,
+            max_users=max_users,
+            current_users=0,
+            is_active=True
+        )
+        db.add(new_server)
+        db.commit()
+        db.refresh(new_server)
+        
+        if REDIS_AVAILABLE:
+            redis_client.publish("server_added", json.dumps({
+                "server_id": new_server.id,
+                "server_ip": ip,
+                "server_port": port
+            }))
+        
+        return new_server.id
+
+# ============================================
+# سرویس کش (Cache Manager)
+# ============================================
+
+class CacheManager:
+    
+    @staticmethod
+    def get_feed_cache(user_id: int, limit: int = 20) -> Optional[List[Dict]]:
+        if not REDIS_AVAILABLE:
+            return None
+        
+        key = f"feed:{user_id}:{limit}"
+        cached = redis_client.get(key)
+        if cached:
+            return json.loads(cached)
+        return None
+    
+    @staticmethod
+    def set_feed_cache(user_id: int, data: List[Dict], limit: int = 20):
+        if not REDIS_AVAILABLE:
+            return
+        
+        key = f"feed:{user_id}:{limit}"
+        redis_client.setex(key, 60, json.dumps(data))  # ۱ دقیقه کش
+    
+    @staticmethod
+    def invalidate_feed_cache(user_id: int):
+        if not REDIS_AVAILABLE:
+            return
+        
+        pattern = f"feed:{user_id}:*"
+        keys = redis_client.keys(pattern)
+        if keys:
+            redis_client.delete(*keys)
+    
+    @staticmethod
+    def get_user_cache(user_id: int) -> Optional[Dict]:
+        if not REDIS_AVAILABLE:
+            return None
+        
+        key = f"user:{user_id}"
+        cached = redis_client.get(key)
+        if cached:
+            return json.loads(cached)
+        return None
+    
+    @staticmethod
+    def set_user_cache(user_id: int, data: Dict):
+        if not REDIS_AVAILABLE:
+            return
+        
+        key = f"user:{user_id}"
+        redis_client.setex(key, 600, json.dumps(data))  # ۱۰ دقیقه
+    
+    @staticmethod
+    def invalidate_user_cache(user_id: int):
+        if not REDIS_AVAILABLE:
+            return
+        
+        redis_client.delete(f"user:{user_id}")
+    
+    @staticmethod
+    def get_video_cache(video_id: int) -> Optional[Dict]:
+        if not REDIS_AVAILABLE:
+            return None
+        
+        key = f"video:{video_id}"
+        cached = redis_client.get(key)
+        if cached:
+            return json.loads(cached)
+        return None
+    
+    @staticmethod
+    def set_video_cache(video_id: int, data: Dict):
+        if not REDIS_AVAILABLE:
+            return
+        
+        key = f"video:{video_id}"
+        redis_client.setex(key, 300, json.dumps(data))  # ۵ دقیقه
+    
+    @staticmethod
+    def invalidate_video_cache(video_id: int):
+        if not REDIS_AVAILABLE:
+            return
+        
+        redis_client.delete(f"video:{video_id}")
+    
+    @staticmethod
+    def get_online_users() -> List[int]:
+        if not REDIS_AVAILABLE:
+            return []
+        
+        keys = redis_client.keys("online:*")
+        return [int(k.split(":")[1]) for k in keys]
+
+# ============================================
+# سرویس ذخیره‌سازی
+# ============================================
+
+class StorageService:
+    
+    @staticmethod
+    async def upload_video(video_data: bytes, user_id: int, filename: str) -> str:
+        ext = filename.split('.')[-1] if '.' in filename else 'mp4'
+        unique_name = f"{uuid.uuid4()}.{ext}"
+        file_path = f"videos/{user_id}/{unique_name}"
+        
+        if S3_AVAILABLE:
+            try:
+                s3_client.put_object(
+                    Bucket=S3_BUCKET,
+                    Key=file_path,
+                    Body=video_data,
+                    ACL='public-read',
+                    ContentType='video/mp4',
+                    Metadata={'user_id': str(user_id), 'filename': filename}
+                )
+                return f"{S3_ENDPOINT}/{S3_BUCKET}/{file_path}"
+            except Exception as e:
+                logging.error(f"S3 upload error: {e}")
+                # Fallback to local
+        
+        # ذخیره محلی
+        os.makedirs(f"./storage/{user_id}", exist_ok=True)
+        local_path = f"./storage/{file_path}"
+        with open(local_path, "wb") as f:
+            f.write(video_data)
+        
+        return f"/static/{file_path}"
+    
+    @staticmethod
+    async def upload_avatar(avatar_data: bytes, user_id: int) -> str:
+        unique_name = f"{uuid.uuid4()}.jpg"
+        file_path = f"avatars/{user_id}/{unique_name}"
+        
+        if S3_AVAILABLE:
+            try:
+                s3_client.put_object(
+                    Bucket=S3_BUCKET,
+                    Key=file_path,
+                    Body=avatar_data,
+                    ACL='public-read',
+                    ContentType='image/jpeg'
+                )
+                return f"{S3_ENDPOINT}/{S3_BUCKET}/{file_path}"
+            except:
+                pass
+        
+        os.makedirs(f"./storage/avatars/{user_id}", exist_ok=True)
+        local_path = f"./storage/{file_path}"
+        with open(local_path, "wb") as f:
+            f.write(avatar_data)
+        
+        return f"/static/{file_path}"
+
+# ============================================
+# سرویس اعلان‌ها (Notification Service)
+# ============================================
+
+class NotificationService:
+    
+    @staticmethod
+    async def create_notification(db: Session, user_id: int, type: str, content: str, link: str = None):
+        notification = Notification(
+            user_id=user_id,
+            type=type,
+            content=content,
+            link=link
+        )
+        db.add(notification)
+        db.commit()
+        
+        # ارسال نوتیفیکیشن از طریق WebSocket
+        if REDIS_AVAILABLE:
+            redis_client.publish(f"notifications:{user_id}", json.dumps({
+                "type": type,
+                "content": content,
+                "link": link,
+                "created_at": datetime.utcnow().isoformat()
+            }))
+    
+    @staticmethod
+    def get_unread_count(user_id: int, db: Session) -> int:
+        return db.query(Notification).filter(
+            Notification.user_id == user_id,
+            Notification.is_read == False
+        ).count()
+
+# ============================================
+# اپلیکیشن FastAPI
+# ============================================
+
+app = FastAPI(
+    title="ساده‌گرام - نسخه حرفه‌ای",
+    description="پلتفرم اشتراک ویدیو با مدیریت کامل",
+    version="2.0.0"
 )
-# =========================================================
 
-# ==================== تنظیمات لاگینگ ====================
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+# ایجاد پوشه‌ها
+os.makedirs("./storage", exist_ok=True)
+os.makedirs("./static", exist_ok=True)
 
-# ==================== تنظیمات اصلی ====================
-BOT_TOKEN = "8991812542:AAHtoXClDy_CHFqRCVmALJVpXWgT7bG1cdY"
-ADMIN_ID = 327855654
-OWNER_WALLET = "TV61aTh98MGqmteYzda5AaBzdXgGqreG6A"
+# ============================================
+# WebSocket برای چت
+# ============================================
 
-TRON_API_KEYS = [
-    "7ae83b63-fdf3-47e4-ac69-56f960a34f5b",
-]
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: Dict[int, WebSocket] = {}
+    
+    async def connect(self, websocket: WebSocket, user_id: int):
+        await websocket.accept()
+        self.active_connections[user_id] = websocket
+        if REDIS_AVAILABLE:
+            redis_client.setex(f"online:{user_id}", 300, "1")
+    
+    def disconnect(self, user_id: int):
+        if user_id in self.active_connections:
+            del self.active_connections[user_id]
+        if REDIS_AVAILABLE:
+            redis_client.delete(f"online:{user_id}")
+    
+    async def send_message(self, receiver_id: int, message: dict):
+        if receiver_id in self.active_connections:
+            try:
+                await self.active_connections[receiver_id].send_json(message)
+                return True
+            except:
+                self.disconnect(receiver_id)
+        return False
 
-TRON_API_URL = "https://api.trongrid.io"
-SUBSCRIPTION_PRICE_USD = 50
-MAX_YOUTUBE_LINKS_PER_DAY = 10
-REQUIRED_REFERRALS = 0
-DAILY_INTERACTIONS_REQUIRED = 5
-PAYMENT_TIMEOUT_MINUTES = 10
-REFERRAL_CHALLENGE_REWARD = 100
-REFERRAL_CHALLENGE_TOP_USERS = 10
-MAX_CONCURRENT_TASKS = 10000
-CACHE_TTL = 300
-CACHE_MAX_SIZE = 10_000_000
-REFERRAL_BOOST_THRESHOLD = 100
-REFERRAL_BOOST_MULTIPLIER = 2
+manager = ConnectionManager()
 
-# ==================== ۵ زبان پشتیبانی شده ====================
-SUPPORTED_LANGUAGES = {
-    'fa': 'فارسی',
-    'en': 'English',
-    'ar': 'العربية',
-    'ru': 'Русский',
-    'tr': 'Türkçe'
+@app.websocket("/ws/chat")
+async def websocket_endpoint(websocket: WebSocket, token: str):
+    # احراز هویت از طریق توکن
+    db = SessionLocal()
+    user = get_current_user(token, db)
+    if not user:
+        await websocket.close(code=1008)
+        db.close()
+        return
+    
+    user_id = user.id
+    await manager.connect(websocket, user_id)
+    
+    # ذخیره وضعیت آنلاین
+    if REDIS_AVAILABLE:
+        redis_client.setex(f"online:{user_id}", 300, "1")
+    
+    # ارسال پیام‌های خوانده نشده
+    unread = db.query(Message).filter(
+        Message.receiver_id == user_id,
+        Message.is_read == False
+    ).order_by(Message.created_at).all()
+    
+    for msg in unread:
+        sender = db.query(User).filter(User.id == msg.sender_id).first()
+        await websocket.send_json({
+            "type": "message",
+            "data": {
+                "id": msg.id,
+                "sender_id": msg.sender_id,
+                "content": msg.content,
+                "created_at": msg.created_at.isoformat(),
+                "sender_username": sender.username if sender else "نامشخص"
+            }
+        })
+        msg.is_read = True
+        msg.read_at = datetime.utcnow()
+    db.commit()
+    
+    try:
+        while True:
+            data = await websocket.receive_json()
+            
+            if data.get("type") == "message":
+                receiver_id = data.get("receiver_id")
+                content = data.get("content")
+                
+                if not receiver_id or not content:
+                    continue
+                
+                # ذخیره در دیتابیس
+                new_message = Message(
+                    sender_id=user_id,
+                    receiver_id=receiver_id,
+                    content=content
+                )
+                db.add(new_message)
+                db.commit()
+                db.refresh(new_message)
+                
+                # ارسال به گیرنده
+                receiver_user = db.query(User).filter(User.id == receiver_id).first()
+                message_data = {
+                    "type": "message",
+                    "data": {
+                        "id": new_message.id,
+                        "sender_id": user_id,
+                        "content": content,
+                        "created_at": new_message.created_at.isoformat(),
+                        "sender_username": user.username,
+                        "sender_avatar": user.avatar_url
+                    }
+                }
+                
+                # تلاش برای ارسال فوری
+                sent = await manager.send_message(receiver_id, message_data)
+                
+                # اگر گیرنده آفلاین بود، به عنوان پیام خوانده نشده ذخیره می‌شود
+                if not sent and REDIS_AVAILABLE:
+                    redis_client.lpush(f"offline_messages:{receiver_id}", json.dumps(message_data))
+                    redis_client.ltrim(f"offline_messages:{receiver_id}", 0, 99)
+                
+                # ارسال تایید به فرستنده
+                await websocket.send_json({
+                    "type": "sent",
+                    "data": {"id": new_message.id}
+                })
+                
+                # نوتیفیکیشن
+                if sent:
+                    await NotificationService.create_notification(
+                        db=db,
+                        user_id=receiver_id,
+                        type="message",
+                        content=f"{user.username}: {content[:50]}",
+                        link=f"/chat/{user_id}"
+                    )
+            
+            elif data.get("type") == "typing":
+                receiver_id = data.get("receiver_id")
+                if receiver_id:
+                    await manager.send_message(receiver_id, {
+                        "type": "typing",
+                        "data": {"user_id": user_id}
+                    })
+            
+            elif data.get("type") == "read":
+                message_id = data.get("message_id")
+                if message_id:
+                    msg = db.query(Message).filter(Message.id == message_id).first()
+                    if msg and msg.receiver_id == user_id:
+                        msg.is_read = True
+                        msg.read_at = datetime.utcnow()
+                        db.commit()
+    
+    except WebSocketDisconnect:
+        manager.disconnect(user_id)
+        db.close()
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+        manager.disconnect(user_id)
+        db.close()
+
+# ============================================
+# APIها
+# ============================================
+
+@app.on_event("startup")
+async def startup():
+    Base.metadata.create_all(bind=engine)
+    print("✅ دیتابیس راه‌اندازی شد")
+    
+    # سرور پیش‌فرض
+    db = SessionLocal()
+    existing = db.query(ServerMapping).filter(ServerMapping.server_name == "server-1").first()
+    if not existing:
+        default = ServerMapping(
+            server_name="server-1",
+            server_ip="127.0.0.1",
+            server_port=8000,
+            max_users=MAX_USERS_PER_SERVER,
+            current_users=0
+        )
+        db.add(default)
+        db.commit()
+    db.close()
+
+# ========== احراز هویت ==========
+
+@app.post("/api/auth/register", response_model=Token)
+async def register(user_data: UserCreate, db: Session = Depends(lambda: SessionLocal())):
+    existing = db.query(User).filter(
+        (User.username == user_data.username) | (User.email == user_data.email)
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="نام کاربری یا ایمیل تکراری است")
+    
+    server_id = ShardingService.assign_user_to_server(db)
+    
+    new_user = User(
+        username=user_data.username,
+        email=user_data.email,
+        password_hash=hash_password(user_data.password),
+        full_name=user_data.full_name or user_data.username,
+        server_id=server_id
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    
+    token = create_access_token({"user_id": new_user.id})
+    
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": UserResponse.from_orm(new_user)
+    }
+
+@app.post("/api/auth/login", response_model=Token)
+async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(lambda: SessionLocal())):
+    user = db.query(User).filter(User.username == form_data.username).first()
+    if not user or not verify_password(form_data.password, user.password_hash):
+        raise HTTPException(status_code=400, detail="نام کاربری یا رمز عبور اشتباه است")
+    
+    token = create_access_token({"user_id": user.id})
+    
+    # به‌روزرسانی آخرین بازدید
+    user.last_seen = datetime.utcnow()
+    db.commit()
+    
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": UserResponse.from_orm(user)
+    }
+
+@app.get("/api/auth/me", response_model=UserResponse)
+async def get_me(token: str, db: Session = Depends(lambda: SessionLocal())):
+    user = get_current_user(token, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="توکن نامعتبر است")
+    return user
+
+# ========== ویدیوها ==========
+
+@app.post("/api/videos/upload")
+async def upload_video(
+    token: str,
+    video: UploadFile = File(...),
+    title: Optional[str] = Form(None),
+    description: Optional[str] = Form(None),
+    is_private: bool = Form(False),
+    db: Session = Depends(lambda: SessionLocal())
+):
+    user = get_current_user(token, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="توکن نامعتبر است")
+    
+    content = await video.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="حجم ویدیو نباید بیشتر از ۱۰ مگابایت باشد")
+    
+    video_url = await StorageService.upload_video(content, user.id, video.filename)
+    
+    new_video = Video(
+        user_id=user.id,
+        title=title or video.filename,
+        description=description or "",
+        video_url=video_url,
+        size_mb=len(content) // (1024 * 1024),
+        is_private=is_private
+    )
+    db.add(new_video)
+    db.commit()
+    db.refresh(new_video)
+    
+    # به‌روزرسانی تعداد ویدیوهای کاربر
+    user.videos_count += 1
+    db.commit()
+    
+    # پاک کردن کش فید
+    CacheManager.invalidate_feed_cache(user.id)
+    
+    return {
+        "success": True,
+        "video_id": new_video.id,
+        "video_url": video_url
+    }
+
+@app.get("/api/videos/feed")
+async def get_feed(
+    token: str,
+    limit: int = 20,
+    offset: int = 0,
+    db: Session = Depends(lambda: SessionLocal())
+):
+    user = get_current_user(token, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="توکن نامعتبر است")
+    
+    # بررسی کش
+    cached = CacheManager.get_feed_cache(user.id, limit)
+    if cached:
+        return cached
+    
+    # دریافت آیدی‌های فالو شده
+    following = db.query(Follow.following_id).filter(Follow.follower_id == user.id).all()
+    following_ids = [f[0] for f in following] + [user.id]
+    
+    # دریافت ویدیوها
+    videos = db.query(Video).filter(
+        Video.user_id.in_(following_ids),
+        Video.is_active == True,
+        Video.is_private == False
+    ).order_by(Video.created_at.desc()).offset(offset).limit(limit).all()
+    
+    result = []
+    for v in videos:
+        v_user = db.query(User).filter(User.id == v.user_id).first()
+        is_liked = db.query(Like).filter(
+            Like.user_id == user.id,
+            Like.video_id == v.id
+        ).first() is not None
+        
+        result.append({
+            "id": v.id,
+            "user_id": v.user_id,
+            "title": v.title,
+            "description": v.description,
+            "video_url": v.video_url,
+            "thumbnail_url": v.thumbnail_url,
+            "duration": v.duration,
+            "views": v.views,
+            "likes_count": v.likes_count,
+            "comments_count": v.comments_count,
+            "shares_count": v.shares_count,
+            "is_private": v.is_private,
+            "created_at": v.created_at.isoformat(),
+            "username": v_user.username if v_user else None,
+            "user_avatar": v_user.avatar_url if v_user else None,
+            "is_liked": is_liked
+        })
+    
+    # ذخیره در کش
+    CacheManager.set_feed_cache(user.id, result, limit)
+    
+    return result
+
+@app.get("/api/videos/{video_id}")
+async def get_video(
+    video_id: int,
+    token: str,
+    db: Session = Depends(lambda: SessionLocal())
+):
+    user = get_current_user(token, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="توکن نامعتبر است")
+    
+    # بررسی کش
+    cached = CacheManager.get_video_cache(video_id)
+    if cached:
+        return cached
+    
+    video = db.query(Video).filter(Video.id == video_id, Video.is_active == True).first()
+    if not video:
+        raise HTTPException(status_code=404, detail="ویدیو یافت نشد")
+    
+    # افزایش بازدید
+    video.views += 1
+    db.commit()
+    
+    v_user = db.query(User).filter(User.id == video.user_id).first()
+    is_liked = db.query(Like).filter(
+        Like.user_id == user.id,
+        Like.video_id == video.id
+    ).first() is not None
+    
+    result = {
+        "id": video.id,
+        "user_id": video.user_id,
+        "title": video.title,
+        "description": video.description,
+        "video_url": video.video_url,
+        "thumbnail_url": video.thumbnail_url,
+        "duration": video.duration,
+        "views": video.views,
+        "likes_count": video.likes_count,
+        "comments_count": video.comments_count,
+        "shares_count": video.shares_count,
+        "is_private": video.is_private,
+        "created_at": video.created_at.isoformat(),
+        "username": v_user.username if v_user else None,
+        "user_avatar": v_user.avatar_url if v_user else None,
+        "is_liked": is_liked
+    }
+    
+    # ذخیره در کش
+    CacheManager.set_video_cache(video_id, result)
+    
+    return result
+
+@app.post("/api/videos/{video_id}/like")
+async def like_video(
+    video_id: int,
+    token: str,
+    db: Session = Depends(lambda: SessionLocal())
+):
+    user = get_current_user(token, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="توکن نامعتبر است")
+    
+    video = db.query(Video).filter(Video.id == video_id, Video.is_active == True).first()
+    if not video:
+        raise HTTPException(status_code=404, detail="ویدیو یافت نشد")
+    
+    existing = db.query(Like).filter(
+        Like.user_id == user.id,
+        Like.video_id == video_id
+    ).first()
+    
+    if existing:
+        db.delete(existing)
+        video.likes_count -= 1
+        db.commit()
+        CacheManager.invalidate_video_cache(video_id)
+        return {"success": True, "liked": False}
+    
+    new_like = Like(
+        user_id=user.id,
+        video_id=video_id
+    )
+    db.add(new_like)
+    video.likes_count += 1
+    db.commit()
+    CacheManager.invalidate_video_cache(video_id)
+    
+    return {"success": True, "liked": True}
+
+# ========== کامنت‌ها ==========
+
+@app.post("/api/videos/{video_id}/comments", response_model=CommentResponse)
+async def add_comment(
+    video_id: int,
+    comment_data: CommentCreate,
+    token: str,
+    db: Session = Depends(lambda: SessionLocal())
+):
+    user = get_current_user(token, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="توکن نامعتبر است")
+    
+    video = db.query(Video).filter(Video.id == video_id, Video.is_active == True).first()
+    if not video:
+        raise HTTPException(status_code=404, detail="ویدیو یافت نشد")
+    
+    # بررسی parent_id
+    if comment_data.parent_id:
+        parent = db.query(Comment).filter(Comment.id == comment_data.parent_id).first()
+        if not parent:
+            raise HTTPException(status_code=404, detail="کامنت والد یافت نشد")
+    
+    new_comment = Comment(
+        user_id=user.id,
+        video_id=video_id,
+        parent_id=comment_data.parent_id,
+        content=comment_data.content
+    )
+    db.add(new_comment)
+    video.comments_count += 1
+    db.commit()
+    db.refresh(new_comment)
+    
+    CacheManager.invalidate_video_cache(video_id)
+    
+    return {
+        "id": new_comment.id,
+        "user_id": new_comment.user_id,
+        "video_id": new_comment.video_id,
+        "parent_id": new_comment.parent_id,
+        "content": new_comment.content,
+        "likes_count": new_comment.likes_count,
+        "created_at": new_comment.created_at,
+        "username": user.username,
+        "user_avatar": user.avatar_url
+    }
+
+# ========== فالو ==========
+
+@app.post("/api/users/{user_id}/follow")
+async def follow_user(
+    user_id: int,
+    token: str,
+    db: Session = Depends(lambda: SessionLocal())
+):
+    user = get_current_user(token, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="توکن نامعتبر است")
+    
+    if user.id == user_id:
+        raise HTTPException(status_code=400, detail="نمی‌توانید خودتان را دنبال کنید")
+    
+    target = db.query(User).filter(User.id == user_id, User.is_active == True).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="کاربر یافت نشد")
+    
+    existing = db.query(Follow).filter(
+        Follow.follower_id == user.id,
+        Follow.following_id == user_id
+    ).first()
+    
+    if existing:
+        db.delete(existing)
+        user.following_count -= 1
+        target.followers_count -= 1
+        db.commit()
+        CacheManager.invalidate_user_cache(user_id)
+        return {"success": True, "following": False}
+    
+    new_follow = Follow(
+        follower_id=user.id,
+        following_id=user_id
+    )
+    db.add(new_follow)
+    user.following_count += 1
+    target.followers_count += 1
+    db.commit()
+    CacheManager.invalidate_user_cache(user_id)
+    
+    return {"success": True, "following": True}
+
+# ========== پیام‌ها (چت) ==========
+
+@app.get("/api/messages/conversations")
+async def get_conversations(
+    token: str,
+    db: Session = Depends(lambda: SessionLocal())
+):
+    user = get_current_user(token, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="توکن نامعتبر است")
+    
+    # دریافت آخرین پیام با هر کاربر
+    # کوئری پیچیده برای گرفتن آخرین پیام هر مکالمه
+    result = []
+    
+    # روش ساده: دریافت همه کاربرانی که با آنها پیام داشتیم
+    sent_to = db.query(Message.receiver_id).filter(Message.sender_id == user.id).distinct().all()
+    received_from = db.query(Message.sender_id).filter(Message.receiver_id == user.id).distinct().all()
+    
+    user_ids = set([u[0] for u in sent_to] + [u[0] for u in received_from])
+    
+    for uid in user_ids:
+        if uid == user.id:
+            continue
+        other = db.query(User).filter(User.id == uid, User.is_active == True).first()
+        if not other:
+            continue
+        
+        # آخرین پیام
+        last_msg = db.query(Message).filter(
+            or_(
+                and_(Message.sender_id == user.id, Message.receiver_id == uid),
+                and_(Message.sender_id == uid, Message.receiver_id == user.id)
+            )
+        ).order_by(Message.created_at.desc()).first()
+        
+        # تعداد پیام‌های خوانده نشده
+        unread = db.query(Message).filter(
+            Message.sender_id == uid,
+            Message.receiver_id == user.id,
+            Message.is_read == False
+        ).count()
+        
+        result.append({
+            "user_id": other.id,
+            "username": other.username,
+            "avatar_url": other.avatar_url,
+            "last_message": last_msg.content if last_msg else "",
+            "last_message_time": last_msg.created_at.isoformat() if last_msg else None,
+            "unread_count": unread,
+            "is_online": user_id in CacheManager.get_online_users()
+        })
+    
+    # مرتب‌سازی بر اساس آخرین پیام
+    result.sort(key=lambda x: x.get("last_message_time", ""), reverse=True)
+    
+    return result
+
+@app.get("/api/messages/{other_user_id}")
+async def get_messages(
+    other_user_id: int,
+    token: str,
+    limit: int = 50,
+    before: Optional[str] = None,
+    db: Session = Depends(lambda: SessionLocal())
+):
+    user = get_current_user(token, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="توکن نامعتبر است")
+    
+    other = db.query(User).filter(User.id == other_user_id, User.is_active == True).first()
+    if not other:
+        raise HTTPException(status_code=404, detail="کاربر یافت نشد")
+    
+    # خوانده شدن پیام‌ها
+    db.query(Message).filter(
+        Message.sender_id == other_user_id,
+        Message.receiver_id == user.id,
+        Message.is_read == False
+    ).update({"is_read": True, "read_at": datetime.utcnow()})
+    db.commit()
+    
+    # دریافت پیام‌ها
+    query = db.query(Message).filter(
+        or_(
+            and_(Message.sender_id == user.id, Message.receiver_id == other_user_id),
+            and_(Message.sender_id == other_user_id, Message.receiver_id == user.id)
+        )
+    )
+    
+    if before:
+        query = query.filter(Message.created_at < before)
+    
+    messages = query.order_by(Message.created_at.desc()).limit(limit).all()
+    
+    return [{
+        "id": m.id,
+        "sender_id": m.sender_id,
+        "receiver_id": m.receiver_id,
+        "content": m.content,
+        "is_read": m.is_read,
+        "created_at": m.created_at.isoformat(),
+        "is_mine": m.sender_id == user.id
+    } for m in messages[::-1]]
+
+# ========== پنل مدیریت ==========
+
+@app.get("/admin/stats", response_model=AdminStatsResponse)
+async def admin_stats(
+    token: str,
+    db: Session = Depends(lambda: SessionLocal())
+):
+    user = get_current_user(token, db)
+    if not user or not user.is_admin:
+        raise HTTPException(status_code=403, detail="دسترسی محدود به ادمین")
+    
+    today = datetime.utcnow().date()
+    today_start = datetime(today.year, today.month, today.day)
+    
+    return {
+        "total_users": db.query(User).filter(User.is_active == True).count(),
+        "total_videos": db.query(Video).filter(Video.is_active == True).count(),
+        "total_views": db.query(Video).filter(Video.is_active == True).with_entities(func.sum(Video.views)).scalar() or 0,
+        "total_comments": db.query(Comment).count(),
+        "active_users_today": db.query(User).filter(User.last_seen >= today_start).count(),
+        "new_users_today": db.query(User).filter(User.created_at >= today_start).count(),
+        "new_videos_today": db.query(Video).filter(Video.created_at >= today_start).count(),
+        "premium_users": db.query(User).filter(User.is_premium == True).count(),
+        "server_count": db.query(ServerMapping).filter(ServerMapping.is_active == True).count(),
+        "storage_used_gb": 0  # محاسبه بعداً
+    }
+
+@app.get("/admin/users")
+async def admin_users(
+    token: str,
+    page: int = 1,
+    limit: int = 20,
+    search: Optional[str] = None,
+    db: Session = Depends(lambda: SessionLocal())
+):
+    user = get_current_user(token, db)
+    if not user or not user.is_admin:
+        raise HTTPException(status_code=403, detail="دسترسی محدود به ادمین")
+    
+    query = db.query(User).filter(User.is_active == True)
+    
+    if search:
+        query = query.filter(
+            or_(
+                User.username.ilike(f"%{search}%"),
+                User.email.ilike(f"%{search}%"),
+                User.full_name.ilike(f"%{search}%")
+            )
+        )
+    
+    total = query.count()
+    users = query.offset((page - 1) * limit).limit(limit).all()
+    
+    return {
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "users": [{
+            "id": u.id,
+            "username": u.username,
+            "email": u.email,
+            "full_name": u.full_name,
+            "is_premium": u.is_premium,
+            "is_verified": u.is_verified,
+            "videos_count": u.videos_count,
+            "followers_count": u.followers_count,
+            "server_id": u.server_id,
+            "created_at": u.created_at.isoformat()
+        } for u in users]
+    }
+
+@app.post("/admin/users/{user_id}/toggle-premium")
+async def toggle_premium(
+    user_id: int,
+    token: str,
+    db: Session = Depends(lambda: SessionLocal())
+):
+    user = get_current_user(token, db)
+    if not user or not user.is_admin:
+        raise HTTPException(status_code=403, detail="دسترسی محدود به ادمین")
+    
+    target = db.query(User).filter(User.id == user_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="کاربر یافت نشد")
+    
+    target.is_premium = not target.is_premium
+    db.commit()
+    
+    return {"success": True, "is_premium": target.is_premium}
+
+@app.post("/admin/servers/add")
+async def add_server(
+    server_data: AddServerRequest,
+    token: str,
+    db: Session = Depends(lambda: SessionLocal())
+):
+    user = get_current_user(token, db)
+    if not user or not user.is_admin:
+        raise HTTPException(status_code=403, detail="دسترسی محدود به ادمین")
+    
+    existing = db.query(ServerMapping).filter(
+        ServerMapping.server_name == server_data.server_name
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="این نام سرور قبلاً ثبت شده است")
+    
+    server_id = ShardingService.add_new_server(
+        db=db,
+        name=server_data.server_name,
+        ip=server_data.server_ip,
+        port=server_data.server_port,
+        max_users=server_data.max_users
+    )
+    
+    return {
+        "success": True,
+        "server_id": server_id,
+        "message": f"سرور {server_data.server_name} با موفقیت اضافه شد"
+    }
+
+@app.get("/admin/servers/status")
+async def get_servers_status(
+    token: str,
+    db: Session = Depends(lambda: SessionLocal())
+):
+    user = get_current_user(token, db)
+    if not user or not user.is_admin:
+        raise HTTPException(status_code=403, detail="دسترسی محدود به ادمین")
+    
+    servers = db.query(ServerMapping).all()
+    
+    return {
+        "total_servers": len(servers),
+        "servers": [
+            {
+                "id": s.id,
+                "name": s.server_name,
+                "ip": s.server_ip,
+                "port": s.server_port,
+                "max_users": s.max_users,
+                "current_users": s.current_users,
+                "load_percent": round((s.current_users / s.max_users) * 100, 2) if s.max_users > 0 else 0,
+                "is_active": s.is_active
+            }
+            for s in servers
+        ]
+    }
+
+# ============================================
+# صفحه اصلی (HTML کامل با چیدمان اینستاگرامی)
+# ============================================
+
+@app.get("/", response_class=HTMLResponse)
+async def home():
+    return """
+<!DOCTYPE html>
+<html dir="rtl" lang="fa">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ساده‌گرام</title>
+    <style>
+        /* ===== RESET & BASE ===== */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+            background: #fafafa;
+            color: #262626;
+            padding-bottom: 70px;
+        }
+        a { text-decoration: none; color: inherit; }
+        
+        /* ===== HEADER ===== */
+        .header {
+            background: white;
+            border-bottom: 1px solid #dbdbdb;
+            padding: 12px 16px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header .logo {
+            font-size: 22px;
+            font-weight: bold;
+            background: linear-gradient(45deg, #405de6, #5851db, #833ab4, #c13584, #e1306c, #fd1d1d);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .header .icons {
+            display: flex;
+            gap: 20px;
+            font-size: 24px;
+        }
+        .header .icons span { cursor: pointer; }
+        .header .icons .badge {
+            position: relative;
+        }
+        .header .icons .badge::after {
+            content: '';
+            position: absolute;
+            top: -2px;
+            right: -2px;
+            width: 10px;
+            height: 10px;
+            background: #ed4956;
+            border-radius: 50%;
+            border: 2px solid white;
+        }
+        
+        /* ===== TABS ===== */
+        .bottom-tabs {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: white;
+            border-top: 1px solid #dbdbdb;
+            display: flex;
+            justify-content: space-around;
+            padding: 8px 0;
+            z-index: 100;
+        }
+        .bottom-tabs .tab {
+            font-size: 26px;
+            cursor: pointer;
+            padding: 4px 16px;
+            border-radius: 8px;
+            transition: 0.3s;
+            color: #8e8e8e;
+        }
+        .bottom-tabs .tab.active {
+            color: #262626;
+        }
+        .bottom-tabs .tab .label {
+            font-size: 10px;
+            display: block;
+            text-align: center;
+            margin-top: 2px;
+        }
+        
+        /* ===== FEED ===== */
+        .feed-container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 8px 0;
+        }
+        
+        /* ===== VIDEO POST ===== */
+        .post {
+            background: white;
+            margin-bottom: 16px;
+            border-radius: 8px;
+            border: 1px solid #dbdbdb;
+            overflow: hidden;
+        }
+        .post-header {
+            display: flex;
+            align-items: center;
+            padding: 12px 16px;
+            gap: 12px;
+        }
+        .post-header .avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: #ddd;
+            overflow: hidden;
+            flex-shrink: 0;
+        }
+        .post-header .avatar img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .post-header .username {
+            font-weight: 600;
+            font-size: 14px;
+        }
+        .post-header .time {
+            color: #8e8e8e;
+            font-size: 12px;
+            margin-right: auto;
+        }
+        .post-header .verified {
+            color: #0095f6;
+            font-size: 14px;
+        }
+        
+        .post-video {
+            position: relative;
+            background: #000;
+        }
+        .post-video video {
+            width: 100%;
+            max-height: 500px;
+            display: block;
+        }
+        .post-video .duration {
+            position: absolute;
+            bottom: 8px;
+            right: 8px;
+            background: rgba(0,0,0,0.8);
+            color: white;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        
+        .post-actions {
+            display: flex;
+            padding: 8px 16px;
+            gap: 16px;
+            align-items: center;
+        }
+        .post-actions .btn {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            transition: 0.2s;
+            padding: 4px;
+        }
+        .post-actions .btn:hover { transform: scale(1.1); }
+        .post-actions .btn.liked { color: #ed4956; }
+        .post-actions .stats {
+            display: flex;
+            gap: 16px;
+            color: #8e8e8e;
+            font-size: 14px;
+            margin-right: auto;
+        }
+        .post-actions .stats span { display: flex; align-items: center; gap: 4px; }
+        
+        .post-caption {
+            padding: 0 16px 8px;
+            font-size: 14px;
+        }
+        .post-caption .uname { font-weight: 600; }
+        .post-caption .text { margin-right: 6px; }
+        
+        .post-comments {
+            padding: 0 16px 12px;
+            border-top: 1px solid #efefef;
+            margin-top: 8px;
+        }
+        .post-comments .comment {
+            display: flex;
+            gap: 8px;
+            padding: 4px 0;
+            font-size: 14px;
+            align-items: flex-start;
+        }
+        .post-comments .comment .c-uname {
+            font-weight: 600;
+            flex-shrink: 0;
+        }
+        .post-comments .comment .c-text {
+            word-break: break-word;
+        }
+        .post-comments .comment-form {
+            display: flex;
+            gap: 8px;
+            padding-top: 8px;
+            border-top: 1px solid #efefef;
+            margin-top: 8px;
+        }
+        .post-comments .comment-form input {
+            flex: 1;
+            border: none;
+            outline: none;
+            font-size: 14px;
+            padding: 8px 0;
+        }
+        .post-comments .comment-form button {
+            background: none;
+            border: none;
+            color: #0095f6;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .post-comments .comment-form button:disabled { opacity: 0.3; cursor: default; }
+        
+        /* ===== UPLOAD ===== */
+        .upload-container {
+            max-width: 500px;
+            margin: 20px auto;
+            padding: 0 16px;
+        }
+        .upload-box {
+            background: white;
+            border: 2px dashed #dbdbdb;
+            border-radius: 16px;
+            padding: 40px 20px;
+            text-align: center;
+        }
+        .upload-box .icon { font-size: 48px; }
+        .upload-box h3 { margin: 16px 0 8px; }
+        .upload-box p { color: #8e8e8e; font-size: 14px; }
+        .upload-box input[type="file"] { display: none; }
+        .upload-box .btn-upload {
+            background: #0095f6;
+            color: white;
+            border: none;
+            padding: 10px 30px;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            margin-top: 16px;
+        }
+        .upload-box .btn-upload:hover { background: #1877f2; }
+        .upload-form { margin-top: 20px; }
+        .upload-form input, .upload-form textarea {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #dbdbdb;
+            border-radius: 8px;
+            font-size: 14px;
+            margin-bottom: 12px;
+        }
+        .upload-form textarea { resize: vertical; min-height: 60px; }
+        .upload-form .checkbox { display: flex; align-items: center; gap: 8px; }
+        .upload-form .checkbox input { width: auto; margin: 0; }
+        
+        /* ===== PROFILE ===== */
+        .profile-container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 16px;
+        }
+        .profile-header {
+            display: flex;
+            gap: 24px;
+            align-items: center;
+            padding: 16px 0;
+        }
+        .profile-header .avatar {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: #ddd;
+            overflow: hidden;
+            flex-shrink: 0;
+        }
+        .profile-header .avatar img { width: 100%; height: 100%; object-fit: cover; }
+        .profile-header .info { flex: 1; }
+        .profile-header .info .name { font-size: 20px; font-weight: 600; }
+        .profile-header .info .username { color: #8e8e8e; font-size: 14px; }
+        .profile-header .info .bio { margin-top: 4px; font-size: 14px; }
+        .profile-stats {
+            display: flex;
+            gap: 24px;
+            padding: 12px 0;
+            border-top: 1px solid #dbdbdb;
+            border-bottom: 1px solid #dbdbdb;
+        }
+        .profile-stats .stat { text-align: center; }
+        .profile-stats .stat .num { font-weight: 600; font-size: 18px; }
+        .profile-stats .stat .label { color: #8e8e8e; font-size: 12px; }
+        
+        .profile-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 2px;
+            padding-top: 2px;
+        }
+        .profile-grid .item {
+            aspect-ratio: 1;
+            background: #ddd;
+            overflow: hidden;
+            position: relative;
+        }
+        .profile-grid .item img, .profile-grid .item video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .profile-grid .item .overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(0,0,0,0.4);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            gap: 16px;
+        }
+        .profile-grid .item:hover .overlay { display: flex; }
+        
+        /* ===== CHAT ===== */
+        .chat-container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 16px;
+        }
+        .chat-list {
+            background: white;
+            border-radius: 8px;
+            border: 1px solid #dbdbdb;
+        }
+        .chat-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 16px;
+            border-bottom: 1px solid #efefef;
+            cursor: pointer;
+        }
+        .chat-item:last-child { border-bottom: none; }
+        .chat-item .avatar {
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            background: #ddd;
+            overflow: hidden;
+            flex-shrink: 0;
+        }
+        .chat-item .avatar img { width: 100%; height: 100%; object-fit: cover; }
+        .chat-item .info { flex: 1; }
+        .chat-item .info .name { font-weight: 600; }
+        .chat-item .info .last-msg {
+            color: #8e8e8e;
+            font-size: 14px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 200px;
+        }
+        .chat-item .badge {
+            background: #0095f6;
+            color: white;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .chat-item .online {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #31a24c;
+            flex-shrink: 0;
+        }
+        
+        .chat-messages {
+            background: white;
+            border-radius: 8px;
+            border: 1px solid #dbdbdb;
+            height: 400px;
+            overflow-y: auto;
+            padding: 16px;
+        }
+        .chat-messages .msg {
+            max-width: 70%;
+            padding: 8px 12px;
+            border-radius: 16px;
+            margin-bottom: 8px;
+            word-break: break-word;
+        }
+        .chat-messages .msg.mine {
+            background: #0095f6;
+            color: white;
+            margin-left: auto;
+            border-bottom-left-radius: 4px;
+        }
+        .chat-messages .msg.other {
+            background: #efefef;
+            color: #262626;
+            margin-right: auto;
+            border-bottom-right-radius: 4px;
+        }
+        .chat-messages .msg .time {
+            font-size: 10px;
+            opacity: 0.6;
+            display: block;
+            margin-top: 4px;
+        }
+        .chat-input {
+            display: flex;
+            gap: 8px;
+            padding: 12px 0;
+        }
+        .chat-input input {
+            flex: 1;
+            padding: 10px 16px;
+            border: 1px solid #dbdbdb;
+            border-radius: 24px;
+            outline: none;
+            font-size: 14px;
+        }
+        .chat-input input:focus { border-color: #0095f6; }
+        .chat-input button {
+            background: #0095f6;
+            color: white;
+            border: none;
+            border-radius: 24px;
+            padding: 10px 20px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .chat-input button:disabled { opacity: 0.5; }
+        
+        /* ===== ADMIN ===== */
+        .admin-container {
+            max-width: 800px;
+            margin: 20px auto;
+            padding: 0 16px;
+        }
+        .admin-card {
+            background: white;
+            border-radius: 8px;
+            border: 1px solid #dbdbdb;
+            padding: 20px;
+            margin-bottom: 16px;
+        }
+        .admin-card h2 { font-size: 18px; margin-bottom: 12px; }
+        .admin-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 12px;
+        }
+        .admin-stats .stat {
+            background: #f8f9fa;
+            padding: 12px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .admin-stats .stat .num { font-size: 24px; font-weight: 700; }
+        .admin-stats .stat .label { color: #8e8e8e; font-size: 12px; }
+        .admin-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+        .admin-table th, .admin-table td {
+            padding: 8px 12px;
+            border-bottom: 1px solid #efefef;
+            text-align: right;
+        }
+        .admin-table th { background: #f8f9fa; font-weight: 600; }
+        .admin-table .badge-success { color: #31a24c; }
+        .admin-table .badge-danger { color: #ed4956; }
+        
+        /* ===== MODAL ===== */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 200;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .modal-overlay.show { display: flex; }
+        .modal {
+            background: white;
+            border-radius: 16px;
+            max-width: 500px;
+            width: 100%;
+            max-height: 80vh;
+            overflow-y: auto;
+            padding: 24px;
+        }
+        .modal .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+        .modal .modal-header h2 { font-size: 20px; }
+        .modal .modal-close {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+        }
+        
+        /* ===== UTILITY ===== */
+        .hidden { display: none !important; }
+        .text-center { text-align: center; }
+        .mt-16 { margin-top: 16px; }
+        .mb-16 { margin-bottom: 16px; }
+        
+        /* ===== RESPONSIVE ===== */
+        @media (max-width: 600px) {
+            .header .logo { font-size: 18px; }
+            .bottom-tabs .tab { font-size: 22px; padding: 4px 12px; }
+            .post-header .username { font-size: 13px; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- ===== HEADER ===== -->
+<header class="header">
+    <div class="logo">📸 ساده‌گرام</div>
+    <div class="icons">
+        <span onclick="showTab('chat')">💬</span>
+        <span onclick="showTab('upload')">➕</span>
+        <span class="badge" onclick="showTab('profile')">👤</span>
+    </div>
+</header>
+
+<!-- ===== CONTENT ===== -->
+<div id="content"></div>
+
+<!-- ===== BOTTOM TABS ===== -->
+<nav class="bottom-tabs">
+    <div class="tab active" onclick="showTab('feed')" data-tab="feed">
+        🏠
+        <span class="label">فید</span>
+    </div>
+    <div class="tab" onclick="showTab('explore')" data-tab="explore">
+        🔍
+        <span class="label">جستجو</span>
+    </div>
+    <div class="tab" onclick="showTab('upload')" data-tab="upload">
+        ➕
+        <span class="label">آپلود</span>
+    </div>
+    <div class="tab" onclick="showTab('chat')" data-tab="chat">
+        💬
+        <span class="label">چت</span>
+    </div>
+    <div class="tab" onclick="showTab('profile')" data-tab="profile">
+        👤
+        <span class="label">پروفایل</span>
+    </div>
+</nav>
+
+<!-- ===== MODAL ===== -->
+<div class="modal-overlay" id="modal">
+    <div class="modal">
+        <div class="modal-header">
+            <h2 id="modal-title">عنوان</h2>
+            <button class="modal-close" onclick="closeModal()">✕</button>
+        </div>
+        <div id="modal-body"></div>
+    </div>
+</div>
+
+<script>
+// ============================================
+// STATE
+// ============================================
+let token = localStorage.getItem('token') || '';
+let currentUser = null;
+let currentTab = 'feed';
+let ws = null;
+let wsReconnectTimer = null;
+
+// ============================================
+// TOAST
+// ============================================
+function showToast(msg, type = 'info') {
+    const existing = document.querySelector('.toast-global');
+    if (existing) existing.remove();
+    
+    const toast = document.createElement('div');
+    toast.className = 'toast-global';
+    toast.style.cssText = `
+        position: fixed;
+        top: 80px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: ${type === 'error' ? '#ed4956' : '#262626'};
+        color: white;
+        padding: 12px 24px;
+        border-radius: 8px;
+        z-index: 999;
+        font-size: 14px;
+        max-width: 90%;
+        text-align: center;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        transition: opacity 0.3s;
+    `;
+    toast.textContent = msg;
+    document.body.appendChild(toast);
+    
+    setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, 3000);
 }
 
-# ==================== متون ====================
-TEXTS = {
-    'fa': {
-        'welcome': "👋 خوش آمدید <b>{first_name}</b>!\n\n🎯 ربات تبادل بازدید و لایک یوتیوب",
-        'register_link': "📝 ثبت لینک یوتیوب",
-        'my_stats': "📊 آمار من",
-        'referral': "👥 سیستم رفرال",
-        'change_language': "🌐 تغییر زبان",
-        'view_links': "👀 مشاهده لینک‌های بازدید",
-        'register_link_prompt': "📤 لطفا لینک ویدیو یوتوب خود را ارسال کنید:\n\n⚠️ روزانه فقط <b>{required_ref}</b> لینک می‌توانید ثبت کنید",
-        'link_registered': "✅ لینک شما با موفقیت ثبت شد!\n\n📌 برای مشاهده لینک‌های بازدید روی دکمه زیر کلیک کنید:",
-        'interaction_prompt': "👀 لینک‌های امروز برای بازدید:\n\n{links}",
-        'link_viewed': "✅ لینک بازدید و لایک شد!\n🎉 بازدید شما ثبت شد",
-        'referral_info': "👥 **سیستم رفرال شما**\n\n🔗 **کد رفرال شما:**\n<code>{ref_code}</code>\n\n👤 **تعداد رفرال‌ها:** {ref_count} کاربر\n\n📋 **لینک دعوت:**\n<code>{ref_link}</code>",
-        'referral_link': "https://t.me/SEGNALF_bot?start={ref_code}",
-        'referral_copied': "✅ کد رفرال کپی شد!\n\n📋 کد: <code>{ref_code}</code>",
-        'referral_success': "🎉 **تبریک!**\nشما توسط <b>{ref_name}</b> دعوت شدید!",
-        'referral_not_found': "❌ کد رفرال نامعتبر است",
-        'subscribed': "✅ اشتراک شما تا {expiry} فعال است",
-        'not_subscribed': "❌ اشتراک فعالی ندارید\n💳 لطفا مبلغ ۵۰ دلار را پرداخت کنید",
-        'payment_info': "💳 لطفا <b>۵۰ دلار</b> USDT (TRC20) ارسال کنید:\n\n<code>{wallet}</code>",
-        'enter_source_address': "📤 لطفا آدرس کیف پول خود را وارد کنید:",
-        'source_address_saved': "✅ آدرس شما ثبت شد!\n💳 لطفا <b>۵۰ دلار</b> USDT ارسال کنید:",
-        'payment_confirmed': "✅ تایید پرداخت دریافت شد!\n⏳ در حال بررسی...",
-        'payment_success': "✅ پرداخت تایید شد!\n🎉 اشتراک شما فعال شد",
-        'payment_failed': "❌ تایید پرداخت ناموفق!",
-        'payment_timeout': "⏰ زمان تایید به پایان رسید",
-        'send_hash_button': "📤 ارسال هش تراکنش",
-        'enter_tx_hash': "📤 لطفا هش تراکنش خود را ارسال کنید:",
-        'hash_received': "✅ هش شما دریافت شد!\n⏳ تایید تا ۲۴ ساعت",
-        'admin_panel': "🛠 پنل مدیریت",
-        'make_paid': "💰 پولی کردن ربات",
-        'make_free': "🆓 رایگان کردن ربات",
-        'broadcast': "📢 ارسال پیام همگانی",
-        'verify_payments': "✅ تایید پرداخت‌ها",
-        'manage_keys': "🔑 مدیریت کلیدهای API",
-        'db_stats': "📊 آمار دیتابیس",
-        'paid_mode': "💰 ربات پولی شد\nکاربران برای ثبت لینک باید اشتراک خریداری کنند",
-        'free_mode': "🆓 ربات رایگان شد\nهمه کاربران می‌توانند لینک ثبت کنند",
-        'stats_info': "📊 **آمار شما:**\n📝 لینک‌های امروز: {links}/{max_links}\n👀 بازدیدهای امروز: {views}/{required}\n👥 رفرال‌ها: {referrals}\n📌 لینک‌های فعال: {active_links}",
-        'no_links_to_view': "✅ شما امروز {count} لینک را بازدید کردید!\n\n📌 لینک‌های جدید هر روز صبح جایگزین می‌شوند.",
-        'interaction_complete': "✅ شما {count} لینک را بازدید کردید!\n🎉 لینک‌های شما در تبادل ثبت شدند",
-        'free_register': "✅ در حالت رایگان، می‌توانید بدون اشتراک لینک ثبت کنید",
-        'payment_manual_review': "📤 هش شما برای بررسی ارسال شد\n⏳ تا ۲۴ ساعت",
-        'key_added': "✅ کلید جدید ثبت شد!",
-        'key_add_failed': "❌ ثبت کلید ناموفق!",
-        'key_list': "📋 **لیست کلیدهای API**",
-        'no_keys': "❌ هیچ کلیدی ثبت نشده است",
-        'copy_code': "📋 کپی کد",
-        'copy_link': "📋 کپی لینک",
-        'referral_challenge': "🏆 **چالش رفرال**\n🎁 جایزه: {reward} USDT\n👥 برندگان: {top_users}\n⏳ زمان باقی‌مانده: {time_left}",
-        'referral_rank': "📊 **رتبه شما**\n👤 شما: {user_ref} رفرال\n🏅 رتبه: #{rank}",
-        'you_won': "🎉 **تبریک! شما برنده شدید!**\n🎁 جایزه: {reward} USDT\n📤 آدرس کیف پول TRC20 خود را ارسال کنید:",
-        'address_received': "✅ آدرس شما دریافت شد!\n💰 مبلغ: {reward} USDT",
-        'reward_sent': "✅ **جایزه واریز شد!**\n💰 مبلغ: {reward} USDT",
-        'challenge_ended': "⏰ **چالش به پایان رسید!**\n🏆 برندگان:\n{winners}",
-        'no_challenge': "❌ چالش فعال نیست",
-        'challenge_started': "🏆 **چالش شروع شد!**\n⏳ مدت: {duration} روز\n🎁 جایزه: {reward} USDT",
-        'challenge_stopped': "⏹️ چالش متوقف شد",
-        'manage_challenge': "🏆 مدیریت چالش",
-        'start_challenge': "▶️ شروع چالش",
-        'stop_challenge': "⏹️ توقف چالش",
-        'challenge_status': "📊 وضعیت چالش",
-        'reward_winners': "💰 اعلام برندگان",
-        'enter_duration': "⏱️ مدت زمان چالش را به روز وارد کنید:",
-        'invalid_duration': "❌ عدد نامعتبر!",
-        'challenge_already_active': "⚠️ چالش در حال حاضر فعال است!",
-        'challenge_not_active': "⚠️ چالش فعال نیست!",
-        'winners_announced': "🏆 **برندگان:**\n{winners}\n🎁 هر کدام {reward} USDT",
-        'no_winners': "❌ هیچ برنده‌ایی وجود ندارد!",
-        'reward_paid': "✅ **جایزه به {count} نفر پرداخت شد!**",
-        'challenge_reward_set': "💰 مبلغ جایزه به {amount} USDT تنظیم شد",
-        'challenge_top_users_set': "👥 تعداد برندگان به {count} نفر تنظیم شد",
-        'new_referral_notification': "🎉 رفرال جدید!\n👤 {name}\n📊 تعداد رفرال‌ها: {count}",
-        'boost_info': "🚀 **ضریب بازدید:** {boost}x\n👥 رفرال‌ها: {ref_count}\n💡 از {threshold} رفرال، ضریب افزایش می‌یابد!",
-        'my_links': "📋 لینک‌های من",
-        'delete_link': "🗑️ حذف لینک",
-        'link_deleted': "✅ لینک با موفقیت حذف شد!",
-        'no_links': "❌ شما هیچ لینکی ثبت نکرده‌اید",
-        'admin_links': "📋 مدیریت لینک‌های کاربران",
-        'admin_delete_link': "🗑️ حذف لینک کاربر",
-        'enter_user_id': "🆔 لطفا آیدی کاربر را ارسال کنید:",
-        'enter_link_id': "🔗 لطفا آیدی لینک را ارسال کنید:",
-        'link_admin_deleted': "✅ لینک کاربر با موفقیت حذف شد!",
-        'all_links_viewed': "✅ شما تمام {count} لینک امروز را بازدید کردید!\n🎉 لینک‌های شما در تبادل ثبت شدند",
-        'daily_links_title': "👀 **لینک‌های امروز برای بازدید**\n\n",
-        'view_count': "👀 {views} بازدید",
-        'like_count': "❤️ {likes} لایک",
-        'no_links_available': "❌ در حال حاضر هیچ لینکی برای بازدید وجود ندارد!\n\n📌 لطفا ابتدا لینک خود را ثبت کنید تا لینک‌های دیگران را ببینید."
-    },
-    'en': {
-        'welcome': "👋 Welcome <b>{first_name}</b>!\n\n🎯 YouTube Views & Likes Exchange Bot",
-        'register_link': "📝 Register YouTube Link",
-        'my_stats': "📊 My Stats",
-        'referral': "👥 Referral System",
-        'change_language': "🌐 Change Language",
-        'view_links': "👀 View Links",
-        'register_link_prompt': "📤 Please send your YouTube video link:\n\n⚠️ You can register up to <b>{required_ref}</b> links per day",
-        'link_registered': "✅ Your link has been registered!\n\n📌 Click the button below to view links:",
-        'interaction_prompt': "👀 Today's links to view:\n\n{links}",
-        'link_viewed': "✅ Link viewed and liked!\n🎉 Your view has been recorded",
-        'referral_info': "👥 **Your Referral System**\n\n🔗 **Your Referral Code:**\n<code>{ref_code}</code>\n\n👤 **Referrals:** {ref_count} users\n\n📋 **Invite Link:**\n<code>{ref_link}</code>",
-        'referral_link': "https://t.me/SEGNALF_bot?start={ref_code}",
-        'referral_copied': "✅ Referral code copied!\n\n📋 Code: <code>{ref_code}</code>",
-        'referral_success': "🎉 **Congratulations!**\nYou were invited by <b>{ref_name}</b>!",
-        'referral_not_found': "❌ Invalid referral code",
-        'subscribed': "✅ Your subscription is active until {expiry}",
-        'not_subscribed': "❌ You don't have an active subscription\n💳 Please pay $50 to activate",
-        'payment_info': "💳 Please send <b>$50</b> USDT (TRC20) to:\n\n<code>{wallet}</code>",
-        'enter_source_address': "📤 Please enter your wallet address:",
-        'source_address_saved': "✅ Address saved!\n💳 Please send <b>$50</b> USDT:",
-        'payment_confirmed': "✅ Payment received!\n⏳ Checking...",
-        'payment_success': "✅ Payment verified!\n🎉 Your subscription is active",
-        'payment_failed': "❌ Payment verification failed!",
-        'payment_timeout': "⏰ Payment timeout",
-        'send_hash_button': "📤 Send Transaction Hash",
-        'enter_tx_hash': "📤 Please send your transaction hash:",
-        'hash_received': "✅ Hash received!\n⏳ Verification up to 24h",
-        'admin_panel': "🛠 Admin Panel",
-        'make_paid': "💰 Make Paid",
-        'make_free': "🆓 Make Free",
-        'broadcast': "📢 Broadcast",
-        'verify_payments': "✅ Verify Payments",
-        'manage_keys': "🔑 Manage API Keys",
-        'db_stats': "📊 Database Stats",
-        'paid_mode': "💰 Bot is now paid mode\nUsers need subscription to register links",
-        'free_mode': "🆓 Bot is now free mode\nAll users can register links",
-        'stats_info': "📊 **Your Statistics:**\n📝 Today's links: {links}/{max_links}\n👀 Today's views: {views}/{required}\n👥 Referrals: {referrals}\n📌 Active links: {active_links}",
-        'no_links_to_view': "✅ You have viewed {count} links today!\n\n📌 New links will be available tomorrow.",
-        'interaction_complete': "✅ You viewed {count} links!\n🎉 Your links are registered",
-        'free_register': "✅ In free mode, you can register links without subscription",
-        'payment_manual_review': "📤 Hash sent for review\n⏳ Up to 24 hours",
-        'key_added': "✅ New key added!",
-        'key_add_failed': "❌ Key addition failed!",
-        'key_list': "📋 **API Keys List**",
-        'no_keys': "❌ No keys registered",
-        'copy_code': "📋 Copy Code",
-        'copy_link': "📋 Copy Link",
-        'referral_challenge': "🏆 **Referral Challenge**\n🎁 Prize: {reward} USDT\n👥 Winners: {top_users}\n⏳ Time left: {time_left}",
-        'referral_rank': "📊 **Your Rank**\n👤 You: {user_ref} referrals\n🏅 Rank: #{rank}",
-        'you_won': "🎉 **Congratulations! You won!**\n🎁 Prize: {reward} USDT\n📤 Send your TRC20 wallet address:",
-        'address_received': "✅ Address received!\n💰 Amount: {reward} USDT",
-        'reward_sent': "✅ **Reward sent!**\n💰 Amount: {reward} USDT",
-        'challenge_ended': "⏰ **Challenge ended!**\n🏆 Winners:\n{winners}",
-        'no_challenge': "❌ No active challenge",
-        'challenge_started': "🏆 **Challenge started!**\n⏳ Duration: {duration} days\n🎁 Prize: {reward} USDT",
-        'challenge_stopped': "⏹️ Challenge stopped",
-        'manage_challenge': "🏆 Manage Challenge",
-        'start_challenge': "▶️ Start Challenge",
-        'stop_challenge': "⏹️ Stop Challenge",
-        'challenge_status': "📊 Challenge Status",
-        'reward_winners': "💰 Announce Winners",
-        'enter_duration': "⏱️ Enter challenge duration in days:",
-        'invalid_duration': "❌ Invalid number!",
-        'challenge_already_active': "⚠️ Challenge is already active!",
-        'challenge_not_active': "⚠️ Challenge is not active!",
-        'winners_announced': "🏆 **Winners:**\n{winners}\n🎁 Each gets {reward} USDT",
-        'no_winners': "❌ No winners found!",
-        'reward_paid': "✅ **Reward paid to {count} users!**",
-        'challenge_reward_set': "💰 Prize amount set to {amount} USDT",
-        'challenge_top_users_set': "👥 Winners count set to {count}",
-        'new_referral_notification': "🎉 New referral!\n👤 {name}\n📊 Total referrals: {count}",
-        'boost_info': "🚀 **View Boost:** {boost}x\n👥 Referrals: {ref_count}\n💡 Get {threshold} referrals for more boost!",
-        'my_links': "📋 My Links",
-        'delete_link': "🗑️ Delete Link",
-        'link_deleted': "✅ Link deleted successfully!",
-        'no_links': "❌ You haven't registered any links",
-        'admin_links': "📋 Manage User Links",
-        'admin_delete_link': "🗑️ Delete User Link",
-        'enter_user_id': "🆔 Please enter user ID:",
-        'enter_link_id': "🔗 Please enter link ID:",
-        'link_admin_deleted': "✅ User link deleted successfully!",
-        'all_links_viewed': "✅ You viewed all {count} links today!\n🎉 Your links are registered",
-        'daily_links_title': "👀 **Today's Links to View**\n\n",
-        'view_count': "👀 {views} views",
-        'like_count': "❤️ {likes} likes",
-        'no_links_available': "❌ No links available to view!\n\n📌 Please register your link first to see others' links."
-    },
-    'ar': {
-        'welcome': "👋 مرحباً <b>{first_name}</b>!\n\n🎯 بوت تبادل مشاهدات يوتيوب",
-        'register_link': "📝 تسجيل رابط يوتيوب",
-        'my_stats': "📊 إحصائياتي",
-        'referral': "👥 نظام الإحالة",
-        'change_language': "🌐 تغيير اللغة",
-        'view_links': "👀 عرض الروابط",
-        'register_link_prompt': "📤 الرجاء إرسال رابط فيديو يوتيوب:\n\n⚠️ يمكنك تسجيل <b>{required_ref}</b> رابط في اليوم",
-        'link_registered': "✅ تم تسجيل رابطك!\n\n📌 انقر على الزر أدناه لعرض الروابط:",
-        'interaction_prompt': "👀 روابط اليوم للمشاهدة:\n\n{links}",
-        'link_viewed': "✅ تم مشاهدة الرابط والإعجاب!\n🎉 تم تسجيل مشاهدتك",
-        'referral_info': "👥 **نظام الإحالة الخاص بك**\n\n🔗 **رمز الإحالة:**\n<code>{ref_code}</code>\n\n👤 **الإحالات:** {ref_count} مستخدم\n\n📋 **رابط الدعوة:**\n<code>{ref_link}</code>",
-        'referral_link': "https://t.me/SEGNALF_bot?start={ref_code}",
-        'referral_copied': "✅ تم نسخ رمز الإحالة!\n\n📋 الرمز: <code>{ref_code}</code>",
-        'referral_success': "🎉 **تهانينا!**\nتمت دعوتك بواسطة <b>{ref_name}</b>!",
-        'referral_not_found': "❌ رمز الإحالة غير صالح",
-        'subscribed': "✅ اشتراكك نشط حتى {expiry}",
-        'not_subscribed': "❌ ليس لديك اشتراك نشط\n💳 الرجاء دفع 50 دولاراً",
-        'payment_info': "💳 الرجاء إرسال <b>50 دولار</b> USDT:\n\n<code>{wallet}</code>",
-        'enter_source_address': "📤 الرجاء إدخال عنوان محفظتك:",
-        'source_address_saved': "✅ تم حفظ عنوانك!\n💳 الرجاء إرسال <b>50 دولار</b> USDT:",
-        'payment_confirmed': "✅ تم استلام الدفع!\n⏳ جاري التحقق...",
-        'payment_success': "✅ تم التحقق!\n🎉 اشتراكك نشط",
-        'payment_failed': "❌ فشل التحقق!",
-        'payment_timeout': "⏰ انتهت المهلة",
-        'send_hash_button': "📤 إرسال تجزئة المعاملة",
-        'enter_tx_hash': "📤 الرجاء إرسال تجزئة المعاملة:",
-        'hash_received': "✅ تم استلام التجزئة!\n⏳ التحقق حتى 24 ساعة",
-        'admin_panel': "🛠 لوحة التحكم",
-        'make_paid': "💰 جعل مدفوع",
-        'make_free': "🆓 جعل مجاني",
-        'broadcast': "📢 بث",
-        'verify_payments': "✅ التحقق من المدفوعات",
-        'manage_keys': "🔑 إدارة مفاتيح API",
-        'db_stats': "📊 إحصائيات قاعدة البيانات",
-        'paid_mode': "💰 البوت مدفوع\nيجب على المستخدمين شراء اشتراك لتسجيل الروابط",
-        'free_mode': "🆓 البوت مجاني\nيمكن لجميع المستخدمين تسجيل الروابط",
-        'stats_info': "📊 **إحصائياتك:**\n📝 روابط اليوم: {links}/{max_links}\n👀 مشاهدات اليوم: {views}/{required}\n👥 الإحالات: {referrals}\n📌 الروابط النشطة: {active_links}",
-        'no_links_to_view': "✅ لقد شاهدت {count} روابط اليوم!\n\n📌 روابط جديدة متاحة غداً.",
-        'interaction_complete': "✅ شاهدت {count} روابط!\n🎉 تم تسجيل روابطك",
-        'free_register': "✅ في الوضع المجاني، يمكنك تسجيل الروابط بدون اشتراك",
-        'payment_manual_review': "📤 تم إرسال التجزئة للمراجعة\n⏳ حتى 24 ساعة",
-        'key_added': "✅ تم إضافة المفتاح!",
-        'key_add_failed': "❌ فشلت إضافة المفتاح!",
-        'key_list': "📋 **قائمة مفاتيح API**",
-        'no_keys': "❌ لا توجد مفاتيح مسجلة",
-        'copy_code': "📋 نسخ الرمز",
-        'copy_link': "📋 نسخ الرابط",
-        'referral_challenge': "🏆 **تحدي الإحالة**\n🎁 الجائزة: {reward} USDT\n👥 الفائزون: {top_users}\n⏳ الوقت المتبقي: {time_left}",
-        'referral_rank': "📊 **ترتيبك**\n👤 أنت: {user_ref} إحالات\n🏅 الترتيب: #{rank}",
-        'you_won': "🎉 **تهانينا! لقد فزت!**\n🎁 الجائزة: {reward} USDT\n📤 أرسل عنوان محفظتك TRC20:",
-        'address_received': "✅ تم استلام العنوان!\n💰 المبلغ: {reward} USDT",
-        'reward_sent': "✅ **تم إرسال الجائزة!**\n💰 المبلغ: {reward} USDT",
-        'challenge_ended': "⏰ **انتهى التحدي!**\n🏆 الفائزون:\n{winners}",
-        'no_challenge': "❌ لا يوجد تحدي نشط",
-        'challenge_started': "🏆 **بدأ التحدي!**\n⏳ المدة: {duration} أيام\n🎁 الجائزة: {reward} USDT",
-        'challenge_stopped': "⏹️ تم إيقاف التحدي",
-        'manage_challenge': "🏆 إدارة التحدي",
-        'start_challenge': "▶️ بدء التحدي",
-        'stop_challenge': "⏹️ إيقاف التحدي",
-        'challenge_status': "📊 حالة التحدي",
-        'reward_winners': "💰 الإعلان عن الفائزين",
-        'enter_duration': "⏱️ أدخل مدة التحدي بالأيام:",
-        'invalid_duration': "❌ رقم غير صالح!",
-        'challenge_already_active': "⚠️ التحدي نشط بالفعل!",
-        'challenge_not_active': "⚠️ التحدي غير نشط!",
-        'winners_announced': "🏆 **الفائزون:**\n{winners}\n🎁 كل واحد يحصل على {reward} USDT",
-        'no_winners': "❌ لا يوجد فائزون!",
-        'reward_paid': "✅ **تم دفع الجائزة لـ {count} مستخدم!**",
-        'challenge_reward_set': "💰 تم تعيين مبلغ الجائزة إلى {amount} USDT",
-        'challenge_top_users_set': "👥 تم تعيين عدد الفائزين إلى {count}",
-        'new_referral_notification': "🎉 إحالة جديدة!\n👤 {name}\n📊 إجمالي الإحالات: {count}",
-        'boost_info': "🚀 **مضاعف المشاهدات:** {boost}x\n👥 الإحالات: {ref_count}\n💡 احصل على {threshold} إحالة لمزيد من المضاعف!",
-        'my_links': "📋 روابطي",
-        'delete_link': "🗑️ حذف الرابط",
-        'link_deleted': "✅ تم حذف الرابط بنجاح!",
-        'no_links': "❌ لم تقم بتسجيل أي روابط",
-        'admin_links': "📋 إدارة روابط المستخدمين",
-        'admin_delete_link': "🗑️ حذف رابط المستخدم",
-        'enter_user_id': "🆔 الرجاء إدخال معرف المستخدم:",
-        'enter_link_id': "🔗 الرجاء إدخال معرف الرابط:",
-        'link_admin_deleted': "✅ تم حذف رابط المستخدم بنجاح!",
-        'all_links_viewed': "✅ لقد شاهدت جميع الروابط {count} اليوم!\n🎉 تم تسجيل روابطك",
-        'daily_links_title': "👀 **روابط اليوم للمشاهدة**\n\n",
-        'view_count': "👀 {views} مشاهدة",
-        'like_count': "❤️ {likes} إعجاب",
-        'no_links_available': "❌ لا توجد روابط متاحة للمشاهدة!\n\n📌 يرجى تسجيل رابطك أولاً لمشاهدة روابط الآخرين."
-    },
-    'ru': {
-        'welcome': "👋 Добро пожаловать <b>{first_name}</b>!\n\n🎯 Бот обмена просмотров YouTube",
-        'register_link': "📝 Зарегистрировать ссылку YouTube",
-        'my_stats': "📊 Моя статистика",
-        'referral': "👥 Реферальная система",
-        'change_language': "🌐 Сменить язык",
-        'view_links': "👀 Просмотреть ссылки",
-        'register_link_prompt': "📤 Отправьте ссылку на видео YouTube:\n\n⚠️ Вы можете зарегистрировать <b>{required_ref}</b> ссылки в день",
-        'link_registered': "✅ Ваша ссылка зарегистрирована!\n\n📌 Нажмите кнопку ниже для просмотра ссылок:",
-        'interaction_prompt': "👀 Ссылки на сегодня для просмотра:\n\n{links}",
-        'link_viewed': "✅ Ссылка просмотрена и отлайкана!\n🎉 Ваш просмотр зарегистрирован",
-        'referral_info': "👥 **Ваша реферальная система**\n\n🔗 **Ваш реферальный код:**\n<code>{ref_code}</code>\n\n👤 **Рефералов:** {ref_count} пользователей\n\n📋 **Ссылка для приглашения:**\n<code>{ref_link}</code>",
-        'referral_link': "https://t.me/SEGNALF_bot?start={ref_code}",
-        'referral_copied': "✅ Реферальный код скопирован!\n\n📋 Код: <code>{ref_code}</code>",
-        'referral_success': "🎉 **Поздравляем!**\nВы приглашены <b>{ref_name}</b>!",
-        'referral_not_found': "❌ Неверный реферальный код",
-        'subscribed': "✅ Ваша подписка активна до {expiry}",
-        'not_subscribed': "❌ У вас нет активной подписки\n💳 Пожалуйста, оплатите 50$",
-        'payment_info': "💳 Отправьте <b>50$</b> USDT (TRC20):\n\n<code>{wallet}</code>",
-        'enter_source_address': "📤 Введите адрес вашего кошелька:",
-        'source_address_saved': "✅ Адрес сохранен!\n💳 Отправьте <b>50$</b> USDT:",
-        'payment_confirmed': "✅ Подтверждение оплаты получено!\n⏳ Проверка...",
-        'payment_success': "✅ Платеж подтвержден!\n🎉 Ваша подписка активна",
-        'payment_failed': "❌ Проверка платежа не удалась!",
-        'payment_timeout': "⏰ Время проверки истекло",
-        'send_hash_button': "📤 Отправить хэш транзакции",
-        'enter_tx_hash': "📤 Отправьте хэш вашей транзакции:",
-        'hash_received': "✅ Хэш получен!\n⏳ Проверка до 24 часов",
-        'admin_panel': "🛠 Панель управления",
-        'make_paid': "💰 Сделать платным",
-        'make_free': "🆓 Сделать бесплатным",
-        'broadcast': "📢 Рассылка",
-        'verify_payments': "✅ Проверить платежи",
-        'manage_keys': "🔑 Управление ключами API",
-        'db_stats': "📊 Статистика базы данных",
-        'paid_mode': "💰 Бот в платном режиме\nПользователи должны купить подписку",
-        'free_mode': "🆓 Бот в бесплатном режиме\nВсе пользователи могут регистрировать ссылки",
-        'stats_info': "📊 **Ваша статистика:**\n📝 Ссылок сегодня: {links}/{max_links}\n👀 Просмотров сегодня: {views}/{required}\n👥 Рефералов: {referrals}\n📌 Активных ссылок: {active_links}",
-        'no_links_to_view': "✅ Вы просмотрели {count} ссылок сегодня!\n\n📌 Новые ссылки будут доступны завтра.",
-        'interaction_complete': "✅ Вы просмотрели {count} ссылок!\n🎉 Ваши ссылки зарегистрированы",
-        'free_register': "✅ В бесплатном режиме вы можете регистрировать ссылки без подписки",
-        'payment_manual_review': "📤 Хэш отправлен на проверку\n⏳ До 24 часов",
-        'key_added': "✅ Ключ добавлен!",
-        'key_add_failed': "❌ Ошибка добавления ключа!",
-        'key_list': "📋 **Список ключей API**",
-        'no_keys': "❌ Ключи не зарегистрированы",
-        'copy_code': "📋 Копировать код",
-        'copy_link': "📋 Копировать ссылку",
-        'referral_challenge': "🏆 **Реферальный вызов**\n🎁 Приз: {reward} USDT\n👥 Победителей: {top_users}\n⏳ Осталось: {time_left}",
-        'referral_rank': "📊 **Ваш рейтинг**\n👤 Вы: {user_ref} рефералов\n🏅 Рейтинг: #{rank}",
-        'you_won': "🎉 **Поздравляем! Вы выиграли!**\n🎁 Приз: {reward} USDT\n📤 Отправьте адрес кошелька TRC20:",
-        'address_received': "✅ Адрес получен!\n💰 Сумма: {reward} USDT",
-        'reward_sent': "✅ **Приз отправлен!**\n💰 Сумма: {reward} USDT",
-        'challenge_ended': "⏰ **Вызов завершен!**\n🏆 Победители:\n{winners}",
-        'no_challenge': "❌ Нет активного вызова",
-        'challenge_started': "🏆 **Вызов начался!**\n⏳ Длительность: {duration} дней\n🎁 Приз: {reward} USDT",
-        'challenge_stopped': "⏹️ Вызов остановлен",
-        'manage_challenge': "🏆 Управление вызовом",
-        'start_challenge': "▶️ Начать вызов",
-        'stop_challenge': "⏹️ Остановить вызов",
-        'challenge_status': "📊 Статус вызова",
-        'reward_winners': "💰 Объявить победителей",
-        'enter_duration': "⏱️ Введите длительность вызова в днях:",
-        'invalid_duration': "❌ Неверное число!",
-        'challenge_already_active': "⚠️ Вызов уже активен!",
-        'challenge_not_active': "⚠️ Вызов не активен!",
-        'winners_announced': "🏆 **Победители:**\n{winners}\n🎁 Каждый получает {reward} USDT",
-        'no_winners': "❌ Нет победителей!",
-        'reward_paid': "✅ **Приз выплачен {count} пользователям!**",
-        'challenge_reward_set': "💰 Сумма приза установлена на {amount} USDT",
-        'challenge_top_users_set': "👥 Количество победителей установлено на {count}",
-        'new_referral_notification': "🎉 Новый реферал!\n👤 {name}\n📊 Всего рефералов: {count}",
-        'boost_info': "🚀 **Множитель просмотров:** {boost}x\n👥 Рефералов: {ref_count}\n💡 Получите {threshold} рефералов для увеличения!",
-        'my_links': "📋 Мои ссылки",
-        'delete_link': "🗑️ Удалить ссылку",
-        'link_deleted': "✅ Ссылка удалена!",
-        'no_links': "❌ Вы не зарегистрировали ни одной ссылки",
-        'admin_links': "📋 Управление ссылками пользователей",
-        'admin_delete_link': "🗑️ Удалить ссылку пользователя",
-        'enter_user_id': "🆔 Введите ID пользователя:",
-        'enter_link_id': "🔗 Введите ID ссылки:",
-        'link_admin_deleted': "✅ Ссылка пользователя удалена!",
-        'all_links_viewed': "✅ Вы просмотрели все {count} ссылок сегодня!\n🎉 Ваши ссылки зарегистрированы",
-        'daily_links_title': "👀 **Ссылки на сегодня для просмотра**\n\n",
-        'view_count': "👀 {views} просмотров",
-        'like_count': "❤️ {likes} лайков",
-        'no_links_available': "❌ Нет доступных ссылок для просмотра!\n\n📌 Пожалуйста, сначала зарегистрируйте свою ссылку."
-    },
-    'tr': {
-        'welcome': "👋 Hoş geldin <b>{first_name}</b>!\n\n🎯 YouTube Görüntülenme Takas Botu",
-        'register_link': "📝 YouTube Linki Kaydet",
-        'my_stats': "📊 İstatistiklerim",
-        'referral': "👥 Referans Sistemi",
-        'change_language': "🌐 Dili Değiştir",
-        'view_links': "👀 Linkleri Görüntüle",
-        'register_link_prompt': "📤 YouTube video linkinizi gönderin:\n\n⚠️ Günde <b>{required_ref}</b> link kaydedebilirsiniz",
-        'link_registered': "✅ Linkiniz kaydedildi!\n\n📌 Linkleri görüntülemek için aşağıdaki butona tıklayın:",
-        'interaction_prompt': "👀 Bugün görüntülenecek linkler:\n\n{links}",
-        'link_viewed': "✅ Link görüntülendi ve beğenildi!\n🎉 Görüntülenmeniz kaydedildi",
-        'referral_info': "👥 **Referans Sisteminiz**\n\n🔗 **Referans Kodunuz:**\n<code>{ref_code}</code>\n\n👤 **Referans Sayısı:** {ref_count} kullanıcı\n\n📋 **Davet Linki:**\n<code>{ref_link}</code>",
-        'referral_link': "https://t.me/SEGNALF_bot?start={ref_code}",
-        'referral_copied': "✅ Referans kodu kopyalandı!\n\n📋 Kod: <code>{ref_code}</code>",
-        'referral_success': "🎉 **Tebrikler!**\n<b>{ref_name}</b> tarafından davet edildiniz!",
-        'referral_not_found': "❌ Geçersiz referans kodu",
-        'subscribed': "✅ Aboneliğiniz {expiry} tarihine kadar aktif",
-        'not_subscribed': "❌ Aktif aboneliğiniz yok\n💳 Lütfen 50$ ödeyin",
-        'payment_info': "💳 <b>50$</b> USDT (TRC20) gönderin:\n\n<code>{wallet}</code>",
-        'enter_source_address': "📤 Cüzdan adresinizi girin:",
-        'source_address_saved': "✅ Adres kaydedildi!\n💳 <b>50$</b> USDT gönderin:",
-        'payment_confirmed': "✅ Ödeme alındı!\n⏳ Kontrol ediliyor...",
-        'payment_success': "✅ Ödeme onaylandı!\n🎉 Aboneliğiniz aktif",
-        'payment_failed': "❌ Ödeme doğrulaması başarısız!",
-        'payment_timeout': "⏰ Zaman aşımı",
-        'send_hash_button': "📤 İşlem Hash'i Gönder",
-        'enter_tx_hash': "📤 İşlem hash'inizi gönderin:",
-        'hash_received': "✅ Hash alındı!\n⏳ 24 saate kadar doğrulama",
-        'admin_panel': "🛠 Yönetim Paneli",
-        'make_paid': "💰 Ücretli Yap",
-        'make_free': "🆓 Ücretsiz Yap",
-        'broadcast': "📢 Yayın",
-        'verify_payments': "✅ Ödemeleri Doğrula",
-        'manage_keys': "🔑 API Anahtarlarını Yönet",
-        'db_stats': "📊 Veritabanı İstatistikleri",
-        'paid_mode': "💰 Bot ücretli modda\nKullanıcılar link kaydetmek için abonelik satın almalı",
-        'free_mode': "🆓 Bot ücretsiz modda\nTüm kullanıcılar link kaydedebilir",
-        'stats_info': "📊 **İstatistikleriniz:**\n📝 Bugünkü linkler: {links}/{max_links}\n👀 Bugünkü görüntülenmeler: {views}/{required}\n👥 Referanslar: {referrals}\n📌 Aktif linkler: {active_links}",
-        'no_links_to_view': "✅ Bugün {count} link görüntülediniz!\n\n📌 Yarın yeni linkler gelecek.",
-        'interaction_complete': "✅ {count} link görüntülediniz!\n🎉 Linkleriniz kaydedildi",
-        'free_register': "✅ Ücretsiz modda, aboneliksiz link kaydedebilirsiniz",
-        'payment_manual_review': "📤 Hash gönderildi\n⏳ 24 saate kadar doğrulama",
-        'key_added': "✅ Anahtar eklendi!",
-        'key_add_failed': "❌ Anahtar eklenemedi!",
-        'key_list': "📋 **API Anahtarları Listesi**",
-        'no_keys': "❌ Hiç anahtar kaydedilmedi",
-        'copy_code': "📋 Kodu Kopyala",
-        'copy_link': "📋 Linki Kopyala",
-        'referral_challenge': "🏆 **Referans Yarışması**\n🎁 Ödül: {reward} USDT\n👥 Kazananlar: {top_users}\n⏳ Kalan süre: {time_left}",
-        'referral_rank': "📊 **Sıralamanız**\n👤 Siz: {user_ref} referans\n🏅 Sıra: #{rank}",
-        'you_won': "🎉 **Tebrikler! Kazandınız!**\n🎁 Ödül: {reward} USDT\n📤 TRC20 cüzdan adresinizi gönderin:",
-        'address_received': "✅ Adres alındı!\n💰 Miktar: {reward} USDT",
-        'reward_sent': "✅ **Ödül gönderildi!**\n💰 Miktar: {reward} USDT",
-        'challenge_ended': "⏰ **Yarışma sona erdi!**\n🏆 Kazananlar:\n{winners}",
-        'no_challenge': "❌ Aktif yarışma yok",
-        'challenge_started': "🏆 **Yarışma başladı!**\n⏳ Süre: {duration} gün\n🎁 Ödül: {reward} USDT",
-        'challenge_stopped': "⏹️ Yarışma durduruldu",
-        'manage_challenge': "🏆 Yarışmayı Yönet",
-        'start_challenge': "▶️ Yarışmayı Başlat",
-        'stop_challenge': "⏹️ Yarışmayı Durdur",
-        'challenge_status': "📊 Yarışma Durumu",
-        'reward_winners': "💰 Kazananları Duyur",
-        'enter_duration': "⏱️ Yarışma süresini gün olarak girin:",
-        'invalid_duration': "❌ Geçersiz sayı!",
-        'challenge_already_active': "⚠️ Yarışma zaten aktif!",
-        'challenge_not_active': "⚠️ Yarışma aktif değil!",
-        'winners_announced': "🏆 **Kazananlar:**\n{winners}\n🎁 Her biri {reward} USDT alır",
-        'no_winners': "❌ Kazanan bulunamadı!",
-        'reward_paid': "✅ **Ödül {count} kullanıcıya ödendi!**",
-        'challenge_reward_set': "💰 Ödül miktarı {amount} USDT olarak ayarlandı",
-        'challenge_top_users_set': "👥 Kazanan sayısı {count} olarak ayarlandı",
-        'new_referral_notification': "🎉 Yeni referans!\n👤 {name}\n📊 Toplam referans: {count}",
-        'boost_info': "🚀 **Görüntülenme Çarpanı:** {boost}x\n👥 Referanslar: {ref_count}\n💡 {threshold} referans için daha fazla çarpan!",
-        'my_links': "📋 Linklerim",
-        'delete_link': "🗑️ Linki Sil",
-        'link_deleted': "✅ Link başarıyla silindi!",
-        'no_links': "❌ Hiç link kaydetmediniz",
-        'admin_links': "📋 Kullanıcı Linklerini Yönet",
-        'admin_delete_link': "🗑️ Kullanıcı Linkini Sil",
-        'enter_user_id': "🆔 Kullanıcı ID'sini girin:",
-        'enter_link_id': "🔗 Link ID'sini girin:",
-        'link_admin_deleted': "✅ Kullanıcı linki silindi!",
-        'all_links_viewed': "✅ Bugün {count} linkin tamamını görüntülediniz!\n🎉 Linkleriniz kaydedildi",
-        'daily_links_title': "👀 **Bugün Görüntülenecek Linkler**\n\n",
-        'view_count': "👀 {views} görüntülenme",
-        'like_count': "❤️ {likes} beğeni",
-        'no_links_available': "❌ Görüntülenecek link yok!\n\n📌 Lütfen önce linkinizi kaydedin."
+// ============================================
+// AUTH
+// ============================================
+async function login(username, password) {
+    try {
+        const res = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`
+        });
+        const data = await res.json();
+        if (data.access_token) {
+            token = data.access_token;
+            localStorage.setItem('token', token);
+            currentUser = data.user;
+            showToast('✅ خوش آمدید!');
+            showTab('feed');
+            connectWebSocket();
+            return true;
+        }
+        showToast('❌ ' + (data.detail || 'خطا'), 'error');
+        return false;
+    } catch (e) {
+        showToast('❌ خطا در ارتباط با سرور', 'error');
+        return false;
     }
 }
 
-# ==================== کش فوق‌مقیاس ====================
-class DistributedUltraCache:
-    __slots__ = ('shard_count', 'shards', 'shard_locks', 'max_size_per_shard', 'ttl', 'hits', 'misses', 'evictions')
-    
-    def __init__(self, max_size=10_000_000, ttl_seconds=600, shard_count=1000):
-        self.shard_count = shard_count
-        self.shards = [OrderedDict() for _ in range(shard_count)]
-        self.shard_locks = [asyncio.Lock() for _ in range(shard_count)]
-        self.max_size_per_shard = max_size // shard_count
-        self.ttl = ttl_seconds
-        self.hits = 0
-        self.misses = 0
-        self.evictions = 0
-        
-        logger.info(f"🚀 کش با {shard_count} شارد راه‌اندازی شد")
-    
-    def _get_shard(self, key: str) -> int:
-        return zlib.crc32(key.encode()) % self.shard_count
-    
-    async def get(self, key: str):
-        shard_idx = self._get_shard(key)
-        async with self.shard_locks[shard_idx]:
-            cache = self.shards[shard_idx]
-            if key in cache:
-                value, timestamp = cache[key]
-                if time.time() - timestamp < self.ttl:
-                    cache.move_to_end(key)
-                    self.hits += 1
-                    return value
-                else:
-                    del cache[key]
-                    self.evictions += 1
-            self.misses += 1
-            return None
-    
-    async def set(self, key: str, value, ttl: int = None):
-        shard_idx = self._get_shard(key)
-        async with self.shard_locks[shard_idx]:
-            cache = self.shards[shard_idx]
-            if key in cache:
-                cache.move_to_end(key)
-            else:
-                if len(cache) >= self.max_size_per_shard:
-                    cache.popitem(last=False)
-                    self.evictions += 1
-            actual_ttl = ttl if ttl else self.ttl
-            cache[key] = (value, time.time() + actual_ttl)
-    
-    async def delete(self, key: str):
-        shard_idx = self._get_shard(key)
-        async with self.shard_locks[shard_idx]:
-            cache = self.shards[shard_idx]
-            if key in cache:
-                del cache[key]
-                return True
-            return False
-    
-    async def get_stats(self) -> Dict:
-        total_items = sum(len(shard) for shard in self.shards)
-        return {
-            'total_items': total_items,
-            'shard_count': self.shard_count,
-            'max_size': self.shard_count * self.max_size_per_shard,
-            'hits': self.hits,
-            'misses': self.misses,
-            'hit_rate': (self.hits / max(1, self.hits + self.misses)) * 100,
-            'evictions': self.evictions,
-            'ttl': self.ttl
+async function register(username, email, password, fullName) {
+    try {
+        const res = await fetch('/api/auth/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, email, password, full_name: fullName })
+        });
+        const data = await res.json();
+        if (data.access_token) {
+            token = data.access_token;
+            localStorage.setItem('token', token);
+            currentUser = data.user;
+            showToast('✅ ثبت‌نام موفق!');
+            showTab('feed');
+            connectWebSocket();
+            return true;
         }
+        showToast('❌ ' + (data.detail || 'خطا'), 'error');
+        return false;
+    } catch (e) {
+        showToast('❌ خطا در ارتباط با سرور', 'error');
+        return false;
+    }
+}
 
-# ==================== دیتابیس فوق‌مقیاس ====================
-class UltraScalableDatabase:
-    __slots__ = ('db_path', 'shard_count', 'cache', 'shard_paths')
+function logout() {
+    token = '';
+    localStorage.removeItem('token');
+    currentUser = null;
+    if (ws) { ws.close(); ws = null; }
+    showToast('👋 خروج موفق');
+    showTab('feed');
+}
+
+// ============================================
+// TAB MANAGEMENT
+// ============================================
+function showTab(tab) {
+    currentTab = tab;
     
-    def __init__(self, db_path="bot_database.db", shard_count=1000):
-        self.db_path = db_path
-        self.shard_count = shard_count
-        self.cache = DistributedUltraCache(max_size=10_000_000, ttl_seconds=600, shard_count=1000)
+    // Highlight tab
+    document.querySelectorAll('.bottom-tabs .tab').forEach(t => {
+        t.classList.toggle('active', t.dataset.tab === tab);
+    });
+    
+    // Load content
+    const container = document.getElementById('content');
+    switch(tab) {
+        case 'feed': loadFeed(container); break;
+        case 'explore': loadExplore(container); break;
+        case 'upload': loadUpload(container); break;
+        case 'chat': loadChat(container); break;
+        case 'profile': loadProfile(container); break;
+        case 'admin': loadAdmin(container); break;
+        default: container.innerHTML = '<p>صفحه در حال ساخت...</p>';
+    }
+}
+
+// ============================================
+// FEED
+// ============================================
+async function loadFeed(container) {
+    if (!token) {
+        container.innerHTML = buildAuthForm();
+        return;
+    }
+    
+    container.innerHTML = `<div class="feed-container"><p style="text-align:center;padding:40px;">⏳ بارگذاری...</p></div>`;
+    
+    try {
+        const res = await fetch('/api/videos/feed?limit=20', {
+            headers: { 'token': token }
+        });
+        const data = await res.json();
         
-        self.shard_paths = []
-        for i in range(shard_count):
-            shard_dir = f"shards_{i // 100}"
-            os.makedirs(shard_dir, exist_ok=True)
-            shard_path = f"{shard_dir}/db_{i}.db"
-            self.shard_paths.append(shard_path)
-        
-        self._init_all_shards()
-        logger.info(f"🗄️ دیتابیس با {shard_count} شارد راه‌اندازی شد")
-    
-    def _get_shard(self, user_id: int) -> int:
-        return abs(user_id) % self.shard_count
-    
-    def _get_shard_path(self, shard_idx: int) -> str:
-        return self.shard_paths[shard_idx]
-    
-    def _init_all_shards(self):
-        for shard_idx in range(self.shard_count):
-            shard_path = self._get_shard_path(shard_idx)
-            self._init_shard_tables(shard_path)
-    
-    def _init_shard_tables(self, shard_path: str):
-        with sqlite3.connect(shard_path, timeout=60) as conn:
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA cache_size=500000")
-            conn.execute("PRAGMA mmap_size=30000000000")
-            conn.execute("PRAGMA temp_store=MEMORY")
-            conn.execute("PRAGMA page_size=8192")
-            
-            cursor = conn.cursor()
-            
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS users (
-                    user_id INTEGER PRIMARY KEY,
-                    username TEXT,
-                    first_name TEXT,
-                    last_name TEXT,
-                    language TEXT DEFAULT 'fa',
-                    referral_code TEXT UNIQUE,
-                    referred_by INTEGER,
-                    is_subscribed INTEGER DEFAULT 0,
-                    subscription_expiry TEXT,
-                    wallet_address TEXT,
-                    daily_link_count INTEGER DEFAULT 0,
-                    last_link_date TEXT,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    payment_address TEXT,
-                    referral_reward_address TEXT,
-                    referral_reward_received INTEGER DEFAULT 0,
-                    last_active TEXT DEFAULT CURRENT_TIMESTAMP,
-                    total_referrals INTEGER DEFAULT 0,
-                    daily_views INTEGER DEFAULT 0,
-                    last_view_date TEXT
-                )
-            """)
-            
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS youtube_links (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER,
-                    video_url TEXT UNIQUE,
-                    video_id TEXT,
-                    views_count INTEGER DEFAULT 0,
-                    likes_count INTEGER DEFAULT 0,
-                    daily_views INTEGER DEFAULT 0,
-                    daily_likes INTEGER DEFAULT 0,
-                    last_interaction_date TEXT,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    is_active INTEGER DEFAULT 1,
-                    boost_multiplier INTEGER DEFAULT 1,
-                    view_priority INTEGER DEFAULT 0,
-                    today_views INTEGER DEFAULT 0,
-                    today_likes INTEGER DEFAULT 0
-                )
-            """)
-            
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS interactions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    from_user INTEGER,
-                    to_link_id INTEGER,
-                    type TEXT CHECK(type IN ('view', 'like')),
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS link_distribution (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER,
-                    link_id INTEGER,
-                    assigned_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    viewed INTEGER DEFAULT 0,
-                    liked INTEGER DEFAULT 0,
-                    view_date TEXT DEFAULT CURRENT_DATE
-                )
-            """)
-            
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS transactions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER,
-                    tx_hash TEXT UNIQUE,
-                    from_address TEXT,
-                    amount REAL,
-                    status TEXT DEFAULT 'pending',
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    verified_at TEXT,
-                    payment_timeout TEXT,
-                    manual_review INTEGER DEFAULT 0,
-                    is_reward INTEGER DEFAULT 0
-                )
-            """)
-            
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS api_keys (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    key_value TEXT UNIQUE,
-                    is_active INTEGER DEFAULT 1,
-                    added_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    last_used TEXT,
-                    requests_count INTEGER DEFAULT 0,
-                    error_count INTEGER DEFAULT 0,
-                    notes TEXT
-                )
-            """)
-            
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS system_settings (
-                    key TEXT PRIMARY KEY,
-                    value TEXT,
-                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS referral_challenge (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    is_active INTEGER DEFAULT 0,
-                    start_date TEXT,
-                    end_date TEXT,
-                    reward_amount INTEGER DEFAULT 100,
-                    top_users INTEGER DEFAULT 10,
-                    winners_declared INTEGER DEFAULT 0,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS referral_challenge_winners (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER,
-                    referral_count INTEGER,
-                    reward_amount INTEGER,
-                    wallet_address TEXT,
-                    paid INTEGER DEFAULT 0,
-                    paid_at TEXT,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            
-            cursor.execute("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('is_paid', '0')")
-            cursor.execute("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('challenge_active', '0')")
-            cursor.execute("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('challenge_end_date', '')")
-            cursor.execute("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('challenge_reward', '100')")
-            cursor.execute("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('challenge_top_users', '10')")
-            cursor.execute("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('challenge_duration', '7')")
-            
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_ref_code ON users(referral_code)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_referred_by ON users(referred_by)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_subscription ON users(is_subscribed, subscription_expiry)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_links_user ON youtube_links(user_id, created_at)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_links_video_id ON youtube_links(video_id)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions(status, created_at)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_active ON users(last_active)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_winners_user ON referral_challenge_winners(user_id)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_winners_paid ON referral_challenge_winners(paid)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_distribution_user ON link_distribution(user_id)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_distribution_link ON link_distribution(link_id)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_interactions_from ON interactions(from_user)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_interactions_to ON interactions(to_link_id)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_total_ref ON users(total_referrals)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_links_priority ON youtube_links(view_priority, views_count)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_daily_views ON users(daily_views, last_view_date)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_links_today ON youtube_links(today_views, today_likes)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_links_active ON youtube_links(is_active, user_id)")
-            
-            conn.commit()
-    
-    @asynccontextmanager
-    async def get_connection(self, user_id: int = None):
-        if user_id is not None:
-            shard_idx = self._get_shard(user_id)
-            shard_path = self._get_shard_path(shard_idx)
-        else:
-            shard_path = self._get_shard_path(0)
-        
-        conn = sqlite3.connect(shard_path, timeout=60, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA cache_size=500000")
-        
-        try:
-            yield conn
-            conn.commit()
-        except Exception as e:
-            conn.rollback()
-            raise e
-        finally:
-            conn.close()
-    
-    def get_boost_multiplier(self, referral_count: int) -> int:
-        if referral_count >= REFERRAL_BOOST_THRESHOLD * 10:
-            return REFERRAL_BOOST_MULTIPLIER * 5
-        elif referral_count >= REFERRAL_BOOST_THRESHOLD * 5:
-            return REFERRAL_BOOST_MULTIPLIER * 3
-        elif referral_count >= REFERRAL_BOOST_THRESHOLD * 2:
-            return REFERRAL_BOOST_MULTIPLIER * 2
-        elif referral_count >= REFERRAL_BOOST_THRESHOLD:
-            return REFERRAL_BOOST_MULTIPLIER
-        else:
-            return 1
-    
-    async def get_user(self, user_id: int) -> Optional[Dict]:
-        cache_key = f"user_{user_id}"
-        cached = await self.cache.get(cache_key)
-        if cached:
-            return cached
-        
-        async with self.get_connection(user_id) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
-            row = cursor.fetchone()
-            if row:
-                user = dict(row)
-                await self.cache.set(cache_key, user, ttl=600)
-                return user
-        return None
-    
-    async def create_user(self, user_id: int, username: str = None, first_name: str = None, 
-                         last_name: str = None, referred_by: int = None) -> Dict:
-        referral_code = secrets.token_urlsafe(8)
-        
-        async with self.get_connection(user_id) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO users (user_id, username, first_name, last_name, referral_code, referred_by, last_active)
-                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            """, (user_id, username, first_name, last_name, referral_code, referred_by))
-            conn.commit()
-            
-            await self.cache.delete(f"user_{user_id}")
-            await self.cache.delete(f"ref_count_{user_id}")
-            
-            if referred_by:
-                await self.cache.delete(f"ref_count_{referred_by}")
-                await self.cache.delete(f"user_{referred_by}")
-                
-                async with self.get_connection(referred_by) as conn2:
-                    cursor2 = conn2.cursor()
-                    cursor2.execute("SELECT COUNT(*) as count FROM users WHERE referred_by = ?", (referred_by,))
-                    new_count = cursor2.fetchone()['count']
-                    await self.cache.set(f"ref_count_{referred_by}", new_count, ttl=120)
-                    
-                    cursor2.execute("UPDATE users SET total_referrals = ? WHERE user_id = ?", (new_count, referred_by))
-                    conn2.commit()
-        
-        return await self.get_user(user_id)
-    
-    async def get_user_referrals_count(self, user_id: int) -> int:
-        cache_key = f"ref_count_{user_id}"
-        cached = await self.cache.get(cache_key)
-        if cached is not None:
-            return cached
-        
-        async with self.get_connection(user_id) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) as count FROM users WHERE referred_by = ?", (user_id,))
-            count = cursor.fetchone()['count']
-            await self.cache.set(cache_key, count, ttl=120)
-            return count
-    
-    async def get_user_by_referral_code(self, referral_code: str) -> Optional[Dict]:
-        cache_key = f"ref_user_{referral_code}"
-        cached = await self.cache.get(cache_key)
-        if cached:
-            return cached
-        
-        for shard_idx in range(self.shard_count):
-            shard_path = self._get_shard_path(shard_idx)
-            try:
-                with sqlite3.connect(shard_path, timeout=10) as conn:
-                    conn.row_factory = sqlite3.Row
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT user_id, first_name FROM users WHERE referral_code = ?", (referral_code,))
-                    row = cursor.fetchone()
-                    if row:
-                        user = dict(row)
-                        await self.cache.set(cache_key, user, ttl=3600)
-                        return user
-            except:
-                pass
-        return None
-    
-    async def update_user_language(self, user_id: int, language: str):
-        async with self.get_connection(user_id) as conn:
-            cursor = conn.cursor()
-            cursor.execute("UPDATE users SET language = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?", (language, user_id))
-            conn.commit()
-            await self.cache.delete(f"user_{user_id}")
-    
-    async def update_user_subscription(self, user_id: int, months: int = 1):
-        expiry = datetime.now() + timedelta(days=30*months)
-        async with self.get_connection(user_id) as conn:
-            cursor = conn.cursor()
-            cursor.execute("UPDATE users SET is_subscribed = 1, subscription_expiry = ? WHERE user_id = ?", (expiry.isoformat(), user_id))
-            conn.commit()
-            await self.cache.delete(f"user_{user_id}")
-    
-    async def set_user_payment_address(self, user_id: int, address: str):
-        async with self.get_connection(user_id) as conn:
-            cursor = conn.cursor()
-            cursor.execute("UPDATE users SET payment_address = ? WHERE user_id = ?", (address, user_id))
-            conn.commit()
-            await self.cache.delete(f"user_{user_id}")
-    
-    async def set_user_reward_address(self, user_id: int, address: str):
-        async with self.get_connection(user_id) as conn:
-            cursor = conn.cursor()
-            cursor.execute("UPDATE users SET referral_reward_address = ? WHERE user_id = ?", (address, user_id))
-            conn.commit()
-            await self.cache.delete(f"user_{user_id}")
-    
-    async def mark_reward_received(self, user_id: int):
-        async with self.get_connection(user_id) as conn:
-            cursor = conn.cursor()
-            cursor.execute("UPDATE users SET referral_reward_received = 1 WHERE user_id = ?", (user_id,))
-            conn.commit()
-            await self.cache.delete(f"user_{user_id}")
-    
-    def _extract_video_id(self, url: str) -> Optional[str]:
-        patterns = [
-            r'(?:youtube\.com\/watch\?v=)([\w-]+)',
-            r'(?:youtu\.be\/)([\w-]+)',
-            r'(?:youtube\.com\/embed\/)([\w-]+)',
-            r'(?:youtube\.com\/shorts\/)([\w-]+)'
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, url)
-            if match:
-                return match.group(1)
-        return None
-    
-    async def add_youtube_link(self, user_id: int, video_url: str) -> Tuple[bool, str]:
-        video_id = self._extract_video_id(video_url)
-        if not video_id:
-            return False, "لینک یوتیوب نامعتبر است"
-        
-        cache_key = f"video_{video_id}"
-        cached = await self.cache.get(cache_key)
-        if cached:
-            return False, "این ویدیو قبلاً ثبت شده است"
-        
-        async with self.get_connection(user_id) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT id FROM youtube_links WHERE video_id = ?", (video_id,))
-            if cursor.fetchone():
-                await self.cache.set(cache_key, True, ttl=3600)
-                return False, "این ویدیو قبلاً ثبت شده است"
-        
-        today = datetime.now().date().isoformat()
-        async with self.get_connection(user_id) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) as count FROM youtube_links WHERE user_id = ? AND DATE(created_at) = ?", (user_id, today))
-            result = cursor.fetchone()
-            if result['count'] >= MAX_YOUTUBE_LINKS_PER_DAY:
-                return False, f"امروز بیش از حد مجاز ({MAX_YOUTUBE_LINKS_PER_DAY}) لینک ثبت کرده‌اید"
-            
-            ref_count = await self.get_user_referrals_count(user_id)
-            boost = self.get_boost_multiplier(ref_count)
-            
-            cursor.execute("""
-                INSERT INTO youtube_links (user_id, video_url, video_id, boost_multiplier)
-                VALUES (?, ?, ?, ?)
-            """, (user_id, video_url, video_id, boost))
-            conn.commit()
-            await self.cache.set(cache_key, True, ttl=3600)
-            return True, f"✅ لینک با موفقیت ثبت شد! ضریب بازدید: {boost}x"
-    
-    async def get_user_links(self, user_id: int, limit: int = 10) -> List[Dict]:
-        cache_key = f"user_links_{user_id}_{limit}"
-        cached = await self.cache.get(cache_key)
-        if cached:
-            return cached
-        
-        async with self.get_connection(user_id) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT * FROM youtube_links 
-                WHERE user_id = ? AND is_active = 1 
-                ORDER BY created_at DESC LIMIT ?
-            """, (user_id, limit))
-            links = [dict(row) for row in cursor.fetchall()]
-            await self.cache.set(cache_key, links, ttl=300)
-            return links
-    
-    async def get_all_links_count(self) -> int:
-        total = 0
-        for shard_idx in range(self.shard_count):
-            shard_path = self._get_shard_path(shard_idx)
-            try:
-                with sqlite3.connect(shard_path, timeout=5) as conn:
-                    conn.row_factory = sqlite3.Row
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT COUNT(*) as count FROM youtube_links WHERE is_active = 1")
-                    total += cursor.fetchone()['count']
-            except:
-                pass
-        return total
-    
-    async def get_daily_links_for_user(self, user_id: int, count: int = DAILY_INTERACTIONS_REQUIRED) -> List[Dict]:
-        """دریافت لینک‌های روزانه برای کاربر - لینک‌های کاربران دیگر را نمایش می‌دهد"""
-        today = datetime.now().date().isoformat()
-        cache_key = f"daily_links_{user_id}_{today}"
-        cached = await self.cache.get(cache_key)
-        if cached:
-            return cached
-        
-        async with self.get_connection(user_id) as conn:
-            cursor = conn.cursor()
-            
-            # ===== دریافت لینک‌های کاربران دیگر =====
-            cursor.execute("""
-                SELECT 
-                    yl.id,
-                    yl.user_id,
-                    yl.video_url,
-                    yl.video_id,
-                    yl.views_count,
-                    yl.likes_count,
-                    yl.created_at,
-                    yl.is_active,
-                    yl.boost_multiplier,
-                    u.first_name,
-                    u.username,
-                    (SELECT COUNT(*) FROM link_distribution 
-                     WHERE link_id = yl.id AND DATE(view_date) = ? AND viewed = 1) as today_views,
-                    (SELECT COUNT(*) FROM youtube_links 
-                     WHERE user_id = u.user_id AND is_active = 1) as user_link_count
-                FROM youtube_links yl
-                JOIN users u ON yl.user_id = u.user_id
-                WHERE yl.user_id != ? 
-                  AND yl.is_active = 1
-                  AND yl.id NOT IN (
-                      SELECT link_id FROM link_distribution 
-                      WHERE user_id = ? AND DATE(view_date) = ? AND viewed = 1
-                  )
-                  AND EXISTS (
-                      SELECT 1 FROM youtube_links 
-                      WHERE user_id = yl.user_id AND is_active = 1
-                  )
-                ORDER BY 
-                    today_views ASC,
-                    yl.views_count ASC,
-                    user_link_count ASC,
-                    yl.created_at ASC
-                LIMIT ?
-            """, (today, user_id, user_id, today, count * 5))
-            
-            links = [dict(row) for row in cursor.fetchall()]
-            
-            # ===== اگر هیچ لینکی نبود، لینک‌های همه کاربران دیگر را بگیر =====
-            if not links:
-                cursor.execute("""
-                    SELECT 
-                        yl.id,
-                        yl.user_id,
-                        yl.video_url,
-                        yl.video_id,
-                        yl.views_count,
-                        yl.likes_count,
-                        yl.created_at,
-                        yl.is_active,
-                        yl.boost_multiplier,
-                        u.first_name,
-                        u.username,
-                        999999 as today_views,
-                        (SELECT COUNT(*) FROM youtube_links 
-                         WHERE user_id = u.user_id AND is_active = 1) as user_link_count
-                    FROM youtube_links yl
-                    JOIN users u ON yl.user_id = u.user_id
-                    WHERE yl.user_id != ? 
-                      AND yl.is_active = 1
-                      AND yl.id NOT IN (
-                          SELECT link_id FROM link_distribution 
-                          WHERE user_id = ? AND DATE(view_date) = ? AND viewed = 1
-                      )
-                    ORDER BY 
-                        yl.views_count ASC,
-                        user_link_count ASC,
-                        yl.created_at ASC
-                    LIMIT ?
-                """, (user_id, user_id, today, count * 5))
-                links = [dict(row) for row in cursor.fetchall()]
-            
-            # ===== اگر باز هم هیچ لینکی نبود، همه لینک‌های فعال را بگیر (به جز خود کاربر) =====
-            if not links:
-                cursor.execute("""
-                    SELECT 
-                        yl.id,
-                        yl.user_id,
-                        yl.video_url,
-                        yl.video_id,
-                        yl.views_count,
-                        yl.likes_count,
-                        yl.created_at,
-                        yl.is_active,
-                        yl.boost_multiplier,
-                        u.first_name,
-                        u.username,
-                        0 as today_views,
-                        (SELECT COUNT(*) FROM youtube_links 
-                         WHERE user_id = u.user_id AND is_active = 1) as user_link_count
-                    FROM youtube_links yl
-                    JOIN users u ON yl.user_id = u.user_id
-                    WHERE yl.user_id != ? 
-                      AND yl.is_active = 1
-                    ORDER BY yl.views_count ASC, yl.created_at ASC
-                    LIMIT ?
-                """, (user_id, count * 5))
-                links = [dict(row) for row in cursor.fetchall()]
-            
-            # ===== انتخاب لینک‌ها با اولویت کاربران مختلف =====
-            selected_links = []
-            used_users = set()
-            
-            for link in links:
-                if link['user_id'] not in used_users and len(selected_links) < count:
-                    selected_links.append(link)
-                    used_users.add(link['user_id'])
-            
-            # ===== اگر باز هم کم بود، از هر لینکی استفاده کن =====
-            if len(selected_links) < count:
-                for link in links:
-                    if len(selected_links) < count and link['id'] not in [sl['id'] for sl in selected_links]:
-                        selected_links.append(link)
-            
-            # ===== ثبت توزیع برای لینک‌های انتخاب شده =====
-            for link in selected_links:
-                cursor.execute("""
-                    INSERT OR IGNORE INTO link_distribution (user_id, link_id, view_date)
-                    VALUES (?, ?, ?)
-                """, (user_id, link['id'], today))
-            
-            conn.commit()
-            await self.cache.set(cache_key, selected_links, ttl=3600)
-            return selected_links
-    
-    async def mark_link_viewed(self, user_id: int, link_id: int):
-        """ثبت بازدید کاربر از لینک"""
-        today = datetime.now().date().isoformat()
-        
-        async with self.get_connection(user_id) as conn:
-            cursor = conn.cursor()
-            
-            # ===== بروزرسانی توزیع =====
-            cursor.execute("""
-                UPDATE link_distribution 
-                SET viewed = 1, liked = 1
-                WHERE user_id = ? AND link_id = ? AND viewed = 0
-            """, (user_id, link_id))
-            
-            if cursor.rowcount == 0:
-                return False, "این لینک قبلاً بازدید شده است"
-            
-            # ===== دریافت ضریب بازدید =====
-            cursor.execute("SELECT boost_multiplier FROM youtube_links WHERE id = ?", (link_id,))
-            result = cursor.fetchone()
-            boost = result['boost_multiplier'] if result else 1
-            
-            # ===== بروزرسانی لینک =====
-            cursor.execute("""
-                UPDATE youtube_links 
-                SET views_count = views_count + ?,
-                    daily_views = daily_views + ?,
-                    today_views = today_views + ?,
-                    likes_count = likes_count + ?,
-                    daily_likes = daily_likes + ?,
-                    today_likes = today_likes + ?,
-                    last_interaction_date = CURRENT_TIMESTAMP
-                WHERE id = ?
-            """, (boost, boost, boost, boost, boost, boost, link_id))
-            
-            # ===== بروزرسانی کاربر =====
-            cursor.execute("""
-                UPDATE users 
-                SET daily_views = daily_views + ?,
-                    last_view_date = ?
-                WHERE user_id = ?
-            """, (boost, today, user_id))
-            
-            conn.commit()
-            
-            # ===== پاک کردن کش =====
-            await self.cache.delete(f"daily_links_{user_id}_{today}")
-            await self.cache.delete(f"daily_stats_{user_id}_{today}")
-            
-            return True, "✅ بازدید و لایک با موفقیت ثبت شد!"
-    
-    async def get_user_daily_stats(self, user_id: int) -> Dict:
-        today = datetime.now().date().isoformat()
-        cache_key = f"daily_stats_{user_id}_{today}"
-        cached = await self.cache.get(cache_key)
-        if cached:
-            return cached
-        
-        async with self.get_connection(user_id) as conn:
-            cursor = conn.cursor()
-            
-            # ===== تعداد لینک‌های ثبت شده امروز =====
-            cursor.execute("""
-                SELECT COUNT(*) as links_count FROM youtube_links 
-                WHERE user_id = ? AND DATE(created_at) = ?
-            """, (user_id, today))
-            links = cursor.fetchone()['links_count']
-            
-            # ===== تعداد بازدیدهای امروز =====
-            cursor.execute("""
-                SELECT COUNT(*) as views_count FROM link_distribution 
-                WHERE user_id = ? AND DATE(view_date) = ? AND viewed = 1
-            """, (user_id, today))
-            views = cursor.fetchone()['views_count']
-            
-            stats = {
-                'links': links,
-                'views': views,
-                'required': DAILY_INTERACTIONS_REQUIRED,
-                'max_links': MAX_YOUTUBE_LINKS_PER_DAY
-            }
-            await self.cache.set(cache_key, stats, ttl=1800)
-            return stats
-    
-    async def delete_user_link(self, user_id: int, link_id: int) -> Tuple[bool, str]:
-        """حذف لینک توسط کاربر"""
-        async with self.get_connection(user_id) as conn:
-            cursor = conn.cursor()
-            
-            # ===== بررسی مالکیت =====
-            cursor.execute("""
-                SELECT user_id FROM youtube_links 
-                WHERE id = ? AND user_id = ? AND is_active = 1
-            """, (link_id, user_id))
-            
-            if not cursor.fetchone():
-                return False, "❌ این لینک متعلق به شما نیست یا وجود ندارد"
-            
-            # ===== حذف لینک =====
-            cursor.execute("""
-                UPDATE youtube_links SET is_active = 0 
-                WHERE id = ? AND user_id = ?
-            """, (link_id, user_id))
-            conn.commit()
-            
-            await self.cache.delete(f"user_links_{user_id}_10")
-            return True, "✅ لینک شما با موفقیت حذف شد!"
-    
-    async def admin_delete_link(self, link_id: int) -> Tuple[bool, str]:
-        """حذف لینک توسط ادمین"""
-        for shard_idx in range(self.shard_count):
-            shard_path = self._get_shard_path(shard_idx)
-            try:
-                with sqlite3.connect(shard_path, timeout=10) as conn:
-                    conn.row_factory = sqlite3.Row
-                    cursor = conn.cursor()
-                    
-                    cursor.execute("""
-                        SELECT user_id FROM youtube_links 
-                        WHERE id = ? AND is_active = 1
-                    """, (link_id,))
-                    result = cursor.fetchone()
-                    
-                    if result:
-                        cursor.execute("""
-                            UPDATE youtube_links SET is_active = 0 
-                            WHERE id = ?
-                        """, (link_id,))
-                        conn.commit()
-                        await self.cache.delete(f"user_links_{result['user_id']}_10")
-                        return True, f"✅ لینک {link_id} با موفقیت حذف شد!"
-            except:
-                pass
-        
-        return False, "❌ لینک مورد نظر یافت نشد!"
-    
-    async def admin_get_user_links(self, target_user_id: int) -> List[Dict]:
-        """دریافت لینک‌های یک کاربر توسط ادمین"""
-        shard_idx = self._get_shard(target_user_id)
-        shard_path = self._get_shard_path(shard_idx)
-        
-        try:
-            with sqlite3.connect(shard_path, timeout=10) as conn:
-                conn.row_factory = sqlite3.Row
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT id, video_url, views_count, likes_count, created_at 
-                    FROM youtube_links 
-                    WHERE user_id = ? AND is_active = 1
-                    ORDER BY created_at DESC
-                """, (target_user_id,))
-                return [dict(row) for row in cursor.fetchall()]
-        except:
-            return []
-    
-    # ===== متدهای چالش رفرال =====
-    async def start_referral_challenge(self, duration_days: int, reward: int = 100, top_users: int = 10):
-        challenge_active = await self.get_system_setting('challenge_active')
-        if challenge_active == '1':
-            return False, "چالش در حال حاضر فعال است"
-        
-        end_date = (datetime.now() + timedelta(days=duration_days)).isoformat()
-        
-        await self.set_system_setting('challenge_active', '1')
-        await self.set_system_setting('challenge_end_date', end_date)
-        await self.set_system_setting('challenge_reward', str(reward))
-        await self.set_system_setting('challenge_top_users', str(top_users))
-        await self.set_system_setting('challenge_duration', str(duration_days))
-        
-        shard_path = self._get_shard_path(0)
-        with sqlite3.connect(shard_path, timeout=10) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO referral_challenge (is_active, start_date, end_date, reward_amount, top_users)
-                VALUES (1, CURRENT_TIMESTAMP, ?, ?, ?)
-            """, (end_date, reward, top_users))
-            conn.commit()
-        
-        return True, f"چالش رفرال با جایزه {reward} USDT برای {top_users} نفر شروع شد"
-    
-    async def stop_referral_challenge(self):
-        challenge_active = await self.get_system_setting('challenge_active')
-        if challenge_active != '1':
-            return False, "چالش فعال نیست"
-        
-        await self.set_system_setting('challenge_active', '0')
-        
-        shard_path = self._get_shard_path(0)
-        with sqlite3.connect(shard_path, timeout=10) as conn:
-            cursor = conn.cursor()
-            cursor.execute("UPDATE referral_challenge SET is_active = 0 WHERE is_active = 1")
-            conn.commit()
-        
-        return True, "چالش متوقف شد"
-    
-    async def get_challenge_status(self) -> Dict:
-        is_active = await self.get_system_setting('challenge_active') == '1'
-        end_date_str = await self.get_system_setting('challenge_end_date') or ''
-        reward = int(await self.get_system_setting('challenge_reward') or '100')
-        top_users = int(await self.get_system_setting('challenge_top_users') or '10')
-        duration = int(await self.get_system_setting('challenge_duration') or '7')
-        
-        time_left = "نامشخص"
-        if end_date_str:
-            try:
-                end_date = datetime.fromisoformat(end_date_str)
-                if datetime.now() < end_date:
-                    remaining = end_date - datetime.now()
-                    days = remaining.days
-                    hours = remaining.seconds // 3600
-                    time_left = f"{days} روز و {hours} ساعت"
-                else:
-                    time_left = "به پایان رسیده"
-            except:
-                time_left = "نامشخص"
-        
-        top_users_list = await self.get_challenge_top_users(limit=top_users)
-        
-        return {
-            'is_active': is_active,
-            'end_date': end_date_str,
-            'time_left': time_left,
-            'reward': reward,
-            'top_users': top_users,
-            'duration': duration,
-            'top_users_list': top_users_list
+        if (!Array.isArray(data)) {
+            container.innerHTML = `<div class="feed-container"><p style="text-align:center;padding:40px;">${data.detail || 'خطا'}</p></div>`;
+            return;
         }
-    
-    async def get_challenge_top_users(self, limit: int = 10) -> List[Dict]:
-        all_users_refs = []
         
-        for shard_idx in range(self.shard_count):
-            shard_path = self._get_shard_path(shard_idx)
-            try:
-                with sqlite3.connect(shard_path, timeout=10) as conn:
-                    conn.row_factory = sqlite3.Row
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        SELECT u.user_id, u.first_name, u.username, u.total_referrals,
-                               (SELECT COUNT(*) FROM users WHERE referred_by = u.user_id) as referral_count
-                        FROM users u
-                        WHERE u.user_id != 0
-                        ORDER BY referral_count DESC
-                        LIMIT ?
-                    """, (limit * 2,))
-                    for row in cursor.fetchall():
-                        all_users_refs.append(dict(row))
-            except:
-                pass
-        
-        all_users_refs.sort(key=lambda x: x.get('referral_count', 0), reverse=True)
-        return all_users_refs[:limit]
-    
-    async def declare_challenge_winners(self) -> List[Dict]:
-        challenge_active = await self.get_system_setting('challenge_active')
-        if challenge_active == '1':
-            return None, "چالش هنوز فعال است"
-        
-        top_users = int(await self.get_system_setting('challenge_top_users') or '10')
-        reward = int(await self.get_system_setting('challenge_reward') or '100')
-        
-        top_users_list = await self.get_challenge_top_users(limit=top_users)
-        
-        if not top_users_list:
-            return None, "هیچ کاربری یافت نشد"
-        
-        winners = []
-        for user in top_users_list:
-            if user.get('referral_count', 0) > 0:
-                winners.append({
-                    'user_id': user['user_id'],
-                    'first_name': user.get('first_name', 'کاربر'),
-                    'referral_count': user.get('referral_count', 0),
-                    'reward_amount': reward
-                })
-                
-                shard_path = self._get_shard_path(self._get_shard(user['user_id']))
-                with sqlite3.connect(shard_path, timeout=10) as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        INSERT INTO referral_challenge_winners (user_id, referral_count, reward_amount)
-                        VALUES (?, ?, ?)
-                    """, (user['user_id'], user.get('referral_count', 0), reward))
-                    conn.commit()
-        
-        await self.set_system_setting('challenge_winners_declared', '1')
-        
-        return winners, "برندگان با موفقیت اعلام شدند"
-    
-    async def get_challenge_winner_by_user(self, user_id: int) -> Optional[Dict]:
-        shard_idx = self._get_shard(user_id)
-        shard_path = self._get_shard_path(shard_idx)
-        try:
-            with sqlite3.connect(shard_path, timeout=10) as conn:
-                conn.row_factory = sqlite3.Row
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT * FROM referral_challenge_winners 
-                    WHERE user_id = ? AND paid = 0 
-                    ORDER BY created_at DESC LIMIT 1
-                """, (user_id,))
-                row = cursor.fetchone()
-                if row:
-                    return dict(row)
-        except:
-            pass
-        return None
-    
-    async def mark_winner_paid(self, user_id: int):
-        shard_idx = self._get_shard(user_id)
-        shard_path = self._get_shard_path(shard_idx)
-        try:
-            with sqlite3.connect(shard_path, timeout=10) as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE referral_challenge_winners 
-                    SET paid = 1, paid_at = CURRENT_TIMESTAMP 
-                    WHERE user_id = ? AND paid = 0
-                """, (user_id,))
-                conn.commit()
-                await self.mark_reward_received(user_id)
-                return True
-        except:
-            pass
-        return False
-    
-    async def get_all_users(self) -> List[int]:
-        all_users = []
-        for shard_idx in range(self.shard_count):
-            shard_path = self._get_shard_path(shard_idx)
-            try:
-                with sqlite3.connect(shard_path, timeout=10) as conn:
-                    conn.row_factory = sqlite3.Row
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT user_id FROM users")
-                    all_users.extend([row['user_id'] for row in cursor.fetchall()])
-            except:
-                pass
-        return all_users
-    
-    async def get_all_active_users(self) -> List[int]:
-        all_users = []
-        for shard_idx in range(self.shard_count):
-            shard_path = self._get_shard_path(shard_idx)
-            try:
-                with sqlite3.connect(shard_path, timeout=10) as conn:
-                    conn.row_factory = sqlite3.Row
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT user_id FROM users WHERE is_subscribed = 1")
-                    all_users.extend([row['user_id'] for row in cursor.fetchall()])
-            except:
-                pass
-        return all_users
-    
-    async def get_system_setting(self, key: str) -> Optional[str]:
-        cache_key = f"system_{key}"
-        cached = await self.cache.get(cache_key)
-        if cached:
-            return cached
-        
-        shard_path = self._get_shard_path(0)
-        with sqlite3.connect(shard_path, timeout=10) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute("SELECT value FROM system_settings WHERE key = ?", (key,))
-            result = cursor.fetchone()
-            if result:
-                value = result['value']
-                await self.cache.set(cache_key, value, ttl=3600)
-                return value
-        return None
-    
-    async def set_system_setting(self, key: str, value: str):
-        shard_path = self._get_shard_path(0)
-        with sqlite3.connect(shard_path, timeout=10) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT OR REPLACE INTO system_settings (key, value, updated_at)
-                VALUES (?, ?, CURRENT_TIMESTAMP)
-            """, (key, value))
-            conn.commit()
-            await self.cache.set(f"system_{key}", value, ttl=3600)
-    
-    async def is_paid_mode(self) -> bool:
-        value = await self.get_system_setting('is_paid')
-        return value == '1'
-    
-    async def save_api_key(self, key_value: str, notes: str = ""):
-        async with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("INSERT OR IGNORE INTO api_keys (key_value, notes) VALUES (?, ?)", (key_value, notes))
-            conn.commit()
-    
-    async def get_db_stats(self) -> Dict:
-        total_users = 0
-        total_links = 0
-        total_transactions = 0
-        
-        for shard_idx in range(self.shard_count):
-            shard_path = self._get_shard_path(shard_idx)
-            try:
-                with sqlite3.connect(shard_path, timeout=5) as conn:
-                    conn.row_factory = sqlite3.Row
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT COUNT(*) as count FROM users")
-                    total_users += cursor.fetchone()['count']
-                    cursor.execute("SELECT COUNT(*) as count FROM youtube_links")
-                    total_links += cursor.fetchone()['count']
-                    cursor.execute("SELECT COUNT(*) as count FROM transactions")
-                    total_transactions += cursor.fetchone()['count']
-            except:
-                pass
-        
-        cache_stats = await self.cache.get_stats()
-        return {
-            'shard_count': self.shard_count,
-            'total_users': total_users,
-            'total_links': total_links,
-            'total_transactions': total_transactions,
-            'cache': cache_stats
+        if (data.length === 0) {
+            container.innerHTML = `
+                <div class="feed-container">
+                    <div style="text-align:center;padding:60px 20px;">
+                        <div style="font-size:48px;">📹</div>
+                        <h3 style="margin:16px 0;">هنوز ویدیویی در فید شما نیست</h3>
+                        <p style="color:#8e8e8e;">افراد را دنبال کنید یا اولین ویدیو را آپلود کنید</p>
+                        <button class="btn-upload" onclick="showTab('explore')" style="margin-top:16px;background:#0095f6;color:white;border:none;padding:10px 30px;border-radius:8px;font-size:16px;cursor:pointer;">🔍 جستجو</button>
+                    </div>
+                </div>
+            `;
+            return;
         }
-
-# ==================== مدیریت کلیدهای API ====================
-class AdvancedAPIManager:
-    def __init__(self, api_keys: List[str]):
-        self.api_keys = api_keys
-        self.key_stats = {}
-        self.lock = asyncio.Lock()
-        self.global_requests = 0
-        self.global_errors = 0
-        self.global_success = 0
-        self.start_time = time.time()
         
-        for key in api_keys:
-            self.key_stats[key] = {
-                'requests': 0, 'errors': 0, 'success': 0,
-                'rate_limits': 0, 'last_used': 0, 'cooldown_until': 0,
-                'weight': 1.0, 'active': True,
-                'response_times': [], 'consecutive_errors': 0,
-                'total_requests': 0, 'error_rate': 0.0,
-                'added_at': time.time()
+        let html = '<div class="feed-container">';
+        for (const v of data) {
+            html += buildPost(v);
+        }
+        html += '</div>';
+        container.innerHTML = html;
+        
+        // اتصال event listener برای کامنت‌ها
+        document.querySelectorAll('.comment-form button').forEach(btn => {
+            btn.onclick = function() {
+                const videoId = this.dataset.videoId;
+                const input = document.getElementById(`comment-input-${videoId}`);
+                if (input && input.value.trim()) {
+                    addComment(videoId, input.value.trim());
+                }
+            };
+        });
+        document.querySelectorAll('.comment-form input').forEach(inp => {
+            inp.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter') {
+                    const videoId = this.dataset.videoId;
+                    if (this.value.trim()) {
+                        addComment(videoId, this.value.trim());
+                    }
+                }
+            });
+        });
+        
+    } catch (e) {
+        container.innerHTML = `<div class="feed-container"><p style="text-align:center;padding:40px;">❌ خطا: ${e.message}</p></div>`;
+    }
+}
+
+function buildPost(v) {
+    const isLiked = v.is_liked ? 'liked' : '';
+    const likeIcon = v.is_liked ? '❤️' : '🤍';
+    const videoSrc = v.video_url || '';
+    const thumb = v.thumbnail_url || '';
+    const avatar = v.user_avatar || '';
+    const username = v.username || 'کاربر';
+    const time = new Date(v.created_at).toLocaleDateString('fa-IR');
+    
+    return `
+        <div class="post" id="post-${v.id}">
+            <div class="post-header">
+                <div class="avatar">${avatar ? `<img src="${avatar}" alt="">` : '📷'}</div>
+                <span class="username">${username}</span>
+                ${v.is_verified ? '<span class="verified">✓</span>' : ''}
+                <span class="time">${time}</span>
+            </div>
+            <div class="post-video">
+                <video src="${videoSrc}" controls poster="${thumb}" preload="metadata"></video>
+                ${v.duration ? `<span class="duration">${Math.floor(v.duration/60)}:${String(v.duration%60).padStart(2,'0')}</span>` : ''}
+            </div>
+            <div class="post-actions">
+                <button class="btn ${isLiked}" onclick="likeVideo(${v.id})">${likeIcon}</button>
+                <button class="btn" onclick="document.getElementById('comment-input-${v.id}').focus()">💬</button>
+                <button class="btn" onclick="shareVideo('${v.video_url}')">🔗</button>
+                <div class="stats">
+                    <span>❤️ ${v.likes_count || 0}</span>
+                    <span>💬 ${v.comments_count || 0}</span>
+                    <span>👁️ ${v.views || 0}</span>
+                </div>
+            </div>
+            <div class="post-caption">
+                <span class="uname">${username}</span>
+                <span class="text">${v.description || ''}</span>
+            </div>
+            <div class="post-comments" id="comments-${v.id}">
+                <div id="comments-list-${v.id}"></div>
+                <div class="comment-form">
+                    <input id="comment-input-${v.id}" data-video-id="${v.id}" placeholder="کامنت بنویسید...">
+                    <button data-video-id="${v.id}">ارسال</button>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+// ============================================
+// EXPLORE
+// ============================================
+async function loadExplore(container) {
+    container.innerHTML = `
+        <div style="max-width:600px;margin:16px auto;padding:0 16px;">
+            <div style="background:white;border-radius:8px;border:1px solid #dbdbdb;padding:16px;">
+                <input id="search-input" placeholder="🔍 جستجوی کاربران..." style="width:100%;padding:12px;border:1px solid #dbdbdb;border-radius:8px;font-size:16px;">
+                <div id="search-results" style="margin-top:12px;"></div>
+            </div>
+            <h3 style="margin:16px 0 12px;">🔥 ویدیوهای محبوب</h3>
+            <div id="explore-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:2px;"></div>
+        </div>
+    `;
+    
+    // جستجو
+    document.getElementById('search-input').addEventListener('input', async function() {
+        const q = this.value.trim();
+        if (q.length < 2) {
+            document.getElementById('search-results').innerHTML = '';
+            return;
+        }
+        try {
+            const res = await fetch(`/api/admin/users?search=${encodeURIComponent(q)}&limit=10`, {
+                headers: { 'token': token }
+            });
+            const data = await res.json();
+            if (data.users) {
+                let html = '';
+                for (const u of data.users) {
+                    html += `
+                        <div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid #efefef;">
+                            <div style="width:36px;height:36px;border-radius:50%;background:#ddd;"></div>
+                            <div>
+                                <div style="font-weight:600;">${u.full_name || u.username}</div>
+                                <div style="color:#8e8e8e;font-size:12px;">@${u.username}</div>
+                            </div>
+                            <button onclick="followUser(${u.id})" style="margin-right:auto;background:#0095f6;color:white;border:none;padding:4px 16px;border-radius:4px;cursor:pointer;">دنبال کردن</button>
+                        </div>
+                    `;
+                }
+                document.getElementById('search-results').innerHTML = html;
             }
+        } catch (e) {}
+    });
     
-    async def get_best_key(self) -> Tuple[str, Dict]:
-        async with self.lock:
-            current_time = time.time()
-            available_keys = []
-            
-            for key in self.api_keys:
-                stats = self.key_stats[key]
-                if not stats['active'] or current_time < stats['cooldown_until']:
-                    continue
-                
-                score = (
-                    stats['error_rate'] * 5000 +
-                    (sum(stats['response_times']) / max(1, len(stats['response_times']))) * 20 if stats['response_times'] else 0 +
-                    stats['requests'] * 0.1 -
-                    stats['weight'] * 100 +
-                    (current_time - stats['last_used']) * 0.01
-                )
-                available_keys.append((score, key, stats))
-            
-            if not available_keys:
-                return self.api_keys[0], self.key_stats[self.api_keys[0]]
-            
-            available_keys.sort(key=lambda x: x[0])
-            best_key = available_keys[0][1]
-            best_stats = available_keys[0][2]
-            
-            best_stats['requests'] += 1
-            best_stats['total_requests'] += 1
-            best_stats['last_used'] = current_time
-            self.global_requests += 1
-            
-            return best_key, best_stats
-    
-    async def report_success(self, api_key: str, response_time: float = 0):
-        async with self.lock:
-            if api_key in self.key_stats:
-                stats = self.key_stats[api_key]
-                stats['success'] += 1
-                stats['consecutive_errors'] = 0
-                self.global_success += 1
-                if response_time > 0:
-                    stats['response_times'].append(response_time)
-                    if len(stats['response_times']) > 100:
-                        stats['response_times'] = stats['response_times'][-50:]
-                if stats['errors'] > 0:
-                    stats['errors'] = max(0, stats['errors'] - 1)
-    
-    async def report_error(self, api_key: str, error_type: str = 'unknown'):
-        async with self.lock:
-            if api_key in self.key_stats:
-                stats = self.key_stats[api_key]
-                stats['errors'] += 1
-                stats['consecutive_errors'] += 1
-                self.global_errors += 1
-                
-                if error_type == 'rate_limit':
-                    stats['rate_limits'] += 1
-                    if stats['rate_limits'] > 3:
-                        stats['cooldown_until'] = time.time() + 180
-                        stats['weight'] *= 0.5
-                elif error_type == 'timeout':
-                    stats['weight'] *= 0.8
-                    if stats['consecutive_errors'] > 3:
-                        stats['cooldown_until'] = time.time() + 60
-                elif error_type == 'invalid':
-                    stats['active'] = False
-                    stats['weight'] = 0
-                    stats['cooldown_until'] = time.time() + 3600
-                
-                if stats['consecutive_errors'] > 5:
-                    stats['cooldown_until'] = time.time() + 120
-                    stats['weight'] *= 0.5
-                if stats['weight'] < 0.01:
-                    stats['active'] = False
-    
-    async def add_api_key(self, new_key: str) -> bool:
-        async with self.lock:
-            if new_key in self.api_keys:
-                return False
-            self.api_keys.append(new_key)
-            self.key_stats[new_key] = {
-                'requests': 0, 'errors': 0, 'success': 0,
-                'rate_limits': 0, 'last_used': 0, 'cooldown_until': 0,
-                'weight': 1.0, 'active': True,
-                'response_times': [], 'consecutive_errors': 0,
-                'total_requests': 0, 'error_rate': 0.0,
-                'added_at': time.time()
+    // ویدیوهای محبوب
+    try {
+        const res = await fetch('/api/videos/feed?limit=20', {
+            headers: { 'token': token }
+        });
+        const data = await res.json();
+        if (Array.isArray(data)) {
+            const sorted = [...data].sort((a,b) => (b.likes_count || 0) - (a.likes_count || 0)).slice(0, 12);
+            let html = '';
+            for (const v of sorted) {
+                html += `
+                    <div style="aspect-ratio:1;background:#ddd;overflow:hidden;position:relative;">
+                        <video src="${v.video_url}" style="width:100%;height:100%;object-fit:cover;" muted></video>
+                        <div style="position:absolute;bottom:4px;right:4px;background:rgba(0,0,0,0.7);color:white;padding:2px 8px;border-radius:4px;font-size:12px;">❤️ ${v.likes_count || 0}</div>
+                    </div>
+                `;
             }
-            return True
+            document.getElementById('explore-grid').innerHTML = html;
+        }
+    } catch (e) {}
+}
+
+// ============================================
+// UPLOAD
+// ============================================
+function loadUpload(container) {
+    if (!token) {
+        container.innerHTML = buildAuthForm();
+        return;
+    }
     
-    async def remove_api_key(self, api_key: str) -> bool:
-        async with self.lock:
-            if api_key in self.api_keys:
-                self.api_keys.remove(api_key)
-                del self.key_stats[api_key]
-                return True
-            return False
+    container.innerHTML = `
+        <div class="upload-container">
+            <div class="upload-box">
+                <div class="icon">📤</div>
+                <h3>آپلود ویدیو جدید</h3>
+                <p>حداکثر ۱۰ مگابایت، تا ۳ دقیقه</p>
+                <input type="file" id="video-file-input" accept="video/*">
+                <button class="btn-upload" onclick="document.getElementById('video-file-input').click()">انتخاب فایل</button>
+                <div id="file-info" style="margin-top:12px;color:#8e8e8e;font-size:14px;"></div>
+            </div>
+            <div class="upload-form" id="upload-form" style="display:none;">
+                <input id="upload-title" placeholder="عنوان (اختیاری)">
+                <textarea id="upload-desc" placeholder="توضیحات..."></textarea>
+                <div class="checkbox">
+                    <input type="checkbox" id="upload-private">
+                    <label for="upload-private">خصوصی (فقط فالوکنندگان)</label>
+                </div>
+                <button class="btn-upload" onclick="uploadVideo()" style="width:100%;background:#0095f6;color:white;border:none;padding:12px;border-radius:8px;font-size:16px;cursor:pointer;">📤 آپلود</button>
+                <div id="upload-progress" style="margin-top:12px;text-align:center;"></div>
+            </div>
+        </div>
+    `;
     
-    async def toggle_api_key(self, api_key: str) -> bool:
-        async with self.lock:
-            if api_key in self.key_stats:
-                self.key_stats[api_key]['active'] = not self.key_stats[api_key]['active']
-                return True
-            return False
+    document.getElementById('video-file-input').addEventListener('change', function() {
+        const file = this.files[0];
+        if (file) {
+            document.getElementById('file-info').textContent = `📁 ${file.name} (${(file.size/1024/1024).toFixed(2)} مگابایت)`;
+            document.getElementById('upload-form').style.display = 'block';
+        }
+    });
+}
+
+async function uploadVideo() {
+    const fileInput = document.getElementById('video-file-input');
+    const file = fileInput.files[0];
+    if (!file) {
+        showToast('❌ فایلی انتخاب نشده', 'error');
+        return;
+    }
     
-    async def get_stats(self) -> Dict:
-        async with self.lock:
-            stats = {
-                'total_keys': len(self.api_keys),
-                'active_keys': len([k for k in self.key_stats if self.key_stats[k]['active']]),
-                'total_requests': self.global_requests,
-                'total_errors': self.global_errors,
-                'total_success': self.global_success,
-                'success_rate': (self.global_success / max(1, self.global_requests)) * 100,
-                'uptime_seconds': time.time() - self.start_time,
-                'keys': {}
+    if (file.size > 10 * 1024 * 1024) {
+        showToast('❌ حجم فایل بیشتر از ۱۰ مگابایت است', 'error');
+        return;
+    }
+    
+    const title = document.getElementById('upload-title').value;
+    const desc = document.getElementById('upload-desc').value;
+    const isPrivate = document.getElementById('upload-private').checked;
+    
+    const formData = new FormData();
+    formData.append('video', file);
+    if (title) formData.append('title', title);
+    if (desc) formData.append('description', desc);
+    if (isPrivate) formData.append('is_private', 'true');
+    
+    document.getElementById('upload-progress').textContent = '⏳ در حال آپلود...';
+    
+    try {
+        const res = await fetch('/api/videos/upload', {
+            method: 'POST',
+            headers: { 'token': token },
+            body: formData
+        });
+        const data = await res.json();
+        if (data.success) {
+            showToast('✅ ویدیو با موفقیت آپلود شد!');
+            document.getElementById('upload-progress').textContent = '✅ آپلود کامل!';
+            document.getElementById('video-file-input').value = '';
+            document.getElementById('upload-title').value = '';
+            document.getElementById('upload-desc').value = '';
+            document.getElementById('upload-form').style.display = 'none';
+            document.getElementById('file-info').textContent = '';
+            setTimeout(() => showTab('feed'), 1000);
+        } else {
+            showToast('❌ ' + (data.detail || 'خطا'), 'error');
+            document.getElementById('upload-progress').textContent = '';
+        }
+    } catch (e) {
+        showToast('❌ خطا: ' + e.message, 'error');
+        document.getElementById('upload-progress').textContent = '';
+    }
+}
+
+// ============================================
+// CHAT
+// ============================================
+let chatWith = null;
+let chatMessages = [];
+
+function loadChat(container) {
+    if (!token) {
+        container.innerHTML = buildAuthForm();
+        return;
+    }
+    
+    container.innerHTML = `
+        <div class="chat-container">
+            <div id="chat-list-view">
+                <h3 style="margin-bottom:12px;">💬 پیام‌ها</h3>
+                <div class="chat-list" id="chat-list"></div>
+            </div>
+            <div id="chat-messages-view" style="display:none;">
+                <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+                    <button onclick="backToChatList()" style="background:none;border:none;font-size:20px;cursor:pointer;">←</button>
+                    <span id="chat-partner-name" style="font-weight:600;"></span>
+                    <span id="chat-partner-status" style="color:#8e8e8e;font-size:12px;"></span>
+                </div>
+                <div class="chat-messages" id="chat-messages"></div>
+                <div class="chat-input">
+                    <input id="chat-input" placeholder="پیام بنویسید..." onkeydown="if(event.key==='Enter') sendMessage()">
+                    <button onclick="sendMessage()" id="chat-send-btn">ارسال</button>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    loadConversations();
+}
+
+async function loadConversations() {
+    try {
+        const res = await fetch('/api/messages/conversations', {
+            headers: { 'token': token }
+        });
+        const data = await res.json();
+        const list = document.getElementById('chat-list');
+        if (!Array.isArray(data) || data.length === 0) {
+            list.innerHTML = '<div style="padding:20px;text-align:center;color:#8e8e8e;">هنوز پیامی ندارید</div>';
+            return;
+        }
+        let html = '';
+        for (const c of data) {
+            const unreadBadge = c.unread_count > 0 ? `<span class="badge">${c.unread_count}</span>` : '';
+            const onlineDot = c.is_online ? '<span class="online"></span>' : '';
+            html += `
+                <div class="chat-item" onclick="openChat(${c.user_id}, '${c.username}')">
+                    <div class="avatar">${c.avatar_url ? `<img src="${c.avatar_url}">` : '👤'}</div>
+                    <div class="info">
+                        <div class="name">${c.username} ${onlineDot}</div>
+                        <div class="last-msg">${c.last_message || ''}</div>
+                    </div>
+                    ${unreadBadge}
+                </div>
+            `;
+        }
+        list.innerHTML = html;
+    } catch (e) {}
+}
+
+function backToChatList() {
+    chatWith = null;
+    document.getElementById('chat-list-view').style.display = 'block';
+    document.getElementById('chat-messages-view').style.display = 'none';
+    loadConversations();
+}
+
+function openChat(userId, username) {
+    chatWith = userId;
+    document.getElementById('chat-list-view').style.display = 'none';
+    document.getElementById('chat-messages-view').style.display = 'block';
+    document.getElementById('chat-partner-name').textContent = username;
+    document.getElementById('chat-partner-status').textContent = 'آفلاین';
+    
+    // بررسی آنلاین بودن
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'online_check', user_id: userId }));
+    }
+    
+    loadMessages(userId);
+}
+
+async function loadMessages(userId) {
+    try {
+        const res = await fetch(`/api/messages/${userId}?limit=50`, {
+            headers: { 'token': token }
+        });
+        const data = await res.json();
+        chatMessages = data;
+        renderMessages();
+    } catch (e) {}
+}
+
+function renderMessages() {
+    const container = document.getElementById('chat-messages');
+    let html = '';
+    for (const m of chatMessages) {
+        const cls = m.is_mine ? 'mine' : 'other';
+        const time = new Date(m.created_at).toLocaleTimeString('fa-IR');
+        html += `
+            <div class="msg ${cls}">
+                ${m.content}
+                <span class="time">${time}</span>
+            </div>
+        `;
+    }
+    container.innerHTML = html;
+    container.scrollTop = container.scrollHeight;
+}
+
+function sendMessage() {
+    const input = document.getElementById('chat-input');
+    const content = input.value.trim();
+    if (!content || !chatWith) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+        showToast('❌ اتصال به سرور چت برقرار نیست', 'error');
+        connectWebSocket();
+        return;
+    }
+    
+    ws.send(JSON.stringify({
+        type: 'message',
+        receiver_id: chatWith,
+        content: content
+    }));
+    
+    input.value = '';
+    
+    // نمایش موقت
+    chatMessages.push({
+        id: Date.now(),
+        sender_id: currentUser?.id || 0,
+        receiver_id: chatWith,
+        content: content,
+        is_read: false,
+        created_at: new Date().toISOString(),
+        is_mine: true
+    });
+    renderMessages();
+}
+
+// ============================================
+// PROFILE
+// ============================================
+async function loadProfile(container) {
+    if (!token) {
+        container.innerHTML = buildAuthForm();
+        return;
+    }
+    
+    container.innerHTML = `<div class="profile-container"><p style="text-align:center;padding:40px;">⏳ بارگذاری...</p></div>`;
+    
+    try {
+        const res = await fetch('/api/auth/me', {
+            headers: { 'token': token }
+        });
+        const user = await res.json();
+        if (!user.id) {
+            container.innerHTML = buildAuthForm();
+            return;
+        }
+        
+        currentUser = user;
+        
+        let html = `
+            <div class="profile-container">
+                <div class="profile-header">
+                    <div class="avatar">${user.avatar_url ? `<img src="${user.avatar_url}">` : '📷'}</div>
+                    <div class="info">
+                        <div class="name">${user.full_name || user.username}</div>
+                        <div class="username">@${user.username}</div>
+                        <div class="bio">${user.bio || ''}</div>
+                        <div style="margin-top:4px;">
+                            ${user.is_premium ? '<span style="color:#f9c74f;font-weight:600;">⭐ ویژه</span>' : ''}
+                            ${user.is_verified ? '<span style="color:#0095f6;font-weight:600;">✓ تایید شده</span>' : ''}
+                        </div>
+                    </div>
+                    <div>
+                        <button onclick="showEditProfile()" style="background:#0095f6;color:white;border:none;padding:6px 16px;border-radius:4px;cursor:pointer;">ویرایش</button>
+                        <button onclick="logout()" style="background:#ed4956;color:white;border:none;padding:6px 16px;border-radius:4px;cursor:pointer;margin-top:4px;">خروج</button>
+                    </div>
+                </div>
+                <div class="profile-stats">
+                    <div class="stat"><div class="num">${user.videos_count || 0}</div><div class="label">ویدیو</div></div>
+                    <div class="stat"><div class="num">${user.followers_count || 0}</div><div class="label">دنبال‌کننده</div></div>
+                    <div class="stat"><div class="num">${user.following_count || 0}</div><div class="label">دنبال‌شونده</div></div>
+                </div>
+                <div class="profile-grid" id="profile-grid"></div>
+            </div>
+        `;
+        container.innerHTML = html;
+        
+        // بارگذاری ویدیوهای کاربر
+        try {
+            const feedRes = await fetch('/api/videos/feed?limit=30', {
+                headers: { 'token': token }
+            });
+            const videos = await feedRes.json();
+            if (Array.isArray(videos)) {
+                const userVideos = videos.filter(v => v.user_id === user.id);
+                let gridHtml = '';
+                for (const v of userVideos) {
+                    gridHtml += `
+                        <div class="item">
+                            <video src="${v.video_url}" style="width:100%;height:100%;object-fit:cover;" muted></video>
+                            <div class="overlay">
+                                <span>❤️ ${v.likes_count || 0}</span>
+                                <span>💬 ${v.comments_count || 0}</span>
+                            </div>
+                        </div>
+                    `;
+                }
+                document.getElementById('profile-grid').innerHTML = gridHtml || '<div style="grid-column:1/-1;text-align:center;padding:40px;color:#8e8e8e;">هنوز ویدیویی آپلود نکردید</div>';
             }
-            for key in self.api_keys:
-                key_stats = self.key_stats[key].copy()
-                key_stats['key_preview'] = f"{key[:8]}...{key[-4:]}"
-                key_stats['response_time_avg'] = (
-                    sum(key_stats['response_times']) / len(key_stats['response_times'])
-                    if key_stats['response_times'] else 0
-                )
-                stats['keys'][key] = key_stats
-            return stats
+        } catch (e) {}
+        
+    } catch (e) {
+        container.innerHTML = `<div class="profile-container"><p>❌ خطا: ${e.message}</p></div>`;
+    }
+}
 
-# ==================== API ترون ====================
-class TronAPI:
-    def __init__(self, api_keys: List[str]):
-        self.api_manager = AdvancedAPIManager(api_keys)
-        self.base_url = TRON_API_URL
-        self.sessions = {}
-        self.cache = DistributedUltraCache(max_size=100_000, ttl_seconds=300, shard_count=50)
-    
-    async def get_session(self, api_key: str):
-        if api_key not in self.sessions:
-            self.sessions[api_key] = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=30),
-                headers={"TRON-PRO-API-KEY": api_key}
-            )
-        return self.sessions[api_key]
-    
-    async def verify_transaction(self, tx_hash: str, user_id: int, owner_wallet: str, from_address: str = None) -> bool:
-        cache_key = f"tx_{tx_hash}"
-        cached = await self.cache.get(cache_key)
-        if cached is not None:
-            return cached
-        
-        for attempt in range(3):
-            try:
-                api_key, stats = await self.api_manager.get_best_key()
-                if not api_key:
-                    await asyncio.sleep(2 ** attempt)
-                    continue
-                
-                start_time = time.time()
-                session = await self.get_session(api_key)
-                url = f"{self.base_url}/v1/transactions/{tx_hash}"
-                
-                async with session.get(url) as response:
-                    response_time = time.time() - start_time
-                    
-                    if response.status == 429:
-                        await self.api_manager.report_error(api_key, 'rate_limit')
-                        await asyncio.sleep(min(2 ** attempt * 5, 60))
-                        continue
-                    if response.status == 403:
-                        await self.api_manager.report_error(api_key, 'invalid')
-                        continue
-                    if response.status != 200:
-                        await self.api_manager.report_error(api_key, 'unknown')
-                        continue
-                    
-                    data = await response.json()
-                    if not data.get('data'):
-                        await self.cache.set(cache_key, False, ttl=300)
-                        return False
-                    
-                    tx_data = data['data'][0]
-                    contracts = tx_data.get('raw_data', {}).get('contract', [])
-                    
-                    for contract in contracts:
-                        value = contract.get('parameter', {}).get('value', {})
-                        to_address = value.get('to_address')
-                        if to_address and to_address == owner_wallet:
-                            amount = value.get('amount', 0) / 1e6
-                            if amount >= SUBSCRIPTION_PRICE_USD - 1:
-                                if from_address:
-                                    owner_addr = value.get('owner_address')
-                                    if owner_addr and owner_addr == from_address:
-                                        await self.api_manager.report_success(api_key, response_time)
-                                        await self.cache.set(cache_key, True, ttl=3600)
-                                        return True
-                                else:
-                                    await self.api_manager.report_success(api_key, response_time)
-                                    await self.cache.set(cache_key, True, ttl=3600)
-                                    return True
-                    
-                    await self.cache.set(cache_key, False, ttl=300)
-                    return False
-                    
-            except Exception as e:
-                logger.error(f"خطا در بررسی تراکنش (تلاش {attempt+1}): {e}")
-                await asyncio.sleep(2 ** attempt)
-        
-        await self.cache.set(cache_key, False, ttl=60)
-        return False
-    
-    async def test_api_key(self, api_key: str) -> Tuple[bool, str]:
-        try:
-            session = await self.get_session(api_key)
-            url = f"{self.base_url}/v1/accounts/{OWNER_WALLET}"
-            async with session.get(url) as response:
-                if response.status == 200:
-                    return True, "✅ کلید معتبر است"
-                elif response.status == 403:
-                    return False, "❌ کلید نامعتبر است"
-                else:
-                    return False, f"❌ خطا: {response.status}"
-        except Exception as e:
-            return False, f"❌ خطا: {str(e)[:50]}"
-    
-    async def add_api_key(self, new_key: str) -> Tuple[bool, str]:
-        is_valid, message = await self.test_api_key(new_key)
-        if not is_valid:
-            return False, message
-        success = await self.api_manager.add_api_key(new_key)
-        if success:
-            return True, "✅ کلید با موفقیت اضافه شد"
-        return False, "❌ این کلید قبلاً اضافه شده است"
-    
-    async def remove_api_key(self, api_key: str) -> Tuple[bool, str]:
-        success = await self.api_manager.remove_api_key(api_key)
-        if success:
-            return True, "✅ کلید با موفقیت حذف شد"
-        return False, "❌ کلید یافت نشد"
-    
-    async def toggle_api_key(self, api_key: str) -> Tuple[bool, str]:
-        success = await self.api_manager.toggle_api_key(api_key)
-        if success:
-            stats = await self.api_manager.get_stats()
-            status = "فعال" if stats['keys'][api_key]['active'] else "غیرفعال"
-            return True, f"✅ وضعیت کلید به {status} تغییر کرد"
-        return False, "❌ کلید یافت نشد"
-    
-    async def get_api_stats(self) -> Dict:
-        return await self.api_manager.get_stats()
-    
-    async def close(self):
-        for session in self.sessions.values():
-            await session.close()
-        self.sessions.clear()
+function showEditProfile() {
+    if (!currentUser) return;
+    showModal('ویرایش پروفایل', `
+        <div class="form-group">
+            <label style="display:block;margin-bottom:4px;">نام کامل</label>
+            <input id="edit-fullname" value="${currentUser.full_name || ''}" style="width:100%;padding:10px;border:1px solid #dbdbdb;border-radius:8px;">
+        </div>
+        <div class="form-group">
+            <label style="display:block;margin-bottom:4px;">بیوگرافی</label>
+            <textarea id="edit-bio" style="width:100%;padding:10px;border:1px solid #dbdbdb;border-radius:8px;resize:vertical;min-height:60px;">${currentUser.bio || ''}</textarea>
+        </div>
+        <div class="form-group">
+            <label style="display:block;margin-bottom:4px;">وب‌سایت</label>
+            <input id="edit-website" value="${currentUser.website || ''}" style="width:100%;padding:10px;border:1px solid #dbdbdb;border-radius:8px;">
+        </div>
+        <div class="form-group">
+            <label style="display:block;margin-bottom:4px;">موقعیت</label>
+            <input id="edit-location" value="${currentUser.location || ''}" style="width:100%;padding:10px;border:1px solid #dbdbdb;border-radius:8px;">
+        </div>
+        <button onclick="updateProfile()" style="width:100%;background:#0095f6;color:white;border:none;padding:12px;border-radius:8px;font-size:16px;cursor:pointer;">💾 ذخیره تغییرات</button>
+    `);
+}
 
-# ==================== کلاس اصلی ربات ====================
-class YouTubeEarningBot:
-    __slots__ = ('token', 'db', 'tron_api', 'user_states')
+async function updateProfile() {
+    const full_name = document.getElementById('edit-fullname').value;
+    const bio = document.getElementById('edit-bio').value;
+    const website = document.getElementById('edit-website').value;
+    const location = document.getElementById('edit-location').value;
     
-    def __init__(self, token: str):
-        self.token = token
-        self.db = UltraScalableDatabase(shard_count=1000)
-        self.tron_api = TronAPI(TRON_API_KEYS)
-        self.user_states = {}
+    try {
+        const formData = new FormData();
+        formData.append('full_name', full_name);
+        formData.append('bio', bio);
+        formData.append('website', website);
+        formData.append('location', location);
         
-        asyncio.create_task(self._show_stats())
-        asyncio.create_task(self._challenge_monitor())
-        asyncio.create_task(self._cache_cleaner())
-        
-        logger.info("🚀 ربات با معماری میکروسرویس و ۱۰۰۰ شارد راه‌اندازی شد")
-    
-    def get_texts(self, lang: str) -> Dict:
-        return TEXTS.get(lang, TEXTS['fa'])
-    
-    async def _show_stats(self):
-        await asyncio.sleep(5)
-        stats = await self.db.get_db_stats()
-        logger.info(f"📊 **آمار دیتابیس:**")
-        logger.info(f"   🗄️ تعداد شاردها: {stats['shard_count']}")
-        logger.info(f"   👥 کل کاربران: {stats['total_users']:,}")
-        logger.info(f"   🔗 کل لینک‌ها: {stats['total_links']:,}")
-        logger.info(f"   💳 کل تراکنش‌ها: {stats['total_transactions']:,}")
-        logger.info(f"   💾 کش: {stats['cache']['total_items']:,} آیتم")
-        logger.info(f"   📈 نرخ موفقیت کش: {stats['cache']['hit_rate']:.2f}%")
-    
-    async def _challenge_monitor(self):
-        while True:
-            try:
-                challenge_active = await self.db.get_system_setting('challenge_active')
-                if challenge_active == '1':
-                    end_date_str = await self.db.get_system_setting('challenge_end_date') or ''
-                    if end_date_str:
-                        try:
-                            end_date = datetime.fromisoformat(end_date_str)
-                            if datetime.now() >= end_date:
-                                await self.db.set_system_setting('challenge_active', '0')
-                                winners, msg = await self.db.declare_challenge_winners()
-                                if winners:
-                                    logger.info(f"🏆 چالش رفرال به پایان رسید! {len(winners)} برنده")
-                        except:
-                            pass
-            except Exception as e:
-                logger.error(f"خطا در مانیتورینگ چالش: {e}")
-            await asyncio.sleep(30)
-    
-    async def _cache_cleaner(self):
-        while True:
-            try:
-                stats = await self.db.cache.get_stats()
-                if stats['total_items'] > stats['max_size'] * 0.9:
-                    logger.info("🧹 پاک‌سازی خودکار کش در حال اجرا...")
-                    for shard in self.db.cache.shards:
-                        keys_to_delete = []
-                        for key, (value, timestamp) in shard.items():
-                            if time.time() - timestamp > self.db.cache.ttl:
-                                keys_to_delete.append(key)
-                        for key in keys_to_delete:
-                            del shard[key]
-            except Exception as e:
-                logger.error(f"خطا در پاک‌سازی کش: {e}")
-            await asyncio.sleep(300)
-    
-    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user = update.effective_user
-        user_id = user.id
-        
-        db_user = await self.db.get_user(user_id)
-        if not db_user:
-            referred_by = None
-            if context.args:
-                ref_code = context.args[0]
-                ref_user = await self.db.get_user_by_referral_code(ref_code)
-                if ref_user:
-                    referred_by = ref_user['user_id']
-                    await update.message.reply_text(
-                        self.get_texts('fa')['referral_success'].format(ref_name=ref_user.get('first_name', 'کاربر')),
-                        parse_mode=ParseMode.HTML
-                    )
-                else:
-                    await update.message.reply_text(
-                        self.get_texts('fa')['referral_not_found'],
-                        parse_mode=ParseMode.HTML
-                    )
-            
-            db_user = await self.db.create_user(
-                user_id, user.username, user.first_name, user.last_name, referred_by
-            )
-            
-            if referred_by:
-                ref_count = await self.db.get_user_referrals_count(referred_by)
-                boost = self.db.get_boost_multiplier(ref_count)
-                try:
-                    ref_user = await self.db.get_user(referred_by)
-                    ref_lang = ref_user.get('language', 'fa') if ref_user else 'fa'
-                    ref_texts = self.get_texts(ref_lang)
-                    await context.bot.send_message(
-                        referred_by,
-                        ref_texts['new_referral_notification'].format(
-                            name=user.first_name or 'کاربر',
-                            count=ref_count
-                        ),
-                        parse_mode=ParseMode.HTML
-                    )
-                except Exception as e:
-                    logger.error(f"خطا در ارسال پیام رفرال: {e}")
-        
-        lang = db_user.get('language', 'fa')
-        texts = self.get_texts(lang)
-        
-        keyboard = [
-            [InlineKeyboardButton(texts['register_link'], callback_data='register_link')],
-            [InlineKeyboardButton(texts['my_stats'], callback_data='my_stats')],
-            [InlineKeyboardButton(texts['referral'], callback_data='referral')],
-            [InlineKeyboardButton(texts['change_language'], callback_data='change_language')],
-            [InlineKeyboardButton(texts['view_links'], callback_data='view_links')],
-            [InlineKeyboardButton(texts['my_links'], callback_data='my_links')]
-        ]
-        
-        challenge_active = await self.db.get_system_setting('challenge_active')
-        if challenge_active == '1':
-            keyboard.append([InlineKeyboardButton("🏆 چالش رفرال", callback_data='referral_challenge')])
-        
-        if user_id == ADMIN_ID:
-            keyboard.append([InlineKeyboardButton("🛠 پنل مدیریت", callback_data='admin_panel')])
-        
-        await update.message.reply_text(
-            texts['welcome'].format(first_name=user.first_name or 'کاربر'),
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode=ParseMode.HTML
-        )
-    
-    async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        db_user = await self.db.get_user(user_id)
-        
-        if not db_user:
-            await query.edit_message_text("⚠️ لطفا مجددا /start را بزنید")
-            return
-        
-        lang = db_user.get('language', 'fa')
-        texts = self.get_texts(lang)
-        data = query.data
-        
-        if data == 'change_language':
-            keyboard = []
-            for code, name in SUPPORTED_LANGUAGES.items():
-                keyboard.append([InlineKeyboardButton(f"🌐 {name}", callback_data=f"set_lang_{code}")])
-            keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data='back')])
-            await query.edit_message_text("🌐 انتخاب زبان:", reply_markup=InlineKeyboardMarkup(keyboard))
-        
-        elif data.startswith('set_lang_'):
-            new_lang = data.split('_')[2]
-            await self.db.update_user_language(user_id, new_lang)
-            texts = self.get_texts(new_lang)
-            keyboard = [
-                [InlineKeyboardButton(texts['register_link'], callback_data='register_link')],
-                [InlineKeyboardButton(texts['my_stats'], callback_data='my_stats')],
-                [InlineKeyboardButton(texts['referral'], callback_data='referral')],
-                [InlineKeyboardButton(texts['change_language'], callback_data='change_language')],
-                [InlineKeyboardButton(texts['view_links'], callback_data='view_links')],
-                [InlineKeyboardButton(texts['my_links'], callback_data='my_links')]
-            ]
-            challenge_active = await self.db.get_system_setting('challenge_active')
-            if challenge_active == '1':
-                keyboard.append([InlineKeyboardButton("🏆 چالش رفرال", callback_data='referral_challenge')])
-            if user_id == ADMIN_ID:
-                keyboard.append([InlineKeyboardButton("🛠 پنل مدیریت", callback_data='admin_panel')])
-            await query.edit_message_text(
-                f"✅ زبان به {SUPPORTED_LANGUAGES[new_lang]} تغییر یافت",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        
-        elif data == 'view_links':
-            # ===== نمایش لینک‌های روزانه =====
-            links = await self.db.get_daily_links_for_user(user_id, DAILY_INTERACTIONS_REQUIRED)
-            
-            if not links:
-                # ===== چک کن کاربر لینک ثبت کرده یا نه =====
-                user_links = await self.db.get_user_links(user_id, limit=1)
-                if not user_links:
-                    await query.edit_message_text(
-                        texts['no_links_available'],
-                        reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("📝 ثبت لینک", callback_data='register_link')],
-                            [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
-                        ]),
-                        parse_mode=ParseMode.HTML
-                    )
-                else:
-                    await query.edit_message_text(
-                        texts['no_links_to_view'].format(count=0),
-                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='back')]])
-                    )
-                return
-            
-            # ===== نمایش لینک‌های کاربران دیگر =====
-            link_text = ""
-            for i, link in enumerate(links, 1):
-                link_text += f"{i}. 🎬 <a href='{link['video_url']}'>{link['video_url'][:35]}...</a>\n"
-                link_text += f"   👤 {link.get('first_name', 'کاربر')}\n"
-                link_text += f"   👀 {link.get('views_count', 0)} بازدید\n"
-                link_text += f"   ❤️ {link.get('likes_count', 0)} لایک\n"
-                link_text += f"   📈 ضریب: {link.get('boost_multiplier', 1)}x\n\n"
-            
-            await query.edit_message_text(
-                texts['daily_links_title'] + link_text,
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("✅ همه را بازدید کردم", callback_data="viewed_all")],
-                    [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
-                ]),
-                parse_mode=ParseMode.HTML
-            )
-        
-        elif data == 'viewed_all':
-            # ===== تایید بازدید همه لینک‌ها =====
-            links = await self.db.get_daily_links_for_user(user_id, DAILY_INTERACTIONS_REQUIRED)
-            
-            if links:
-                viewed_count = 0
-                for link in links:
-                    success, msg = await self.db.mark_link_viewed(user_id, link['id'])
-                    if success:
-                        viewed_count += 1
-                
-                stats = await self.db.get_user_daily_stats(user_id)
-                await query.edit_message_text(
-                    texts['all_links_viewed'].format(count=viewed_count),
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='back')]]),
-                    parse_mode=ParseMode.HTML
-                )
-            else:
-                await query.edit_message_text(
-                    "❌ هیچ لینکی برای بازدید وجود ندارد",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='back')]])
-                )
-        
-        elif data == 'my_links':
-            # ===== نمایش لینک‌های کاربر =====
-            links = await self.db.get_user_links(user_id, limit=20)
-            
-            if links:
-                text = "📋 **لینک‌های شما:**\n\n"
-                for link in links:
-                    text += f"🆔 {link['id']}\n"
-                    text += f"🔗 <a href='{link['video_url']}'>{link['video_url'][:40]}...</a>\n"
-                    text += f"👀 {link['views_count']} بازدید\n"
-                    text += f"❤️ {link['likes_count']} لایک\n"
-                    text += f"📅 {link['created_at'][:10]}\n"
-                    text += f"━━━━━━━━━━━━━━━\n\n"
-                
-                keyboard = [
-                    [InlineKeyboardButton("🗑️ حذف لینک", callback_data='delete_link_menu')],
-                    [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
-                ]
-                await query.edit_message_text(
-                    text,
-                    reply_markup=InlineKeyboardMarkup(keyboard),
-                    parse_mode=ParseMode.HTML
-                )
-            else:
-                await query.edit_message_text(
-                    texts['no_links'],
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='back')]])
-                )
-        
-        elif data == 'delete_link_menu':
-            await query.edit_message_text(
-                "🗑️ **حذف لینک**\n\nلطفا آیدی لینکی که می‌خواهید حذف کنید را ارسال کنید:\n\n📌 برای لغو /cancel را بزنید",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            self.user_states[user_id] = 'waiting_for_delete_link'
-        
-        elif data == 'referral':
-            ref_code = db_user.get('referral_code')
-            ref_count = await self.db.get_user_referrals_count(user_id)
-            ref_link = f"https://t.me/SEGNALF_bot?start={ref_code}"
-            
-            await query.edit_message_text(
-                texts['referral_info'].format(
-                    ref_code=ref_code,
-                    ref_count=ref_count,
-                    ref_link=ref_link
-                ),
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("📋 کپی کد", callback_data=f"copy_ref_{ref_code}")],
-                    [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
-                ]),
-                parse_mode=ParseMode.HTML
-            )
-        
-        elif data.startswith('copy_ref_'):
-            ref_code = data.split('_')[2]
-            await query.edit_message_text(
-                texts['referral_copied'].format(ref_code=ref_code),
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 بازگشت", callback_data='referral')]
-                ]),
-                parse_mode=ParseMode.HTML
-            )
-        
-        elif data == 'my_stats':
-            ref_count = await self.db.get_user_referrals_count(user_id)
-            user_links = await self.db.get_user_links(user_id)
-            stats = await self.db.get_user_daily_stats(user_id)
-            boost = self.db.get_boost_multiplier(ref_count)
-            
-            await query.edit_message_text(
-                texts['stats_info'].format(
-                    links=stats['links'],
-                    max_links=stats['max_links'],
-                    views=stats['views'],
-                    required=stats['required'],
-                    referrals=ref_count,
-                    active_links=len(user_links)
-                ),
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🚀 ضریب بازدید", callback_data='boost_info')],
-                    [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
-                ]),
-                parse_mode=ParseMode.HTML
-            )
-        
-        elif data == 'boost_info':
-            ref_count = await self.db.get_user_referrals_count(user_id)
-            boost = self.db.get_boost_multiplier(ref_count)
-            
-            await query.edit_message_text(
-                texts['boost_info'].format(
-                    boost=boost,
-                    ref_count=ref_count,
-                    threshold=REFERRAL_BOOST_THRESHOLD
-                ),
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='back')]]),
-                parse_mode=ParseMode.HTML
-            )
-        
-        elif data == 'register_link':
-            is_paid = await self.db.is_paid_mode()
-            
-            if is_paid and not db_user.get('is_subscribed'):
-                await query.edit_message_text(
-                    texts['not_subscribed'],
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("💰 پرداخت", callback_data='payment')],
-                        [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
-                    ]),
-                    parse_mode=ParseMode.HTML
-                )
-                return
-            
-            today = datetime.now().date().isoformat()
-            async with self.db.get_connection(user_id) as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT COUNT(*) as count FROM youtube_links 
-                    WHERE user_id = ? AND DATE(created_at) = ?
-                """, (user_id, today))
-                result = cursor.fetchone()
-                if result['count'] >= MAX_YOUTUBE_LINKS_PER_DAY:
-                    await query.edit_message_text(
-                        f"⚠️ امروز بیش از حد مجاز ({MAX_YOUTUBE_LINKS_PER_DAY}) لینک ثبت کرده‌اید",
-                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='back')]])
-                    )
-                    return
-            
-            await query.edit_message_text(
-                texts['register_link_prompt'].format(required_ref=MAX_YOUTUBE_LINKS_PER_DAY),
-                parse_mode=ParseMode.HTML
-            )
-            self.user_states[user_id] = 'waiting_for_link'
-        
-        elif data == 'payment':
-            await query.edit_message_text(texts['enter_source_address'], parse_mode=ParseMode.HTML)
-            self.user_states[user_id] = 'waiting_for_source_address'
-        
-        elif data == 'confirm_payment':
-            await query.edit_message_text(texts['payment_confirmed'], parse_mode=ParseMode.HTML)
-            
-            user_txs = await self.db.get_user_transactions(user_id)
-            if user_txs:
-                latest_tx = user_txs[0]
-                is_valid = await self.tron_api.verify_transaction(
-                    latest_tx['tx_hash'], user_id, OWNER_WALLET,
-                    latest_tx.get('from_address')
-                )
-                
-                if is_valid:
-                    await self.db.verify_transaction(latest_tx['tx_hash'], 'approved')
-                    await self.db.update_user_subscription(user_id)
-                    await query.edit_message_text(
-                        texts['payment_success'],
-                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='back')]]),
-                        parse_mode=ParseMode.HTML
-                    )
-                else:
-                    tx_time = datetime.fromisoformat(latest_tx['created_at'])
-                    if datetime.now() - tx_time > timedelta(minutes=PAYMENT_TIMEOUT_MINUTES):
-                        await query.edit_message_text(
-                            texts['payment_timeout'],
-                            reply_markup=InlineKeyboardMarkup([
-                                [InlineKeyboardButton(texts['send_hash_button'], callback_data='send_hash')],
-                                [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
-                            ]),
-                            parse_mode=ParseMode.HTML
-                        )
-                    else:
-                        await query.edit_message_text(
-                            texts['payment_failed'],
-                            reply_markup=InlineKeyboardMarkup([
-                                [InlineKeyboardButton(texts['send_hash_button'], callback_data='send_hash')],
-                                [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
-                            ]),
-                            parse_mode=ParseMode.HTML
-                        )
-            else:
-                await query.edit_message_text(
-                    "❌ هیچ تراکنشی یافت نشد",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton(texts['send_hash_button'], callback_data='send_hash')],
-                        [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
-                    ])
-                )
-        
-        elif data == 'send_hash':
-            await query.edit_message_text(texts['enter_tx_hash'], parse_mode=ParseMode.HTML)
-            self.user_states[user_id] = 'waiting_for_manual_hash'
-        
-        elif data == 'admin_panel' and user_id == ADMIN_ID:
-            keyboard = [
-                [InlineKeyboardButton("💰 پولی کردن", callback_data='make_paid')],
-                [InlineKeyboardButton("🆓 رایگان کردن", callback_data='make_free')],
-                [InlineKeyboardButton("📢 ارسال پیام همگانی", callback_data='broadcast')],
-                [InlineKeyboardButton("✅ تایید پرداخت‌ها", callback_data='verify_payments')],
-                [InlineKeyboardButton("🔑 مدیریت کلیدهای API", callback_data='manage_keys')],
-                [InlineKeyboardButton("📊 آمار دیتابیس", callback_data='db_stats')],
-                [InlineKeyboardButton("🏆 مدیریت چالش رفرال", callback_data='manage_challenge')],
-                [InlineKeyboardButton("📋 مدیریت لینک‌های کاربران", callback_data='admin_links')],
-                [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
-            ]
-            await query.edit_message_text("🛠 **پنل مدیریت**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
-        
-        elif data == 'admin_links' and user_id == ADMIN_ID:
-            await query.edit_message_text(
-                "📋 **مدیریت لینک‌های کاربران**\n\n"
-                "برای حذف لینک یک کاربر:\n"
-                "1️⃣ ابتدا آیدی کاربر را ارسال کنید\n"
-                "2️⃣ سپس آیدی لینک را ارسال کنید\n\n"
-                "📌 برای لغو /cancel را بزنید",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            self.user_states[user_id] = 'waiting_admin_user_id'
-        
-        elif data == 'manage_challenge' and user_id == ADMIN_ID:
-            keyboard = [
-                [InlineKeyboardButton("▶️ شروع چالش جدید", callback_data='start_challenge')],
-                [InlineKeyboardButton("⏹️ توقف چالش", callback_data='stop_challenge')],
-                [InlineKeyboardButton("📊 وضعیت چالش", callback_data='challenge_status')],
-                [InlineKeyboardButton("💰 اعلام برندگان", callback_data='declare_winners')],
-                [InlineKeyboardButton("🎁 تنظیم مبلغ جایزه", callback_data='set_reward')],
-                [InlineKeyboardButton("👥 تنظیم تعداد برندگان", callback_data='set_top_users')],
-                [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]
-            ]
-            await query.edit_message_text(
-                "🏆 **مدیریت چالش رفرال**",
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode=ParseMode.MARKDOWN
-            )
-        
-        elif data == 'start_challenge' and user_id == ADMIN_ID:
-            challenge_active = await self.db.get_system_setting('challenge_active')
-            if challenge_active == '1':
-                await query.edit_message_text(
-                    texts['challenge_already_active'],
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
-                )
-                return
-            
-            await query.edit_message_text(texts['enter_duration'], parse_mode=ParseMode.HTML)
-            self.user_states[user_id] = 'waiting_for_challenge_duration'
-        
-        elif data == 'stop_challenge' and user_id == ADMIN_ID:
-            success, msg = await self.db.stop_referral_challenge()
-            await query.edit_message_text(
-                msg if success else f"❌ {msg}",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
-            )
-        
-        elif data == 'challenge_status' and user_id == ADMIN_ID:
-            status = await self.db.get_challenge_status()
-            
-            text = f"📊 **وضعیت چالش رفرال**\n\n"
-            text += f"📌 وضعیت: {'✅ فعال' if status['is_active'] else '❌ غیرفعال'}\n"
-            text += f"⏳ زمان باقی‌مانده: {status['time_left']}\n"
-            text += f"🎁 مبلغ جایزه: {status['reward']} USDT\n"
-            text += f"👥 تعداد برندگان: {status['top_users']}\n"
-            
-            if status['top_users_list']:
-                text += "\n🏆 **برترین‌ها:**\n"
-                for idx, u in enumerate(status['top_users_list'][:5], 1):
-                    text += f"{idx}. {u.get('first_name', 'کاربر')} - {u.get('referral_count', 0)} رفرال\n"
-            
-            await query.edit_message_text(
-                text,
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]]),
-                parse_mode=ParseMode.MARKDOWN
-            )
-        
-        elif data == 'declare_winners' and user_id == ADMIN_ID:
-            challenge_active = await self.db.get_system_setting('challenge_active')
-            if challenge_active == '1':
-                await query.edit_message_text(
-                    texts['challenge_not_active'],
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
-                )
-                return
-            
-            winners, msg = await self.db.declare_challenge_winners()
-            
-            if not winners:
-                await query.edit_message_text(
-                    texts['no_winners'],
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
-                )
-                return
-            
-            for winner in winners:
-                try:
-                    await context.bot.send_message(
-                        winner['user_id'],
-                        TEXTS['fa']['you_won'].format(
-                            reward=winner['reward_amount']
-                        ),
-                        parse_mode=ParseMode.HTML
-                    )
-                except:
-                    pass
-            
-            winners_text = ""
-            for idx, w in enumerate(winners, 1):
-                winners_text += f"{idx}. {w['first_name']} - {w['referral_count']} رفرال - {w['reward_amount']} USDT\n"
-            
-            await query.edit_message_text(
-                texts['winners_announced'].format(winners=winners_text, reward=winners[0]['reward_amount'] if winners else 0),
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("💰 تایید پرداخت جایزه", callback_data='confirm_reward_payment')],
-                    [InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]
-                ]),
-                parse_mode=ParseMode.HTML
-            )
-        
-        elif data == 'confirm_reward_payment' and user_id == ADMIN_ID:
-            await query.edit_message_text(
-                "💰 **تایید پرداخت جایزه**\n\nلطفا پس از واریز جایزه، دکمه زیر را بزنید:",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("✅ همه برندگان دریافت کردند", callback_data='mark_all_paid')],
-                    [InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]
-                ]),
-                parse_mode=ParseMode.MARKDOWN
-            )
-        
-        elif data == 'mark_all_paid' and user_id == ADMIN_ID:
-            winners = await self.db.get_challenge_top_users(limit=10)
-            paid_count = 0
-            
-            for w in winners:
-                if await self.db.mark_winner_paid(w['user_id']):
-                    paid_count += 1
-                    try:
-                        await context.bot.send_message(
-                            w['user_id'],
-                            TEXTS['fa']['reward_sent'].format(reward=100),
-                            parse_mode=ParseMode.HTML
-                        )
-                    except:
-                        pass
-            
-            await query.edit_message_text(
-                texts['reward_paid'].format(count=paid_count),
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
-            )
-        
-        elif data == 'set_reward' and user_id == ADMIN_ID:
-            await query.edit_message_text(
-                "🎁 **تنظیم مبلغ جایزه**\n\nلطفا مبلغ جایزه را به دلار وارد کنید:",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            self.user_states[user_id] = 'waiting_for_reward_amount'
-        
-        elif data == 'set_top_users' and user_id == ADMIN_ID:
-            await query.edit_message_text(
-                "👥 **تنظیم تعداد برندگان**\n\nلطفا تعداد برندگان را وارد کنید:",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            self.user_states[user_id] = 'waiting_for_top_users'
-        
-        elif data == 'manage_keys' and user_id == ADMIN_ID:
-            keyboard = [
-                [InlineKeyboardButton("➕ ثبت کلید جدید", callback_data='add_new_key')],
-                [InlineKeyboardButton("📋 لیست کلیدها", callback_data='list_keys')],
-                [InlineKeyboardButton("🔄 فعال/غیرفعال کردن", callback_data='toggle_key')],
-                [InlineKeyboardButton("🗑️ حذف کلید", callback_data='delete_key')],
-                [InlineKeyboardButton("📊 آمار کلیدها", callback_data='api_stats')],
-                [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]
-            ]
-            await query.edit_message_text(
-                "🔑 **مدیریت کلیدهای API**",
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode=ParseMode.MARKDOWN
-            )
-        
-        elif data == 'add_new_key' and user_id == ADMIN_ID:
-            await query.edit_message_text(
-                "🔑 **ثبت کلید جدید**\n\nلطفا کلید API را ارسال کنید:",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            self.user_states[user_id] = 'waiting_for_new_api_key'
-        
-        elif data == 'list_keys' and user_id == ADMIN_ID:
-            await query.edit_message_text("⏳ در حال دریافت لیست...")
-            stats = await self.tron_api.get_api_stats()
-            
-            if stats['total_keys'] == 0:
-                text = texts['no_keys']
-            else:
-                text = f"{texts['key_list']} ({stats['active_keys']}/{stats['total_keys']} فعال)\n\n"
-                for key, data in stats['keys'].items():
-                    status = "🟢 فعال" if data['active'] else "🔴 غیرفعال"
-                    text += f"🔑 `{data['key_preview']}` - {status}\n"
-                    text += f"   📥{data['requests']} ✅{data['success']} ❌{data['errors']}\n\n"
-            
-            await query.edit_message_text(
-                text,
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_keys')]]),
-                parse_mode=ParseMode.MARKDOWN
-            )
-        
-        elif data == 'api_stats' and user_id == ADMIN_ID:
-            stats = await self.tron_api.get_api_stats()
-            text = f"📊 **آمار کلیدها**\n\n"
-            text += f"📌 کل کلیدها: {stats['total_keys']}\n"
-            text += f"✅ فعال: {stats['active_keys']}\n"
-            text += f"📥 درخواست‌ها: {stats['total_requests']:,}\n"
-            text += f"✅ موفقیت: {stats['total_success']:,}\n"
-            text += f"❌ خطاها: {stats['total_errors']:,}\n"
-            text += f"📈 نرخ موفقیت: {stats['success_rate']:.2f}%"
-            
-            await query.edit_message_text(
-                text,
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_keys')]]),
-                parse_mode=ParseMode.MARKDOWN
-            )
-        
-        elif data == 'toggle_key' and user_id == ADMIN_ID:
-            await query.edit_message_text(
-                "🔄 **فعال/غیرفعال کردن کلید**\n\nلطفا کلید را ارسال کنید:",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            self.user_states[user_id] = 'waiting_for_toggle_key'
-        
-        elif data == 'delete_key' and user_id == ADMIN_ID:
-            await query.edit_message_text(
-                "🗑️ **حذف کلید**\n\n⚠️ غیرقابل بازگشت!\n\nلطفا کلید را ارسال کنید:",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            self.user_states[user_id] = 'waiting_for_delete_key'
-        
-        elif data == 'db_stats' and user_id == ADMIN_ID:
-            await query.edit_message_text("⏳ در حال دریافت آمار...")
-            stats = await self.db.get_db_stats()
-            
-            text = f"📊 **آمار دیتابیس**\n\n"
-            text += f"🗄️ تعداد شاردها: {stats['shard_count']}\n"
-            text += f"👥 کل کاربران: {stats['total_users']:,}\n"
-            text += f"🔗 کل لینک‌ها: {stats['total_links']:,}\n"
-            text += f"💳 کل تراکنش‌ها: {stats['total_transactions']:,}\n\n"
-            text += f"💾 **کش:**\n"
-            text += f"• آیتم‌ها: {stats['cache']['total_items']:,}\n"
-            text += f"• نرخ موفقیت: {stats['cache']['hit_rate']:.2f}%"
-            
-            await query.edit_message_text(
-                text,
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔄 بروزرسانی", callback_data='db_stats')],
-                    [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]
-                ]),
-                parse_mode=ParseMode.MARKDOWN
-            )
-        
-        elif data == 'make_paid' and user_id == ADMIN_ID:
-            await self.db.set_system_setting('is_paid', '1')
-            await query.edit_message_text(
-                texts['paid_mode'],
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]])
-            )
-        
-        elif data == 'make_free' and user_id == ADMIN_ID:
-            await self.db.set_system_setting('is_paid', '0')
-            await query.edit_message_text(
-                texts['free_mode'],
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]])
-            )
-        
-        elif data == 'broadcast' and user_id == ADMIN_ID:
-            await query.edit_message_text(
-                "📢 لطفا پیام خود را ارسال کنید:",
-                parse_mode=ParseMode.HTML
-            )
-            self.user_states[user_id] = 'waiting_for_broadcast'
-        
-        elif data == 'verify_payments' and user_id == ADMIN_ID:
-            pending_txs = await self.db.get_pending_manual_transactions()
-            
-            if not pending_txs:
-                await query.edit_message_text(
-                    "✅ هیچ پرداخت در انتظار تاییدی نیست",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]])
-                )
-                return
-            
-            text = "📋 **پرداخت‌های نیازمند بررسی:**\n\n"
-            for tx in pending_txs[:10]:
-                text += f"👤 {tx['first_name']}\n"
-                text += f"💰 {tx['amount']} USDT\n"
-                text += f"🔗 `{tx['tx_hash'][:20]}...`\n"
-                text += f"📅 {tx['created_at'][:16]}\n\n"
-            
-            buttons = []
-            for tx in pending_txs[:10]:
-                buttons.append([
-                    InlineKeyboardButton(f"✅ {tx['first_name']}", callback_data=f"approve_manual_{tx['tx_hash']}"),
-                    InlineKeyboardButton(f"❌ {tx['first_name']}", callback_data=f"reject_manual_{tx['tx_hash']}")
-                ])
-            buttons.append([InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')])
-            
-            await query.edit_message_text(
-                text,
-                reply_markup=InlineKeyboardMarkup(buttons),
-                parse_mode=ParseMode.MARKDOWN
-            )
-        
-        elif data.startswith('approve_manual_') or data.startswith('reject_manual_'):
-            if user_id != ADMIN_ID:
-                await query.edit_message_text("⛔ دسترسی غیرمجاز")
-                return
-            
-            parts = data.split('_')
-            action = parts[0]
-            tx_hash = parts[2]
-            
-            if action == 'approve':
-                await self.db.verify_transaction(tx_hash, 'approved')
-                async with self.db.get_connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT user_id FROM transactions WHERE tx_hash = ?", (tx_hash,))
-                    result = cursor.fetchone()
-                    if result:
-                        await self.db.update_user_subscription(result['user_id'])
-                        await context.bot.send_message(result['user_id'], "✅ اشتراک شما فعال شد! 🎉")
-                await query.edit_message_text(
-                    f"✅ تراکنش تایید شد",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='verify_payments')]])
-                )
-            else:
-                await self.db.verify_transaction(tx_hash, 'rejected')
-                await query.edit_message_text(
-                    f"❌ تراکنش رد شد",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='verify_payments')]])
-                )
-        
-        elif data == 'back':
-            texts = self.get_texts(lang)
-            keyboard = [
-                [InlineKeyboardButton(texts['register_link'], callback_data='register_link')],
-                [InlineKeyboardButton(texts['my_stats'], callback_data='my_stats')],
-                [InlineKeyboardButton(texts['referral'], callback_data='referral')],
-                [InlineKeyboardButton(texts['change_language'], callback_data='change_language')],
-                [InlineKeyboardButton(texts['view_links'], callback_data='view_links')],
-                [InlineKeyboardButton(texts['my_links'], callback_data='my_links')]
-            ]
-            challenge_active = await self.db.get_system_setting('challenge_active')
-            if challenge_active == '1':
-                keyboard.append([InlineKeyboardButton("🏆 چالش رفرال", callback_data='referral_challenge')])
-            if user_id == ADMIN_ID:
-                keyboard.append([InlineKeyboardButton("🛠 پنل مدیریت", callback_data='admin_panel')])
-            
-            await query.edit_message_text(
-                texts['welcome'].format(first_name=db_user.get('first_name', 'کاربر')),
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode=ParseMode.HTML
-            )
-    
-    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        text = update.message.text
-        state = self.user_states.get(user_id)
-        
-        # ===== پیام همگانی =====
-        if state == 'waiting_for_broadcast' and user_id == ADMIN_ID:
-            msg_text = update.message.text or update.message.caption or ""
-            photo = update.message.photo[-1].file_id if update.message.photo else None
-            video = update.message.video.file_id if update.message.video else None
-            
-            users = await self.db.get_all_users()
-            
-            if not users:
-                await update.message.reply_text("❌ هیچ کاربری وجود ندارد!")
-                self.user_states[user_id] = None
-                return
-            
-            total_users = len(users)
-            await update.message.reply_text(f"⏳ ارسال به {total_users:,} کاربر...")
-            
-            success_count = 0
-            fail_count = 0
-            batch_size = 50
-            delay_between_batches = 0.3
-            
-            for i in range(0, total_users, batch_size):
-                batch = users[i:i+batch_size]
-                tasks = []
-                
-                for uid in batch:
-                    try:
-                        if photo:
-                            tasks.append(context.bot.send_photo(uid, photo, caption=msg_text, parse_mode=ParseMode.HTML))
-                        elif video:
-                            tasks.append(context.bot.send_video(uid, video, caption=msg_text, parse_mode=ParseMode.HTML))
-                        else:
-                            tasks.append(context.bot.send_message(uid, msg_text, parse_mode=ParseMode.HTML))
-                    except:
-                        fail_count += 1
-                
-                if tasks:
-                    results = await asyncio.gather(*tasks, return_exceptions=True)
-                    for result in results:
-                        if isinstance(result, Exception):
-                            fail_count += 1
-                        else:
-                            success_count += 1
-                
-                if i % (batch_size * 10) == 0 or i + batch_size >= total_users:
-                    await update.message.reply_text(
-                        f"📊 {min(i+batch_size, total_users):,}/{total_users:,} | ✅ {success_count:,} | ❌ {fail_count:,}"
-                    )
-                
-                await asyncio.sleep(delay_between_batches)
-            
-            await update.message.reply_text(
-                f"✅ **ارسال کامل شد!**\n👥 {total_users:,}\n✅ {success_count:,}\n❌ {fail_count:,}"
-            )
-            self.user_states[user_id] = None
-        
-        # ===== حذف لینک توسط کاربر =====
-        elif state == 'waiting_for_delete_link':
-            if text == '/cancel':
-                await update.message.reply_text(
-                    "✅ لغو شد",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='my_links')]])
-                )
-                self.user_states[user_id] = None
-                return
-            
-            try:
-                link_id = int(text.strip())
-                success, msg = await self.db.delete_user_link(user_id, link_id)
-                await update.message.reply_text(
-                    msg,
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='my_links')]])
-                )
-            except ValueError:
-                await update.message.reply_text(
-                    "❌ لطفا یک عدد معتبر وارد کنید",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='my_links')]])
-                )
-            self.user_states[user_id] = None
-        
-        # ===== مدیریت لینک‌ها توسط ادمین =====
-        elif state == 'waiting_admin_user_id' and user_id == ADMIN_ID:
-            if text == '/cancel':
-                await update.message.reply_text(
-                    "✅ لغو شد",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]])
-                )
-                self.user_states[user_id] = None
-                return
-            
-            try:
-                target_user_id = int(text.strip())
-                links = await self.db.admin_get_user_links(target_user_id)
-                
-                if links:
-                    text_msg = f"📋 **لینک‌های کاربر {target_user_id}:**\n\n"
-                    for link in links:
-                        text_msg += f"🆔 {link['id']}\n"
-                        text_msg += f"🔗 {link['video_url'][:50]}...\n"
-                        text_msg += f"👀 {link['views_count']} بازدید\n"
-                        text_msg += f"━━━━━━━━━━━━━\n\n"
-                    
-                    await update.message.reply_text(
-                        text_msg,
-                        reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("🗑️ حذف لینک", callback_data='admin_delete_link')],
-                            [InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]
-                        ]),
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-                    self.user_states[user_id] = 'waiting_admin_link_id'
-                    self.user_states[f"admin_target_{user_id}"] = target_user_id
-                else:
-                    await update.message.reply_text(
-                        "❌ این کاربر هیچ لینکی ندارد",
-                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]])
-                    )
-                    self.user_states[user_id] = None
-            except ValueError:
-                await update.message.reply_text(
-                    "❌ لطفا یک عدد معتبر وارد کنید",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]])
-                )
-        
-        elif state == 'waiting_admin_link_id' and user_id == ADMIN_ID:
-            if text == '/cancel':
-                await update.message.reply_text(
-                    "✅ لغو شد",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]])
-                )
-                self.user_states[user_id] = None
-                return
-            
-            try:
-                link_id = int(text.strip())
-                success, msg = await self.db.admin_delete_link(link_id)
-                await update.message.reply_text(
-                    msg,
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]])
-                )
-            except ValueError:
-                await update.message.reply_text(
-                    "❌ لطفا یک عدد معتبر وارد کنید",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='admin_panel')]])
-                )
-            self.user_states[user_id] = None
-        
-        # ===== ثبت لینک =====
-        elif state == 'waiting_for_link':
-            if not text.startswith('http') or ('youtube.com' not in text and 'youtu.be' not in text):
-                await update.message.reply_text("❌ لطفا یک لینک معتبر یوتیوب ارسال کنید")
-                return
-            
-            success, msg = await self.db.add_youtube_link(user_id, text)
-            if not success:
-                await update.message.reply_text(f"❌ {msg}")
-                self.user_states[user_id] = None
-                return
-            
-            # ===== بعد از ثبت لینک، لینک‌های دیگه رو نمایش بده =====
-            links = await self.db.get_daily_links_for_user(user_id, DAILY_INTERACTIONS_REQUIRED)
-            
-            await update.message.reply_text(
-                texts['link_registered'],
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("👀 مشاهده لینک‌های بازدید", callback_data='view_links')],
-                    [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
-                ]),
-                parse_mode=ParseMode.HTML
-            )
-            
-            if links:
-                link_text = ""
-                for i, link in enumerate(links, 1):
-                    link_text += f"{i}. 🎬 <a href='{link['video_url']}'>{link['video_url'][:30]}...</a>\n"
-                    link_text += f"   👤 {link.get('first_name', 'کاربر')}\n"
-                    link_text += f"   👀 {link.get('views_count', 0)} بازدید\n\n"
-                
-                await update.message.reply_text(
-                    texts['daily_links_title'] + link_text,
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("✅ همه را بازدید کردم", callback_data="viewed_all")],
-                        [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
-                    ]),
-                    parse_mode=ParseMode.HTML
-                )
-            else:
-                await update.message.reply_text(
-                    "✅ لینک شما ثبت شد!\n\n📌 در حال حاضر هیچ لینکی برای بازدید وجود ندارد.",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='back')]])
-                )
-            
-            self.user_states[user_id] = None
-        
-        # ===== سایر =====
-        elif state == 'waiting_for_source_address':
-            address = text.strip()
-            if len(address) < 30 or len(address) > 50:
-                await update.message.reply_text("❌ آدرس نامعتبر است")
-                return
-            
-            await self.db.set_user_payment_address(user_id, address)
-            lang = (await self.db.get_user(user_id))['language']
-            texts = self.get_texts(lang)
-            
-            await update.message.reply_text(
-                texts['source_address_saved'].format(wallet=OWNER_WALLET),
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("✅ پرداخت کردم", callback_data='confirm_payment')],
-                    [InlineKeyboardButton("🔙 بازگشت", callback_data='back')]
-                ]),
-                parse_mode=ParseMode.HTML
-            )
-            self.user_states[user_id] = None
-        
-        elif state == 'waiting_for_manual_hash':
-            tx_hash = text.strip()
-            if len(tx_hash) != 64:
-                await update.message.reply_text("❌ هش نامعتبر است")
-                return
-            
-            async with self.db.get_connection(user_id) as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    INSERT INTO transactions (user_id, tx_hash, amount, manual_review)
-                    VALUES (?, ?, ?, 1)
-                """, (user_id, tx_hash, SUBSCRIPTION_PRICE_USD))
-                conn.commit()
-            
-            lang = (await self.db.get_user(user_id))['language']
-            texts = self.get_texts(lang)
-            
-            await update.message.reply_text(texts['hash_received'], parse_mode=ParseMode.HTML)
-            await context.bot.send_message(
-                ADMIN_ID,
-                f"🔔 درخواست بررسی دستی:\n👤 {update.effective_user.first_name}\n🆔 {user_id}\n🔗 `{tx_hash[:20]}...`",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            self.user_states[user_id] = None
-        
-        elif state == 'waiting_for_challenge_duration' and user_id == ADMIN_ID:
-            if text == '/cancel':
-                await update.message.reply_text(
-                    "✅ لغو شد",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
-                )
-                self.user_states[user_id] = None
-                return
-            
-            try:
-                duration = int(text.strip())
-                if duration <= 0:
-                    raise ValueError
-                
-                reward = int(await self.db.get_system_setting('challenge_reward') or '100')
-                top_users = int(await self.db.get_system_setting('challenge_top_users') or '10')
-                
-                success, msg = await self.db.start_referral_challenge(duration, reward, top_users)
-                
-                if success:
-                    users = await self.db.get_all_active_users()
-                    for uid in users[:100]:
-                        try:
-                            user_lang = (await self.db.get_user(uid))['language'] if await self.db.get_user(uid) else 'fa'
-                            u_texts = self.get_texts(user_lang)
-                            await context.bot.send_message(
-                                uid,
-                                u_texts['challenge_started'].format(
-                                    duration=duration,
-                                    reward=reward,
-                                    top_users=top_users
-                                ),
-                                parse_mode=ParseMode.HTML
-                            )
-                            await asyncio.sleep(0.05)
-                        except:
-                            pass
-                    
-                    await update.message.reply_text(
-                        f"✅ **چالش شروع شد!**\n\n📅 {duration} روز\n🎁 {reward} USDT\n👥 {top_users} نفر",
-                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]]),
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-                else:
-                    await update.message.reply_text(
-                        f"❌ {msg}",
-                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
-                    )
-            except ValueError:
-                await update.message.reply_text(
-                    texts['invalid_duration'],
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
-                )
-            self.user_states[user_id] = None
-        
-        elif state == 'waiting_for_reward_amount' and user_id == ADMIN_ID:
-            if text == '/cancel':
-                await update.message.reply_text(
-                    "✅ لغو شد",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
-                )
-                self.user_states[user_id] = None
-                return
-            
-            try:
-                amount = int(text.strip())
-                if amount <= 0:
-                    raise ValueError
-                
-                await self.db.set_system_setting('challenge_reward', str(amount))
-                await update.message.reply_text(
-                    texts['challenge_reward_set'].format(amount=amount),
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
-                )
-            except ValueError:
-                await update.message.reply_text(
-                    "❌ عدد نامعتبر!",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
-                )
-            self.user_states[user_id] = None
-        
-        elif state == 'waiting_for_top_users' and user_id == ADMIN_ID:
-            if text == '/cancel':
-                await update.message.reply_text(
-                    "✅ لغو شد",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
-                )
-                self.user_states[user_id] = None
-                return
-            
-            try:
-                count = int(text.strip())
-                if count <= 0:
-                    raise ValueError
-                
-                await self.db.set_system_setting('challenge_top_users', str(count))
-                await update.message.reply_text(
-                    texts['challenge_top_users_set'].format(count=count),
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
-                )
-            except ValueError:
-                await update.message.reply_text(
-                    "❌ عدد نامعتبر!",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_challenge')]])
-                )
-            self.user_states[user_id] = None
-        
-        elif state == 'waiting_for_new_api_key' and user_id == ADMIN_ID:
-            if text == '/cancel':
-                await update.message.reply_text(
-                    "✅ لغو شد",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_keys')]])
-                )
-                self.user_states[user_id] = None
-                return
-            
-            await update.message.reply_text("⏳ در حال تست...")
-            
-            success, message = await self.tron_api.add_api_key(text.strip())
-            
-            if success:
-                await self.db.save_api_key(text.strip(), f"اضافه شده در {datetime.now()}")
-                await update.message.reply_text(
-                    f"✅ **کلید ثبت شد!**\n\n🔑 `{text.strip()[:20]}...`",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_keys')]]),
-                    parse_mode=ParseMode.MARKDOWN
-                )
-            else:
-                await update.message.reply_text(
-                    f"❌ **خطا:** {message}",
-                    parse_mode=ParseMode.MARKDOWN
-                )
-            self.user_states[user_id] = None
-        
-        elif state == 'waiting_for_toggle_key' and user_id == ADMIN_ID:
-            if text == '/cancel':
-                await update.message.reply_text(
-                    "✅ لغو شد",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_keys')]])
-                )
-                self.user_states[user_id] = None
-                return
-            
-            success, message = await self.tron_api.toggle_api_key(text.strip())
-            await update.message.reply_text(
-                message,
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_keys')]])
-            )
-            self.user_states[user_id] = None
-        
-        elif state == 'waiting_for_delete_key' and user_id == ADMIN_ID:
-            if text == '/cancel':
-                await update.message.reply_text(
-                    "✅ لغو شد",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_keys')]])
-                )
-                self.user_states[user_id] = None
-                return
-            
-            success, message = await self.tron_api.remove_api_key(text.strip())
-            await update.message.reply_text(
-                message,
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data='manage_keys')]])
-            )
-            self.user_states[user_id] = None
-        
-        else:
-            # ===== برنده چالش =====
-            winner = await self.db.get_challenge_winner_by_user(user_id)
-            if winner:
-                address = text.strip()
-                if len(address) >= 30 and len(address) <= 50:
-                    await self.db.set_user_reward_address(user_id, address)
-                    
-                    lang = (await self.db.get_user(user_id))['language']
-                    texts = self.get_texts(lang)
-                    
-                    await update.message.reply_text(
-                        texts['address_received'].format(reward=winner['reward_amount']),
-                        parse_mode=ParseMode.HTML
-                    )
-                    
-                    await context.bot.send_message(
-                        ADMIN_ID,
-                        f"💰 **درخواست جایزه**\n👤 {update.effective_user.first_name}\n🆔 {user_id}\n🔗 `{address}`\n💰 {winner['reward_amount']} USDT",
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-                else:
-                    await update.message.reply_text("❌ آدرس TRC20 نامعتبر است!")
-                return
-            
-            await update.message.reply_text("برای شروع /start را بزنید")
+        const res = await fetch('/api/users/me', {
+            method: 'PUT',
+            headers: { 'token': token },
+            body: formData
+        });
+        const data = await res.json();
+        if (data.success) {
+            showToast('✅ پروفایل به‌روزرسانی شد');
+            closeModal();
+            showTab('profile');
+        } else {
+            showToast('❌ ' + (data.detail || 'خطا'), 'error');
+        }
+    } catch (e) {
+        showToast('❌ خطا: ' + e.message, 'error');
+    }
+}
 
-# ==================== اجرای ربات ====================
-async def main():
-    bot = YouTubeEarningBot(BOT_TOKEN)
+// ============================================
+// ADMIN
+// ============================================
+async function loadAdmin(container) {
+    if (!token) {
+        container.innerHTML = buildAuthForm();
+        return;
+    }
     
-    application = Application.builder().token(BOT_TOKEN).build()
+    container.innerHTML = `
+        <div class="admin-container">
+            <div class="admin-card">
+                <h2>📊 آمار کلی</h2>
+                <div class="admin-stats" id="admin-stats">
+                    <div class="stat"><div class="num">...</div><div class="label">کاربران</div></div>
+                    <div class="stat"><div class="num">...</div><div class="label">ویدیوها</div></div>
+                    <div class="stat"><div class="num">...</div><div class="label">بازدیدها</div></div>
+                    <div class="stat"><div class="num">...</div><div class="label">کاربران امروز</div></div>
+                </div>
+            </div>
+            
+            <div class="admin-card">
+                <h2>🖥️ وضعیت سرورها</h2>
+                <div id="servers-status"></div>
+                <button onclick="showAddServer()" style="margin-top:12px;background:#0095f6;color:white;border:none;padding:8px 20px;border-radius:4px;cursor:pointer;">➕ اضافه کردن سرور</button>
+            </div>
+            
+            <div class="admin-card">
+                <h2>👥 کاربران</h2>
+                <input id="admin-user-search" placeholder="🔍 جستجوی کاربر..." style="width:100%;padding:10px;border:1px solid #dbdbdb;border-radius:8px;margin-bottom:12px;">
+                <div id="admin-users-list"></div>
+            </div>
+        </div>
+    `;
     
-    application.add_handler(CommandHandler("start", bot.start))
-    application.add_handler(CallbackQueryHandler(bot.handle_callback))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_message))
-    application.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO, bot.handle_message))
+    // بارگذاری آمار
+    try {
+        const statsRes = await fetch('/admin/stats', {
+            headers: { 'token': token }
+        });
+        const stats = await statsRes.json();
+        if (stats.total_users !== undefined) {
+            document.getElementById('admin-stats').innerHTML = `
+                <div class="stat"><div class="num">${stats.total_users}</div><div class="label">کاربران</div></div>
+                <div class="stat"><div class="num">${stats.total_videos}</div><div class="label">ویدیوها</div></div>
+                <div class="stat"><div class="num">${stats.total_views}</div><div class="label">بازدیدها</div></div>
+                <div class="stat"><div class="num">${stats.active_users_today}</div><div class="label">کاربران امروز</div></div>
+                <div class="stat"><div class="num">${stats.premium_users}</div><div class="label">کاربران ویژه</div></div>
+                <div class="stat"><div class="num">${stats.server_count}</div><div class="label">سرورها</div></div>
+            `;
+        }
+    } catch (e) {}
     
-    await application.initialize()
-    await application.start()
+    // بارگذاری سرورها
+    loadServersStatus();
     
-    logger.info("✅ ربات با موفقیت راه‌اندازی شد!")
+    // بارگذاری کاربران
+    loadAdminUsers();
     
-    await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
-    
-    try:
-        await asyncio.Event().wait()
-    finally:
-        await application.updater.stop()
-        await application.stop()
-        await bot.tron_api.close()
+    // جستجو
+    document.getElementById('admin-user-search').addEventListener('input', function() {
+        loadAdminUsers(this.value.trim());
+    });
+}
 
+async function loadServersStatus() {
+    try {
+        const res = await fetch('/admin/servers/status', {
+            headers: { 'token': token }
+        });
+        const data = await res.json();
+        if (data.servers) {
+            let html = `<table class="admin-table"><tr><th>نام</th><th>کاربران</th><th>ظرفیت</th><th>بار</th><th>وضعیت</th></tr>`;
+            for (const s of data.servers) {
+                const color = s.load_percent > 80 ? 'badge-danger' : s.load_percent > 50 ? 'badge-warning' : 'badge-success';
+                html += `
+                    <tr>
+                        <td>${s.name}</td>
+                        <td>${s.current_users}</td>
+                        <td>${s.max_users}</td>
+                        <td class="${color}">${s.load_percent}%</td>
+                        <td>${s.is_active ? '✅ فعال' : '❌ غیرفعال'}</td>
+                    </tr>
+                `;
+            }
+            html += '</table>';
+            document.getElementById('servers-status').innerHTML = html;
+        }
+    } catch (e) {
+        document.getElementById('servers-status').innerHTML = '<p>خطا در بارگذاری</p>';
+    }
+}
+
+async function loadAdminUsers(search = '') {
+    try {
+        const url = `/api/admin/users?limit=20${search ? `&search=${encodeURIComponent(search)}` : ''}`;
+        const res = await fetch(url, {
+            headers: { 'token': token }
+        });
+        const data = await res.json();
+        if (data.users) {
+            let html = `<table class="admin-table"><tr><th>کاربر</th><th>ایمیل</th><th>ویدیو</th><th>دنبال‌کننده</th><th>ویژه</th></tr>`;
+            for (const u of data.users) {
+                html += `
+                    <tr>
+                        <td>${u.full_name || u.username}</td>
+                        <td>${u.email}</td>
+                        <td>${u.videos_count}</td>
+                        <td>${u.followers_count}</td>
+                        <td>
+                            <button onclick="togglePremium(${u.id})" style="background:${u.is_premium ? '#ed4956' : '#0095f6'};color:white;border:none;padding:2px 12px;border-radius:4px;cursor:pointer;">
+                                ${u.is_premium ? 'لغو' : 'ویژه'}
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            }
+            html += '</table>';
+            document.getElementById('admin-users-list').innerHTML = html;
+        }
+    } catch (e) {}
+}
+
+async function togglePremium(userId) {
+    try {
+        const res = await fetch(`/admin/users/${userId}/toggle-premium`, {
+            method: 'POST',
+            headers: { 'token': token }
+        });
+        const data = await res.json();
+        if (data.success) {
+            showToast(`✅ وضعیت ویژه: ${data.is_premium ? 'فعال' : 'غیرفعال'}`);
+            loadAdminUsers(document.getElementById('admin-user-search').value);
+        }
+    } catch (e) {}
+}
+
+function showAddServer() {
+    showModal('➕ اضافه کردن سرور جدید', `
+        <div class="form-group">
+            <label style="display:block;margin-bottom:4px;">نام سرور</label>
+            <input id="new-server-name" placeholder="مثلاً server-2" style="width:100%;padding:10px;border:1px solid #dbdbdb;border-radius:8px;">
+        </div>
+        <div class="form-group">
+            <label style="display:block;margin-bottom:4px;">آی‌پی سرور</label>
+            <input id="new-server-ip" placeholder="مثلاً 192.168.1.2" style="width:100%;padding:10px;border:1px solid #dbdbdb;border-radius:8px;">
+        </div>
+        <div class="form-group">
+            <label style="display:block;margin-bottom:4px;">پورت</label>
+            <input id="new-server-port" value="8000" style="width:100%;padding:10px;border:1px solid #dbdbdb;border-radius:8px;">
+        </div>
+        <div class="form-group">
+            <label style="display:block;margin-bottom:4px;">حداکثر کاربران</label>
+            <input id="new-server-max" value="10000" style="width:100%;padding:10px;border:1px solid #dbdbdb;border-radius:8px;">
+        </div>
+        <button onclick="addServer()" style="width:100%;background:#0095f6;color:white;border:none;padding:12px;border-radius:8px;font-size:16px;cursor:pointer;">➕ افزودن</button>
+    `);
+}
+
+async function addServer() {
+    const name = document.getElementById('new-server-name').value;
+    const ip = document.getElementById('new-server-ip').value;
+    const port = parseInt(document.getElementById('new-server-port').value);
+    const max_users = parseInt(document.getElementById('new-server-max').value);
+    
+    if (!name || !ip) {
+        showToast('❌ نام و آی‌پی را وارد کنید', 'error');
+        return;
+    }
+    
+    try {
+        const res = await fetch('/admin/servers/add', {
+            method: 'POST',
+            headers: {
+                'token': token,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ server_name: name, server_ip: ip, server_port: port, max_users })
+        });
+        const data = await res.json();
+        if (data.success) {
+            showToast('✅ سرور اضافه شد');
+            closeModal();
+            loadServersStatus();
+        } else {
+            showToast('❌ ' + (data.detail || 'خطا'), 'error');
+        }
+    } catch (e) {
+        showToast('❌ خطا: ' + e.message, 'error');
+    }
+}
+
+// ============================================
+// ACTIONS
+// ============================================
+async function likeVideo(videoId) {
+    if (!token) {
+        showToast('❌ لطفاً وارد شوید', 'error');
+        return;
+    }
+    try {
+        const res = await fetch(`/api/videos/${videoId}/like`, {
+            method: 'POST',
+            headers: { 'token': token }
+        });
+        const data = await res.json();
+        if (data.success) {
+            showTab('feed');
+        }
+    } catch (e) {}
+}
+
+async function addComment(videoId, content) {
+    if (!token) {
+        showToast('❌ لطفاً وارد شوید', 'error');
+        return;
+    }
+    try {
+        const res = await fetch(`/api/videos/${videoId}/comments`, {
+            method: 'POST',
+            headers: {
+                'token': token,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ content })
+        });
+        const data = await res.json();
+        if (data.id) {
+            showTab('feed');
+        }
+    } catch (e) {}
+}
+
+async function followUser(userId) {
+    if (!token) {
+        showToast('❌ لطفاً وارد شوید', 'error');
+        return;
+    }
+    try {
+        const res = await fetch(`/api/users/${userId}/follow`, {
+            method: 'POST',
+            headers: { 'token': token }
+        });
+        const data = await res.json();
+        if (data.success) {
+            showToast(data.following ? '✅ دنبال شد' : '❌ آنفالو شد');
+            showTab('explore');
+        }
+    } catch (e) {}
+}
+
+function shareVideo(url) {
+    if (navigator.share) {
+        navigator.share({
+            title: 'ساده‌گرام',
+            text: 'این ویدیو را ببینید!',
+            url: url
+        });
+    } else {
+        navigator.clipboard.writeText(url).then(() => {
+            showToast('✅ لینک کپی شد');
+        });
+    }
+}
+
+// ============================================
+// MODAL
+// ============================================
+function showModal(title, body) {
+    document.getElementById('modal-title').textContent = title;
+    document.getElementById('modal-body').innerHTML = body;
+    document.getElementById('modal').classList.add('show');
+}
+
+function closeModal() {
+    document.getElementById('modal').classList.remove('show');
+}
+
+// ============================================
+// WEBSOCKET
+// ============================================
+function connectWebSocket() {
+    if (!token) return;
+    if (ws && ws.readyState === WebSocket.OPEN) return;
+    
+    try {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws/chat?token=${token}`;
+        ws = new WebSocket(wsUrl);
+        
+        ws.onopen = function() {
+            console.log('✅ WebSocket متصل شد');
+        };
+        
+        ws.onmessage = function(event) {
+            try {
+                const data = JSON.parse(event.data);
+                if (data.type === 'message') {
+                    // پیام جدید
+                    if (chatWith === data.data.sender_id) {
+                        chatMessages.push({
+                            id: data.data.id,
+                            sender_id: data.data.sender_id,
+                            receiver_id: currentUser?.id || 0,
+                            content: data.data.content,
+                            is_read: false,
+                            created_at: data.data.created_at,
+                            is_mine: false
+                        });
+                        renderMessages();
+                    }
+                    // به‌روزرسانی لیست مکالمات
+                    if (document.getElementById('chat-list')) {
+                        loadConversations();
+                    }
+                } else if (data.type === 'typing') {
+                    document.getElementById('chat-partner-status').textContent = 'در حال تایپ...';
+                    setTimeout(() => {
+                        document.getElementById('chat-partner-status').textContent = 'آنلاین';
+                    }, 2000);
+                } else if (data.type === 'sent') {
+                    // تایید ارسال
+                }
+            } catch (e) {}
+        };
+        
+        ws.onclose = function() {
+            console.log('❌ WebSocket قطع شد');
+            setTimeout(connectWebSocket, 3000);
+        };
+        
+        ws.onerror = function(e) {
+            console.error('WebSocket error:', e);
+        };
+        
+    } catch (e) {
+        console.error('WebSocket connection error:', e);
+    }
+}
+
+// ============================================
+// AUTH FORM
+// ============================================
+function buildAuthForm() {
+    return `
+        <div style="max-width:400px;margin:40px auto;padding:0 16px;">
+            <div style="background:white;border-radius:16px;border:1px solid #dbdbdb;padding:32px 24px;">
+                <h2 style="text-align:center;font-size:24px;margin-bottom:24px;">📸 ساده‌گرام</h2>
+                <div id="auth-tabs" style="display:flex;gap:8px;margin-bottom:20px;">
+                    <button onclick="switchAuth('login')" class="auth-tab active" style="flex:1;padding:10px;background:#0095f6;color:white;border:none;border-radius:8px;cursor:pointer;">ورود</button>
+                    <button onclick="switchAuth('register')" class="auth-tab" style="flex:1;padding:10px;background:#efefef;color:#262626;border:none;border-radius:8px;cursor:pointer;">ثبت‌نام</button>
+                </div>
+                <div id="auth-login">
+                    <input id="login-username" placeholder="نام کاربری" style="width:100%;padding:12px;border:1px solid #dbdbdb;border-radius:8px;margin-bottom:10px;">
+                    <input id="login-password" type="password" placeholder="رمز عبور" style="width:100%;padding:12px;border:1px solid #dbdbdb;border-radius:8px;margin-bottom:16px;">
+                    <button onclick="login(document.getElementById('login-username').value, document.getElementById('login-password').value)" style="width:100%;background:#0095f6;color:white;border:none;padding:12px;border-radius:8px;font-size:16px;cursor:pointer;">ورود</button>
+                </div>
+                <div id="auth-register" style="display:none;">
+                    <input id="reg-username" placeholder="نام کاربری" style="width:100%;padding:12px;border:1px solid #dbdbdb;border-radius:8px;margin-bottom:10px;">
+                    <input id="reg-email" type="email" placeholder="ایمیل" style="width:100%;padding:12px;border:1px solid #dbdbdb;border-radius:8px;margin-bottom:10px;">
+                    <input id="reg-fullname" placeholder="نام کامل" style="width:100%;padding:12px;border:1px solid #dbdbdb;border-radius:8px;margin-bottom:10px;">
+                    <input id="reg-password" type="password" placeholder="رمز عبور" style="width:100%;padding:12px;border:1px solid #dbdbdb;border-radius:8px;margin-bottom:16px;">
+                    <button onclick="register(document.getElementById('reg-username').value, document.getElementById('reg-email').value, document.getElementById('reg-password').value, document.getElementById('reg-fullname').value)" style="width:100%;background:#0095f6;color:white;border:none;padding:12px;border-radius:8px;font-size:16px;cursor:pointer;">ثبت‌نام</button>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function switchAuth(type) {
+    document.querySelectorAll('.auth-tab').forEach(t => {
+        t.style.background = '#efefef';
+        t.style.color = '#262626';
+    });
+    document.getElementById('auth-login').style.display = type === 'login' ? 'block' : 'none';
+    document.getElementById('auth-register').style.display = type === 'register' ? 'block' : 'none';
+    document.querySelector(`.auth-tab:${type === 'login' ? 'first' : 'last'}-child`).style.background = '#0095f6';
+    document.querySelector(`.auth-tab:${type === 'login' ? 'first' : 'last'}-child`).style.color = 'white';
+}
+
+// ============================================
+// INIT
+// ============================================
+document.addEventListener('DOMContentLoaded', function() {
+    // اگر توکن داریم، به سرور متصل می‌شیم
+    if (token) {
+        connectWebSocket();
+        // دریافت اطلاعات کاربر
+        fetch('/api/auth/me', {
+            headers: { 'token': token }
+        }).then(res => res.json()).then(data => {
+            if (data.id) {
+                currentUser = data;
+                showTab('feed');
+            } else {
+                token = '';
+                localStorage.removeItem('token');
+                showTab('feed');
+            }
+        }).catch(() => {
+            token = '';
+            localStorage.removeItem('token');
+            showTab('feed');
+        });
+    } else {
+        showTab('feed');
+    }
+});
+
+// بستن مودال با کلیک خارج
+document.getElementById('modal').addEventListener('click', function(e) {
+    if (e.target === this) closeModal();
+});
+
+console.log('📸 ساده‌گرام نسخه حرفه‌ای');
+</script>
+</body>
+</html>
+    """
+# ============================================
+# اجرا
+# ============================================
 if __name__ == "__main__":
-    asyncio.run(main())
+    import uvicorn
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True
+    )
