@@ -1,5 +1,5 @@
 # ============================================================
-# ربات با کلید HeyGen (کلید شما)
+# UTYOB - ربات سازنده ویدیو با HeyGen
 # ============================================================
 
 import os
@@ -18,7 +18,6 @@ HEYGEN_API_KEY = "sk_V2_hgu_kJHEhaemD1l_ou2ZGBKET0jsW7ONhqHgG4NUx06xlpbl"
 
 logging.basicConfig(level=logging.INFO)
 
-# ===== ربات =====
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
@@ -26,13 +25,13 @@ class Form(StatesGroup):
     waiting_text = State()
 
 # ============================================================
-# ساخت ویدیو با کلید شما
+# ساخت ویدیو با HeyGen
 # ============================================================
 
 async def create_video(text: str) -> str:
-    """ساخت ویدیو با کلید HeyGen"""
+    """ساخت ویدیو با HeyGen API"""
     
-    url = "https://api.heygen.com/v1/video.generate"
+    url = "https://api.heygen.com/v1/video/generate"
     
     headers = {
         "x-api-key": HEYGEN_API_KEY,
@@ -62,7 +61,7 @@ async def create_video(text: str) -> str:
             for i in range(30):
                 await asyncio.sleep(2)
                 
-                status_url = f"https://api.heygen.com/v1/video.status?task_id={task_id}"
+                status_url = f"https://api.heygen.com/v1/video/status?task_id={task_id}"
                 async with session.get(status_url, headers=headers) as status_resp:
                     status_data = await status_resp.json()
                     status = status_data.get("data", {}).get("status")
@@ -85,9 +84,9 @@ async def start(message: types.Message, state: FSMContext):
     await state.set_state(Form.waiting_text)
     await message.answer(
         "🎬 **ربات سازنده ویدیو با HeyGen**\n\n"
-        "سلام! متن خود را بفرستید تا ویدیو بسازم.\n\n"
-        "📝 **مثال:**\n"
-        "`یک ویدیوی تبلیغاتی برای محصول جدید`\n\n"
+        "سلام! من با استفاده از هوش مصنوعی HeyGen، متن شما را به ویدیو تبدیل می‌کنم.\n\n"
+        "📝 **متن خود را بفرستید:**\n"
+        "مثال: `یک ویدیوی تبلیغاتی برای ربات قرعه‌کشی`\n\n"
         "⏱ زمان ساخت: ~۳۰-۶۰ ثانیه",
         parse_mode="Markdown"
     )
@@ -97,10 +96,10 @@ async def make_video(message: types.Message, state: FSMContext):
     text = message.text
     
     if len(text) < 5:
-        await message.answer("❌ حداقل ۵ کلمه بفرستید.")
+        await message.answer("❌ لطفاً حداقل ۵ کلمه بفرستید.")
         return
     
-    status = await message.answer("🎬 در حال ساخت ویدیو... ⏳")
+    status = await message.answer("🎬 **در حال ساخت ویدیو...**\n⏳ حدود ۳۰-۶۰ ثانیه طول می‌کشد.", parse_mode="Markdown")
     
     try:
         video_url = await create_video(text)
@@ -113,7 +112,7 @@ async def make_video(message: types.Message, state: FSMContext):
         await status.delete()
         
     except Exception as e:
-        await status.edit_text(f"❌ خطا: {str(e)[:150]}")
+        await status.edit_text(f"❌ **خطا:**\n```\n{str(e)[:150]}\n```", parse_mode="Markdown")
 
 # ============================================================
 # اجرا
@@ -121,9 +120,12 @@ async def make_video(message: types.Message, state: FSMContext):
 
 async def main():
     print("=" * 50)
-    print("🎬 ربات با کلید HeyGen")
+    print("🎬 ربات سازنده ویدیو با HeyGen")
     print("=" * 50)
-    print("✅ کلید تنظیم شد")
+    print("✅ کلید API تنظیم شد")
+    print("⏱ زمان ساخت: ~30-60 ثانیه")
+    print("=" * 50)
+    print("🤖 ربات آماده است! منتظر متن شما...")
     print("=" * 50)
     
     await dp.start_polling(bot)
