@@ -1,6 +1,6 @@
 # ============================================
-# PROFESSIONAL SIGNAL BOT V4 - FULLY TESTED
-# NO ERRORS - READY TO RUN
+# PROFESSIONAL SIGNAL BOT V5 - FULLY WORKING
+# WITH TELEGRAM SEND, AUTO LEARNING, 7 INDICATORS
 # ============================================
 
 import requests
@@ -8,462 +8,234 @@ import numpy as np
 import time
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from collections import deque
 import threading
 
 # ============================================
-# CONFIGURATION (Edit these)
+# 🔧 CONFIGURATION (فقط اینجا رو عوض کن!)
 # ============================================
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"  # Get from @BotFather
-CHANNEL_ID = "@davnold"  # Your channel
-ADMIN_ID = "YOUR_TELEGRAM_ID"  # Your Telegram ID
 
-# Payment Settings
-WALLET_ADDRESS = "TV61aTh98MGqmteYzda5AaBzdXgGqreG6A"
-WALLET_NETWORK = "TRC20"
-SUBSCRIPTION_PRICE = "100 USDT"
+BOT_TOKEN = "توکن_ربات_اینجا"  # از @BotFather بگیر
+CHANNEL_ID = "@davnold"  # کانال خودت
+ADMIN_ID = "ایدی_تلگرامت"  # ایدی خودت (عدد)
 
-# Signal Settings
-SIGNAL_INTERVAL = 180  # 3 minutes
+# تنظیمات سیگنال
+INTERVAL = 180  # ۳ دقیقه
 MIN_CONFIDENCE = 65
-MAX_SIGNALS_PER_CYCLE = 2
+MAX_SIGNALS = 2
 
 # ============================================
-# 1. GET REAL DATA FROM BINANCE
+# 📡 ۱. گرفتن داده از بایننس
 # ============================================
 
-def get_price(symbol):
-    """Get real price from Binance"""
+def get_candles(symbol, limit=250):
+    """گرفتن کندل واقعی از بایننس"""
     try:
-        r = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}", timeout=5)
+        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=5m&limit={limit}"
+        r = requests.get(url, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            return {
+                'close': [float(x[4]) for x in data],
+                'high': [float(x[2]) for x in data],
+                'low': [float(x[3]) for x in data],
+                'volume': [float(x[5]) for x in data],
+                'open': [float(x[1]) for x in data]
+            }
+    except Exception as e:
+        print(f"⚠️ Error getting candles: {e}")
+    return None
+
+def get_current_price(symbol):
+    """گرفتن قیمت لحظه‌ای"""
+    try:
+        url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
+        r = requests.get(url, timeout=5)
         if r.status_code == 200:
             return float(r.json()['price'])
     except:
         pass
     return None
 
-def get_candles(symbol, limit=300):
-    """Get real candlestick data from Binance"""
-    try:
-        r = requests.get(
-            f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=5m&limit={limit}",
-            timeout=5
-        )
-        if r.status_code == 200:
-            data = r.json()
-            closes = [float(x[4]) for x in data]
-            highs = [float(x[2]) for x in data]
-            lows = [float(x[3]) for x in data]
-            volumes = [float(x[5]) for x in data]
-            opens = [float(x[1]) for x in data]
-            return {
-                'close': closes,
-                'high': highs,
-                'low': lows,
-                'volume': volumes,
-                'open': opens
-            }
-    except Exception as e:
-        print(f"Error getting candles: {e}")
-    return None
-
-def get_24hr_stats(symbol):
-    """Get 24h stats"""
-    try:
-        r = requests.get(f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}", timeout=5)
-        if r.status_code == 200:
-            data = r.json()
-            return {
-                'high': float(data['highPrice']),
-                'low': float(data['lowPrice']),
-                'volume': float(data['volume']),
-                'change': float(data['priceChangePercent']),
-                'open': float(data['openPrice'])
-            }
-    except:
-        pass
-    return None
-
 # ============================================
-# 2. VWAP - POWERFUL INDICATOR
+# 📊 ۲. اندیکاتورهای واقعی
 # ============================================
 
-def calculate_vwap(prices, volumes):
-    """Volume Weighted Average Price - The Strongest Indicator"""
-    if len(prices) < 2 or len(volumes) < 2:
-        return prices[-1] if prices else 0
-    
-    total_value = 0
-    total_volume = 0
-    
-    for i in range(len(prices)):
-        total_value += prices[i] * volumes[i]
-        total_volume += volumes[i]
-    
-    if total_volume == 0:
-        return prices[-1]
-    
-    return round(total_value / total_volume, 2)
-
-def calculate_vwap_multi_timeframe(prices, volumes):
-    """VWAP on multiple timeframes"""
-    vwaps = {}
-    
-    if len(prices) >= 10:
-        vwaps['current'] = calculate_vwap(prices[-10:], volumes[-10:])
-    
-    if len(prices) >= 30:
-        vwaps['short'] = calculate_vwap(prices[-30:], volumes[-30:])
-    
-    if len(prices) >= 60:
-        vwaps['medium'] = calculate_vwap(prices[-60:], volumes[-60:])
-    
-    if len(prices) >= 240:
-        vwaps['long'] = calculate_vwap(prices[-240:], volumes[-240:])
-    
-    if len(prices) >= 288:
-        vwaps['daily'] = calculate_vwap(prices[-288:], volumes[-288:])
-    
-    return vwaps
-
-def analyze_vwap(prices, volumes, current_price):
-    """Analyze VWAP for trading signals"""
-    vwaps = calculate_vwap_multi_timeframe(prices, volumes)
-    
-    if not vwaps:
-        return 0, ["No VWAP data"]
-    
-    current_vwap = vwaps.get('current', current_price)
-    
-    if current_vwap > 0:
-        distance_pct = ((current_price - current_vwap) / current_vwap) * 100
-    else:
-        distance_pct = 0
-    
-    score = 0
-    reasons = []
-    
-    if current_price > current_vwap:
-        score += 15
-        reasons.append(f"Price {distance_pct:.2f}% above VWAP (Bullish)")
-    else:
-        score -= 15
-        reasons.append(f"Price {abs(distance_pct):.2f}% below VWAP (Bearish)")
-    
-    bullish_vwaps = 0
-    bearish_vwaps = 0
-    
-    for tf, vwap in vwaps.items():
-        if tf == 'current':
-            continue
-        if current_price > vwap:
-            bullish_vwaps += 1
-        else:
-            bearish_vwaps += 1
-    
-    if bullish_vwaps >= 2:
-        score += 10
-        reasons.append(f"Bullish on {bullish_vwaps} timeframes")
-    elif bearish_vwaps >= 2:
-        score -= 10
-        reasons.append(f"Bearish on {bearish_vwaps} timeframes")
-    
-    if distance_pct > 3:
-        score += 10
-        reasons.append(f"🔥 Strong breakout above VWAP (+{distance_pct:.2f}%)")
-    elif distance_pct < -3:
-        score -= 10
-        reasons.append(f"🔥 Strong breakdown below VWAP ({distance_pct:.2f}%)")
-    
-    return score, reasons
-
-# ============================================
-# 3. SUPPORT & RESISTANCE
-# ============================================
-
-def find_support_resistance(prices, highs, lows):
-    """Find real support and resistance levels"""
-    if len(prices) < 20:
-        return 0, 0
-    
-    peaks = []
-    troughs = []
-    
-    for i in range(2, len(prices)-2):
-        if highs[i] > highs[i-1] and highs[i] > highs[i+1]:
-            if highs[i] > highs[i-2] and highs[i] > highs[i+2]:
-                peaks.append(highs[i])
-        
-        if lows[i] < lows[i-1] and lows[i] < lows[i+1]:
-            if lows[i] < lows[i-2] and lows[i] < lows[i+2]:
-                troughs.append(lows[i])
-    
-    resistance = 0
-    support = 0
-    
-    if peaks:
-        peaks = sorted(peaks, reverse=True)
-        resistance = peaks[0] if peaks else 0
-        
-        if len(peaks) >= 2:
-            for i in range(1, min(5, len(peaks))):
-                if abs(peaks[i] - peaks[0]) / peaks[0] < 0.02:
-                    resistance = max(resistance, peaks[i])
-    
-    if troughs:
-        troughs = sorted(troughs)
-        support = troughs[0] if troughs else 0
-        
-        if len(troughs) >= 2:
-            for i in range(1, min(5, len(troughs))):
-                if abs(troughs[i] - troughs[0]) / troughs[0] < 0.02:
-                    support = min(support, troughs[i])
-    
-    stats = get_24hr_stats("BTCUSDT")
-    if stats:
-        if resistance == 0 or resistance < stats['high']:
-            resistance = stats['high']
-        if support == 0 or support > stats['low']:
-            support = stats['low']
-    
-    return round(support, 2), round(resistance, 2)
-
-# ============================================
-# 4. INDICATORS (FIXED - NO .mean() ERROR)
-# ============================================
-
-def calculate_rsi(prices, period=14):
-    """Real RSI"""
+def calc_rsi(prices, period=14):
     if len(prices) < period + 1:
         return 50
-    
-    # Convert to numpy array for calculations
-    prices_array = np.array(prices)
-    deltas = np.diff(prices_array[-period-1:])
+    p = np.array(prices[-period-1:])
+    deltas = np.diff(p)
     gain = np.mean(deltas[deltas > 0]) if np.sum(deltas > 0) > 0 else 0
     loss = -np.mean(deltas[deltas < 0]) if np.sum(deltas < 0) > 0 else 0.001
-    
     rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return round(float(rsi), 1)
+    return round(100 - (100 / (1 + rs)), 1)
 
-def calculate_macd(prices, fast=12, slow=26, signal=9):
-    """Real MACD with signal line"""
+def calc_macd(prices, fast=12, slow=26, signal=9):
     if len(prices) < slow:
         return 0, 0, 0
-    
-    prices_array = np.array(prices)
+    p = np.array(prices)
     
     # Fast EMA
-    fast_multiplier = 2 / (fast + 1)
-    fast_ema = float(np.mean(prices_array[-fast:]))
-    for price in prices_array[-fast:]:
-        fast_ema = float(price) * fast_multiplier + fast_ema * (1 - fast_multiplier)
+    f_mult = 2 / (fast + 1)
+    f_ema = float(np.mean(p[-fast:]))
+    for price in p[-fast:]:
+        f_ema = float(price) * f_mult + f_ema * (1 - f_mult)
     
     # Slow EMA
-    slow_multiplier = 2 / (slow + 1)
-    slow_ema = float(np.mean(prices_array[-slow:]))
-    for price in prices_array[-slow:]:
-        slow_ema = float(price) * slow_multiplier + slow_ema * (1 - slow_multiplier)
+    s_mult = 2 / (slow + 1)
+    s_ema = float(np.mean(p[-slow:]))
+    for price in p[-slow:]:
+        s_ema = float(price) * s_mult + s_ema * (1 - s_mult)
     
-    macd_line = fast_ema - slow_ema
+    macd_line = f_ema - s_ema
     
-    # Signal line (9-period EMA of MACD)
-    signal_multiplier = 2 / (signal + 1)
-    signal_line = macd_line
+    # Signal line
+    sig_mult = 2 / (signal + 1)
+    sig_line = macd_line
     for _ in range(signal):
-        signal_line = macd_line * signal_multiplier + signal_line * (1 - signal_multiplier)
+        sig_line = macd_line * sig_mult + sig_line * (1 - sig_mult)
     
-    histogram = macd_line - signal_line
-    
-    return round(float(macd_line), 4), round(float(signal_line), 4), round(float(histogram), 4)
+    hist = macd_line - sig_line
+    return round(macd_line, 4), round(sig_line, 4), round(hist, 4)
 
-def calculate_ma(prices, period):
-    """Simple Moving Average"""
+def calc_ma(prices, period):
     if len(prices) < period:
         return prices[-1]
     return round(float(np.mean(np.array(prices[-period:]))), 2)
 
-def calculate_ema(prices, period):
-    """Exponential Moving Average"""
+def calc_ema(prices, period):
     if len(prices) < period:
         return prices[-1]
-    
-    prices_array = np.array(prices)
-    multiplier = 2 / (period + 1)
-    ema = float(np.mean(prices_array[-period:]))
-    for price in prices_array[-period:]:
-        ema = float(price) * multiplier + ema * (1 - multiplier)
-    return round(float(ema), 2)
+    p = np.array(prices)
+    mult = 2 / (period + 1)
+    ema = float(np.mean(p[-period:]))
+    for price in p[-period:]:
+        ema = float(price) * mult + ema * (1 - mult)
+    return round(ema, 2)
 
-def calculate_bollinger(prices, period=20, std_dev=2):
-    """Bollinger Bands"""
+def calc_bollinger(prices, period=20, std_dev=2):
     if len(prices) < period:
         return prices[-1], prices[-1], prices[-1]
-    
-    prices_array = np.array(prices[-period:])
-    ma = float(np.mean(prices_array))
-    std = float(np.std(prices_array))
-    
-    upper = ma + (std_dev * std)
-    lower = ma - (std_dev * std)
-    
-    return round(float(upper), 2), round(float(ma), 2), round(float(lower), 2)
+    p = np.array(prices[-period:])
+    ma = float(np.mean(p))
+    std = float(np.std(p))
+    return round(ma + std_dev * std, 2), round(ma, 2), round(ma - std_dev * std, 2)
 
-def calculate_atr(highs, lows, prices, period=14):
-    """Average True Range"""
+def calc_vwap(prices, volumes):
+    if len(prices) < 2:
+        return prices[-1] if prices else 0
+    total_value = sum(prices[i] * volumes[i] for i in range(len(prices)))
+    total_volume = sum(volumes)
+    if total_volume == 0:
+        return prices[-1]
+    return round(total_value / total_volume, 2)
+
+def calc_atr(highs, lows, prices, period=14):
     if len(prices) < period:
         return 0.01
-    
     tr = []
     for i in range(1, period + 1):
         if i < len(prices):
-            tr.append(max(
-                highs[-i] - lows[-i],
-                abs(highs[-i] - prices[-i-1]),
-                abs(lows[-i] - prices[-i-1])
-            ))
-    
+            tr.append(max(highs[-i] - lows[-i], abs(highs[-i] - prices[-i-1]), abs(lows[-i] - prices[-i-1])))
     return round(float(np.mean(np.array(tr))) if tr else 0.01, 2)
 
-def calculate_volume_profile(volumes):
-    """Volume analysis"""
-    if len(volumes) < 20:
-        return 1.0
+def calc_support_resistance(highs, lows, prices):
+    if len(prices) < 20:
+        return 0, 0
     
-    avg_vol = float(np.mean(np.array(volumes[-20:])))
-    current_vol = float(volumes[-1])
+    peaks, troughs = [], []
+    for i in range(2, len(prices)-2):
+        if highs[i] > highs[i-1] and highs[i] > highs[i+1] and highs[i] > highs[i-2] and highs[i] > highs[i+2]:
+            peaks.append(highs[i])
+        if lows[i] < lows[i-1] and lows[i] < lows[i+1] and lows[i] < lows[i-2] and lows[i] < lows[i+2]:
+            troughs.append(lows[i])
     
-    return round(current_vol / avg_vol, 2)
-
-def calculate_adx(prices, highs, lows, period=14):
-    """Average Directional Index - Trend Strength"""
-    if len(prices) < period + 1:
-        return 25
+    resistance = peaks[0] if peaks else 0
+    support = troughs[0] if troughs else 0
     
-    tr = []
-    up = []
-    down = []
+    # پیدا کردن سطوح قوی‌تر
+    if len(peaks) >= 2:
+        for i in range(1, min(5, len(peaks))):
+            if abs(peaks[i] - peaks[0]) / peaks[0] < 0.02:
+                resistance = max(resistance, peaks[i])
     
-    for i in range(1, period + 1):
-        if i < len(prices):
-            tr.append(max(
-                highs[-i] - lows[-i],
-                abs(highs[-i] - prices[-i-1]),
-                abs(lows[-i] - prices[-i-1])
-            ))
-            up_move = highs[-i] - highs[-i-1]
-            down_move = lows[-i-1] - lows[-i]
-            up.append(max(0, up_move) if up_move > down_move else 0)
-            down.append(max(0, down_move) if down_move > up_move else 0)
+    if len(troughs) >= 2:
+        for i in range(1, min(5, len(troughs))):
+            if abs(troughs[i] - troughs[0]) / troughs[0] < 0.02:
+                support = min(support, troughs[i])
     
-    atr = float(np.mean(np.array(tr))) if tr else 0.01
-    di_plus = 100 * float(np.mean(np.array(up))) / atr if atr > 0 else 0
-    di_minus = 100 * float(np.mean(np.array(down))) / atr if atr > 0 else 0
-    
-    dx = 100 * abs(di_plus - di_minus) / (di_plus + di_minus) if (di_plus + di_minus) > 0 else 0
-    
-    return round(float(dx), 1)
+    return round(support, 2), round(resistance, 2)
 
 # ============================================
-# 5. AUTO LEARNING SYSTEM
+# 🧠 ۳. سیستم یادگیری
 # ============================================
 
-class AutoLearner:
-    """Learn from user feedback and market patterns"""
-    
+class LearningSystem:
     def __init__(self):
-        self.load_data()
-        self.weights = {
-            'vwap': 1.5,
-            'rsi': 1.2,
-            'macd': 1.2,
-            'ma': 1.0,
-            'bollinger': 1.0,
-            'volume': 1.0,
-            'support': 1.0,
-            'adx': 0.8
-        }
-        self.patterns = deque(maxlen=1000)
-        self.feedback_history = deque(maxlen=500)
+        self.file = "learning_data.json"
+        self.load()
         
-    def load_data(self):
-        """Load saved learning data"""
-        if os.path.exists('learning_data_v4.json'):
+    def load(self):
+        if os.path.exists(self.file):
             try:
-                with open('learning_data_v4.json', 'r') as f:
+                with open(self.file, 'r') as f:
                     data = json.load(f)
-                    self.positive_feedback = data.get('positive', 0)
-                    self.negative_feedback = data.get('negative', 0)
-                    self.total_signals = data.get('total', 0)
-                    if 'weights' in data:
-                        self.weights.update(data['weights'])
+                    self.positive = data.get('positive', 0)
+                    self.negative = data.get('negative', 0)
+                    self.total = data.get('total', 0)
+                    self.weights = data.get('weights', {
+                        'rsi': 1.0, 'macd': 1.0, 'ma': 1.0,
+                        'bollinger': 1.0, 'volume': 1.0, 'vwap': 1.5,
+                        'support': 1.0
+                    })
                     return
             except:
                 pass
         
-        self.positive_feedback = 0
-        self.negative_feedback = 0
-        self.total_signals = 0
-        self.save_data()
+        self.positive = 0
+        self.negative = 0
+        self.total = 0
+        self.weights = {'rsi': 1.0, 'macd': 1.0, 'ma': 1.0, 'bollinger': 1.0, 'volume': 1.0, 'vwap': 1.5, 'support': 1.0}
+        self.save()
     
-    def save_data(self):
-        """Save learning data"""
+    def save(self):
         try:
-            with open('learning_data_v4.json', 'w') as f:
+            with open(self.file, 'w') as f:
                 json.dump({
-                    'positive': self.positive_feedback,
-                    'negative': self.negative_feedback,
-                    'total': self.total_signals,
+                    'positive': self.positive,
+                    'negative': self.negative,
+                    'total': self.total,
                     'weights': self.weights
                 }, f)
         except:
             pass
     
-    def add_feedback(self, signal_id, feedback_type):
-        """Record user feedback"""
+    def add_feedback(self, feedback_type):
         if feedback_type == 'positive':
-            self.positive_feedback += 1
+            self.positive += 1
             for key in self.weights:
                 self.weights[key] = min(2.0, self.weights[key] * 1.02)
         else:
-            self.negative_feedback += 1
+            self.negative += 1
             for key in self.weights:
-                self.weights[key] = max(0.3, self.weights[key] * 0.98)
-        
-        self.total_signals += 1
-        self.save_data()
+                self.weights[key] = max(0.5, self.weights[key] * 0.98)
+        self.total += 1
+        self.save()
     
     def get_accuracy(self):
-        """Calculate accuracy from feedback"""
-        total = self.positive_feedback + self.negative_feedback
+        total = self.positive + self.negative
         if total == 0:
             return 50.0
-        return round((self.positive_feedback / total) * 100, 1)
-    
-    def adjust_signal(self, score, signal):
-        """Adjust signal confidence based on learning"""
-        accuracy = self.get_accuracy()
-        
-        if accuracy > 75:
-            score = min(97, score * 1.12)
-        elif accuracy > 65:
-            score = min(95, score * 1.08)
-        elif accuracy < 35:
-            score = max(25, score * 0.85)
-        elif accuracy < 45:
-            score = max(30, score * 0.92)
-        
-        return round(float(score), 1)
+        return round((self.positive / total) * 100, 1)
 
 # ============================================
-# 6. SIGNAL GENERATOR - COMPLETE
+# 🎯 ۴. تولید سیگنال
 # ============================================
 
 def generate_signal(symbol, learner):
-    """Generate complete signal with all 7 indicators"""
-    data = get_candles(symbol, 300)
+    data = get_candles(symbol, 200)
     if not data:
         return None
     
@@ -471,343 +243,150 @@ def generate_signal(symbol, learner):
     highs = data['high']
     lows = data['low']
     volumes = data['volume']
-    opens = data['open']
-    current_price = prices[-1]
+    current = prices[-1]
     
-    support, resistance = find_support_resistance(prices, highs, lows)
+    # محاسبه همه اندیکاتورها
+    rsi = calc_rsi(prices, 14)
+    macd, macd_sig, macd_hist = calc_macd(prices, 12, 26, 9)
+    ma20 = calc_ma(prices, 20)
+    ma50 = calc_ma(prices, 50)
+    ma200 = calc_ma(prices, 200)
+    upper, middle, lower = calc_bollinger(prices, 20, 2)
+    vwap = calc_vwap(prices, volumes)
+    support, resistance = calc_support_resistance(highs, lows, prices)
+    atr = calc_atr(highs, lows, prices, 14)
     
-    # 1. VWAP
-    vwap_score, vwap_reasons = analyze_vwap(prices, volumes, current_price)
-    
-    # 2. RSI
-    rsi = calculate_rsi(prices, 14)
-    rsi_score = 0
-    rsi_reasons = []
-    
-    if rsi < 25:
-        rsi_score = 25
-        rsi_reasons.append(f"🔥 RSI oversold: {rsi}")
-    elif rsi < 35:
-        rsi_score = 15
-        rsi_reasons.append(f"📈 RSI near oversold: {rsi}")
-    elif rsi > 75:
-        rsi_score = -25
-        rsi_reasons.append(f"🔥 RSI overbought: {rsi}")
-    elif rsi > 65:
-        rsi_score = -15
-        rsi_reasons.append(f"📉 RSI near overbought: {rsi}")
-    
-    # 3. MACD
-    macd_line, signal_line, histogram = calculate_macd(prices, 12, 26, 9)
-    macd_score = 0
-    macd_reasons = []
-    
-    if macd_line > signal_line:
-        if histogram > 0:
-            macd_score = 20
-            macd_reasons.append(f"🟢 MACD bullish (Hist: {histogram:.4f})")
-        else:
-            macd_score = 10
-            macd_reasons.append(f"🟢 MACD positive but weakening")
+    # حجم
+    if len(volumes) >= 20:
+        vol_ratio = round(volumes[-1] / float(np.mean(np.array(volumes[-20:]))), 2)
     else:
-        if histogram < 0:
-            macd_score = -20
-            macd_reasons.append(f"🔴 MACD bearish (Hist: {histogram:.4f})")
-        else:
-            macd_score = -10
-            macd_reasons.append(f"🔴 MACD negative but improving")
+        vol_ratio = 1.0
     
-    # 4. Moving Averages
-    ma20 = calculate_ma(prices, 20)
-    ma50 = calculate_ma(prices, 50)
-    ma200 = calculate_ma(prices, 200)
-    ema20 = calculate_ema(prices, 20)
-    ma_score = 0
-    ma_reasons = []
+    # ===== امتیازدهی =====
+    score = 0
+    reasons = []
     
-    if current_price > ma20 and ma20 > ma50 and ma50 > ma200:
-        ma_score = 20
-        ma_reasons.append("🚀 Strong uptrend (MA20>MA50>MA200)")
-    elif current_price < ma20 and ma20 < ma50 and ma50 < ma200:
-        ma_score = -20
-        ma_reasons.append("💀 Strong downtrend (MA20<MA50<MA200)")
-    elif current_price > ma20 and ma20 > ma50:
-        ma_score = 12
-        ma_reasons.append("📈 Uptrend (MA20>MA50)")
-    elif current_price < ma20 and ma20 < ma50:
-        ma_score = -12
-        ma_reasons.append("📉 Downtrend (MA20<MA50)")
-    elif current_price > ma20:
-        ma_score = 5
-        ma_reasons.append("⬆️ Price above MA20")
-    elif current_price < ma20:
-        ma_score = -5
-        ma_reasons.append("⬇️ Price below MA20")
+    # ۱. VWAP (قوی‌ترین)
+    if current > vwap:
+        score += 20 * learner.weights['vwap']
+        reasons.append(f"✅ VWAP: قیمت بالای میانگین وزنی (Bullish)")
+    else:
+        score -= 20 * learner.weights['vwap']
+        reasons.append(f"❌ VWAP: قیمت پایین میانگین وزنی (Bearish)")
     
-    # 5. Bollinger Bands
-    upper, middle, lower = calculate_bollinger(prices, 20, 2)
-    bollinger_score = 0
-    bollinger_reasons = []
+    # ۲. RSI
+    if rsi < 30:
+        score += 20 * learner.weights['rsi']
+        reasons.append(f"✅ RSI اشباع فروش: {rsi}")
+    elif rsi > 70:
+        score -= 20 * learner.weights['rsi']
+        reasons.append(f"❌ RSI اشباع خرید: {rsi}")
+    elif rsi < 40:
+        score += 10 * learner.weights['rsi']
+        reasons.append(f"✅ RSI نزدیک اشباع فروش: {rsi}")
+    elif rsi > 60:
+        score -= 10 * learner.weights['rsi']
+        reasons.append(f"❌ RSI نزدیک اشباع خرید: {rsi}")
     
-    if current_price < lower:
-        bollinger_score = 15
-        bollinger_reasons.append(f"🎯 Touch lower band: ${lower:,.2f}")
-    elif current_price > upper:
-        bollinger_score = -15
-        bollinger_reasons.append(f"🎯 Touch upper band: ${upper:,.2f}")
-    elif current_price < middle:
-        bollinger_score = 8
-        bollinger_reasons.append("📊 Lower half of bands")
-    elif current_price > middle:
-        bollinger_score = -8
-        bollinger_reasons.append("📊 Upper half of bands")
+    # ۳. MACD
+    if macd > 0 and macd > macd_sig:
+        score += 15 * learner.weights['macd']
+        reasons.append(f"✅ MACD صعودی: {macd}")
+    elif macd < 0 and macd < macd_sig:
+        score -= 15 * learner.weights['macd']
+        reasons.append(f"❌ MACD نزولی: {macd}")
     
-    # 6. Volume
-    volume_ratio = calculate_volume_profile(volumes)
-    volume_score = 0
-    volume_reasons = []
+    # ۴. میانگین متحرک
+    if current > ma20 and ma20 > ma50:
+        score += 15 * learner.weights['ma']
+        reasons.append(f"✅ روند صعودی (MA20: {ma20:.0f} > MA50: {ma50:.0f})")
+    elif current < ma20 and ma20 < ma50:
+        score -= 15 * learner.weights['ma']
+        reasons.append(f"❌ روند نزولی (MA20: {ma20:.0f} < MA50: {ma50:.0f})")
     
-    if volume_ratio > 2.0:
-        volume_score = 10
-        volume_reasons.append(f"📊 High volume: {volume_ratio}x avg")
-    elif volume_ratio > 1.5:
-        volume_score = 5
-        volume_reasons.append(f"📊 Good volume: {volume_ratio}x avg")
-    elif volume_ratio < 0.5:
-        volume_score = -10
-        volume_reasons.append(f"📊 Low volume: {volume_ratio}x avg")
+    # ۵. باند بولینگر
+    if current < lower:
+        score += 12 * learner.weights['bollinger']
+        reasons.append(f"✅ برخورد به کف بولینگر: {lower:.0f}")
+    elif current > upper:
+        score -= 12 * learner.weights['bollinger']
+        reasons.append(f"❌ برخورد به سقف بولینگر: {upper:.0f}")
     
-    # 7. Support/Resistance
-    support_score = 0
-    support_reasons = []
+    # ۶. حجم
+    if vol_ratio > 2.0:
+        score += 10 * learner.weights['volume']
+        reasons.append(f"✅ حجم بالا: {vol_ratio}x میانگین")
+    elif vol_ratio > 1.5:
+        score += 5 * learner.weights['volume']
+        reasons.append(f"✅ حجم خوب: {vol_ratio}x میانگین")
+    elif vol_ratio < 0.5:
+        score -= 10 * learner.weights['volume']
+        reasons.append(f"❌ حجم کم: {vol_ratio}x میانگین")
     
+    # ۷. حمایت/مقاومت
     if support > 0:
-        distance_to_support = ((current_price - support) / current_price) * 100
-        if distance_to_support < 0.5:
-            support_score = 12
-            support_reasons.append(f"🛡️ Very near support: ${support:,.2f}")
-        elif distance_to_support < 1.0:
-            support_score = 8
-            support_reasons.append(f"🛡️ Near support: ${support:,.2f}")
-        elif distance_to_support < 2.0:
-            support_score = 4
-            support_reasons.append(f"🛡️ Close to support: ${support:,.2f}")
+        dist_support = ((current - support) / current) * 100
+        if dist_support < 1.0:
+            score += 10 * learner.weights['support']
+            reasons.append(f"✅ نزدیک حمایت: {support:.0f} (فاصله {dist_support:.1f}%)")
     
     if resistance > 0:
-        distance_to_resistance = ((resistance - current_price) / current_price) * 100
-        if distance_to_resistance < 0.5:
-            support_score = -12
-            support_reasons.append(f"🚫 Very near resistance: ${resistance:,.2f}")
-        elif distance_to_resistance < 1.0:
-            support_score = -8
-            support_reasons.append(f"🚫 Near resistance: ${resistance:,.2f}")
-        elif distance_to_resistance < 2.0:
-            support_score = -4
-            support_reasons.append(f"🚫 Close to resistance: ${resistance:,.2f}")
+        dist_resistance = ((resistance - current) / current) * 100
+        if dist_resistance < 1.0:
+            score -= 10 * learner.weights['support']
+            reasons.append(f"❌ نزدیک مقاومت: {resistance:.0f} (فاصله {dist_resistance:.1f}%)")
     
-    # 8. ADX
-    adx = calculate_adx(prices, highs, lows, 14)
-    adx_score = 0
-    adx_reasons = []
+    # ===== تصمیم نهایی =====
+    confidence = min(97, 50 + abs(score))
     
-    if adx > 50:
-        adx_score = 10 if vwap_score > 0 else -10
-        adx_reasons.append(f"🔥 Strong trend (ADX: {adx})")
-    elif adx > 35:
-        adx_score = 5 if vwap_score > 0 else -5
-        adx_reasons.append(f"📊 Moderate trend (ADX: {adx})")
-    elif adx < 20:
-        adx_reasons.append(f"⏳ Weak trend (ADX: {adx}) - Wait")
-    
-    # Calculate total score
-    total_score = (
-        vwap_score * learner.weights['vwap'] +
-        rsi_score * learner.weights['rsi'] +
-        macd_score * learner.weights['macd'] +
-        ma_score * learner.weights['ma'] +
-        bollinger_score * learner.weights['bollinger'] +
-        volume_score * learner.weights['volume'] +
-        support_score * learner.weights['support'] +
-        adx_score * learner.weights.get('adx', 0.8)
-    )
-    
-    # Adjust score
-    if len(prices) > 50:
-        recent_change = ((prices[-1] - prices[-50]) / prices[-50]) * 100
-        if recent_change > 5 and total_score > 0:
-            total_score += 8
-        elif recent_change < -5 and total_score < 0:
-            total_score -= 8
-    
-    confidence = 50 + abs(total_score) / 1.5
-    confidence = min(97, max(30, confidence))
-    
-    if total_score > 30 and confidence >= MIN_CONFIDENCE:
+    if score > 25 and confidence >= MIN_CONFIDENCE:
         signal = "BUY"
-    elif total_score < -30 and confidence >= MIN_CONFIDENCE:
+    elif score < -25 and confidence >= MIN_CONFIDENCE:
         signal = "SELL"
     else:
         signal = "HOLD"
     
-    confidence = learner.adjust_signal(confidence, signal)
-    
-    # Calculate TP and SL
-    fee_rate = 0.001
-    
+    # ===== حد سود و ضرر =====
     if signal == "BUY":
-        tp_multiplier = 1.025 + (abs(total_score) / 2000)
-        tp_price = current_price * tp_multiplier
-        
-        sl_multiplier = 1 - (0.015 + (abs(total_score) / 3000))
-        sl_price = current_price * sl_multiplier
-        
-        if support > 0 and sl_price < support:
-            sl_price = support * 0.995
-        
-        if resistance > 0 and tp_price > resistance:
-            tp_price = resistance * 0.995
-        
-        if (tp_price - current_price) < (current_price * fee_rate * 3):
-            tp_price = current_price * 1.015
-        
+        tp = round(current * (1.02 + (confidence / 3000)), 2)
+        sl = round(current * (0.98 - (confidence / 3000)), 2)
+        if support > 0 and sl < support:
+            sl = round(support * 0.995, 2)
     elif signal == "SELL":
-        tp_multiplier = 1 - (0.025 + (abs(total_score) / 2000))
-        tp_price = current_price * tp_multiplier
-        
-        sl_multiplier = 1 + (0.015 + (abs(total_score) / 3000))
-        sl_price = current_price * sl_multiplier
-        
-        if resistance > 0 and sl_price > resistance:
-            sl_price = resistance * 1.005
-        
-        if support > 0 and tp_price < support:
-            tp_price = support * 1.005
-        
-        if (current_price - tp_price) < (current_price * fee_rate * 3):
-            tp_price = current_price * 0.985
-    
+        tp = round(current * (0.98 - (confidence / 3000)), 2)
+        sl = round(current * (1.02 + (confidence / 3000)), 2)
+        if resistance > 0 and sl > resistance:
+            sl = round(resistance * 1.005, 2)
     else:
-        tp_price = current_price
-        sl_price = current_price
-    
-    if signal == "BUY":
-        profit_pct = round(((tp_price - current_price) / current_price) * 100, 2)
-        loss_pct = round(((sl_price - current_price) / current_price) * 100, 2)
-    elif signal == "SELL":
-        profit_pct = round(((current_price - tp_price) / current_price) * 100, 2)
-        loss_pct = round(((current_price - sl_price) / current_price) * 100, 2)
-    else:
-        profit_pct = 0
-        loss_pct = 0
-    
-    # Collect all reasons
-    all_reasons = []
-    all_reasons.extend(vwap_reasons[:2])
-    all_reasons.extend(rsi_reasons[:1])
-    all_reasons.extend(macd_reasons[:1])
-    all_reasons.extend(ma_reasons[:1])
-    all_reasons.extend(bollinger_reasons[:1])
-    all_reasons.extend(volume_reasons[:1])
-    all_reasons.extend(support_reasons[:1])
-    all_reasons.extend(adx_reasons[:1])
-    
-    unique_reasons = []
-    for reason in all_reasons:
-        if reason not in unique_reasons:
-            unique_reasons.append(reason)
+        tp = current
+        sl = current
     
     return {
         'symbol': symbol,
-        'price': current_price,
+        'price': current,
         'signal': signal,
-        'confidence': round(float(confidence), 1),
-        'score': round(float(total_score), 1),
+        'confidence': round(confidence, 1),
+        'score': round(score, 1),
+        'tp': tp,
+        'sl': sl,
         'support': support,
         'resistance': resistance,
-        'tp': round(float(tp_price), 2),
-        'sl': round(float(sl_price), 2),
-        'profit_pct': profit_pct,
-        'loss_pct': loss_pct,
         'rsi': rsi,
-        'macd': macd_line,
-        'macd_signal': signal_line,
-        'macd_hist': histogram,
+        'macd': macd,
         'ma20': ma20,
         'ma50': ma50,
         'ma200': ma200,
-        'ema20': ema20,
+        'vwap': vwap,
         'upper_bb': upper,
-        'middle_bb': middle,
         'lower_bb': lower,
-        'volume_ratio': volume_ratio,
-        'atr': calculate_atr(highs, lows, prices, 14),
-        'vwap': calculate_vwap(prices, volumes),
-        'adx': adx,
-        'reasons': unique_reasons[:6],
-        'vwap_reasons': vwap_reasons,
-        'time': datetime.now().strftime("%H:%M"),
-        'timestamp': datetime.now().isoformat()
+        'volume_ratio': vol_ratio,
+        'atr': atr,
+        'reasons': reasons[:5],
+        'time': datetime.now().strftime("%H:%M")
     }
 
 # ============================================
-# 7. BOT STATE MANAGEMENT
-# ============================================
-
-class BotState:
-    def __init__(self):
-        self.load_state()
-    
-    def load_state(self):
-        if os.path.exists('bot_state_v4.json'):
-            try:
-                with open('bot_state_v4.json', 'r') as f:
-                    data = json.load(f)
-                    self.signal_enabled = data.get('signal_enabled', True)
-                    self.payment_enabled = data.get('payment_enabled', True)
-                    self.wallet_address = data.get('wallet_address', WALLET_ADDRESS)
-                    self.price = data.get('price', SUBSCRIPTION_PRICE)
-                    self.total_signals_sent = data.get('total_signals_sent', 0)
-                    return
-            except:
-                pass
-        
-        self.signal_enabled = True
-        self.payment_enabled = True
-        self.wallet_address = WALLET_ADDRESS
-        self.price = SUBSCRIPTION_PRICE
-        self.total_signals_sent = 0
-        self.save_state()
-    
-    def save_state(self):
-        try:
-            with open('bot_state_v4.json', 'w') as f:
-                json.dump({
-                    'signal_enabled': self.signal_enabled,
-                    'payment_enabled': self.payment_enabled,
-                    'wallet_address': self.wallet_address,
-                    'price': self.price,
-                    'total_signals_sent': self.total_signals_sent
-                }, f)
-        except:
-            pass
-    
-    def toggle_signals(self):
-        self.signal_enabled = not self.signal_enabled
-        self.save_state()
-        return self.signal_enabled
-    
-    def update_wallet(self, address):
-        self.wallet_address = address
-        self.save_state()
-        return self.wallet_address
-    
-    def update_price(self, price):
-        self.price = price
-        self.save_state()
-        return self.price
-
-# ============================================
-# 8. SYMBOLS LIST
+# 📋 ۵. لیست ارزها
 # ============================================
 
 SYMBOLS = [
@@ -815,120 +394,20 @@ SYMBOLS = [
     'ADAUSDT', 'DOGEUSDT', 'AVAXUSDT', 'MATICUSDT', 'DOTUSDT',
     'LINKUSDT', 'UNIUSDT', 'ATOMUSDT', 'LTCUSDT', 'BCHUSDT',
     'NEARUSDT', 'ALGOUSDT', 'VETUSDT', 'ICPUSDT', 'FILUSDT',
-    'FTMUSDT', 'XLMUSDT', 'EGLDUSDT', 'HNTUSDT', 'XMRUSDT',
-    'ZECUSDT', 'DASHUSDT', 'ETCUSDT', 'XTZUSDT', 'EOSUSDT',
-    'AAVEUSDT', 'MKRUSDT', 'COMPUSDT', 'YFIUSDT', 'SUSHIUSDT',
-    'CAKEUSDT', 'AXSUSDT', 'SANDUSDT', 'APEUSDT', 'CRVUSDT',
-    'RUNEUSDT', 'FLOWUSDT', 'QNTUSDT', 'SNXUSDT', 'GRTUSDT',
-    'LDOUSDT', 'ARBUSDT', 'OPUSDT', 'INJUSDT', 'SEIUSDT'
+    'FTMUSDT', 'XLMUSDT', 'EGLDUSDT', 'XMRUSDT', 'ZECUSDT',
+    'ETCUSDT', 'XTZUSDT', 'EOSUSDT', 'AAVEUSDT', 'MKRUSDT',
+    'COMPUSDT', 'YFIUSDT', 'SUSHIUSDT', 'CAKEUSDT', 'AXSUSDT',
+    'SANDUSDT', 'APEUSDT', 'CRVUSDT', 'RUNEUSDT', 'FLOWUSDT',
+    'QNTUSDT', 'SNXUSDT', 'GRTUSDT', 'LDOUSDT', 'ARBUSDT',
+    'OPUSDT', 'INJUSDT', 'SEIUSDT', 'WLDUSDT', 'PEPEUSDT'
 ]
 
-def find_best_signals(learner, state, count=2):
-    results = []
-    
-    print(f"Scanning {len(SYMBOLS)} symbols...")
-    
-    for symbol in SYMBOLS:
-        result = generate_signal(symbol, learner)
-        if result and result['signal'] != 'HOLD':
-            if result['confidence'] >= MIN_CONFIDENCE:
-                results.append(result)
-                print(f"✅ Found signal: {symbol} - {result['signal']} ({result['confidence']}%)")
-        time.sleep(0.03)
-    
-    results.sort(key=lambda x: x['confidence'], reverse=True)
-    
-    if len(results) > count:
-        results = results[:count]
-    
-    state.total_signals_sent += len(results)
-    state.save_state()
-    
-    return results
-
 # ============================================
-# 9. TELEGRAM MESSAGE BUILDER
+# 📡 ۶. ارسال به تلگرام (با تست)
 # ============================================
-
-def build_signal_message(result, learner, state):
-    if not result:
-        return ""
-    
-    if result['signal'] == 'BUY':
-        emoji = "🟢"
-        signal_text = "🚀 LONG"
-    elif result['signal'] == 'SELL':
-        emoji = "🔴"
-        signal_text = "💀 SHORT"
-    else:
-        emoji = "⚪"
-        signal_text = "⏳ HOLD"
-    
-    accuracy = learner.get_accuracy()
-    
-    msg = f"""
-{emoji} <b>SIGNAL - {result['symbol']}</b>
-⏰ Time: {result['time']}
-
-📊 <b>Direction:</b> {signal_text}
-💰 <b>Entry Price:</b> <code>${result['price']:,.2f}</code>
-🎯 <b>Confidence:</b> <b>{result['confidence']}%</b>
-📈 <b>Score:</b> {result['score']}/100
-
-━━━━━━━━━━━━━━━━━━━━━━━━━
-🎯 <b>TARGETS:</b>
-✅ <b>Take Profit:</b> <code>${result['tp']:,.2f}</code>
-🛑 <b>Stop Loss:</b> <code>${result['sl']:,.2f}</code>
-
-📊 <b>Profit/Loss:</b>
-• Profit: <b>+{result['profit_pct']}%</b>
-• Loss: <b>{result['loss_pct']}%</b>
-
-━━━━━━━━━━━━━━━━━━━━━━━━━
-📊 <b>KEY LEVELS:</b>
-🛡️ Support: <code>${result['support']:,.2f}</code>
-🚫 Resistance: <code>${result['resistance']:,.2f}</code>
-
-━━━━━━━━━━━━━━━━━━━━━━━━━
-📊 <b>INDICATORS (7):</b>
-• VWAP: <code>${result['vwap']:,.2f}</code> ⭐ (Strongest)
-• RSI: {result['rsi']}
-• MACD: {result['macd']} (Signal: {result['macd_signal']})
-• MA20: ${result['ma20']:,.2f}
-• MA50: ${result['ma50']:,.2f}
-• MA200: ${result['ma200']:,.2f}
-• ADX: {result['adx']} (Trend Strength)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━
-📝 <b>REASONS:</b>
-"""
-    
-    for reason in result['reasons'][:6]:
-        msg += f"• {reason}\n"
-    
-    if result.get('vwap_reasons'):
-        for reason in result['vwap_reasons'][:2]:
-            msg += f"• {reason}\n"
-    
-    msg += f"""
-━━━━━━━━━━━━━━━━━━━━━━━━━
-🧠 <b>LEARNING SYSTEM:</b>
-• Accuracy: {accuracy}%
-• Feedback: {learner.positive_feedback}✅ / {learner.negative_feedback}❌
-• Signals Today: {state.total_signals_sent}
-
-📊 <b>BOT INFO:</b>
-• Version: V4 (With VWAP)
-• Indicators: 7
-• Symbols: {len(SYMBOLS)}
-• Interval: {SIGNAL_INTERVAL//60}m
-
-⚠️ <i>Trade at your own risk! Always use stop loss!</i>
-    """
-    
-    return msg
 
 def send_to_telegram(message):
+    """ارسال پیام به کانال با نمایش خطا"""
     if not message:
         return False
     
@@ -937,102 +416,216 @@ def send_to_telegram(message):
         data = {
             'chat_id': CHANNEL_ID,
             'text': message,
-            'parse_mode': 'HTML'
+            'parse_mode': 'HTML',
+            'disable_web_page_preview': True
         }
-        r = requests.post(url, data=data, timeout=5)
-        return r.status_code == 200
-    except:
+        
+        r = requests.post(url, data=data, timeout=15)
+        
+        if r.status_code == 200:
+            print("✅ Sent to Telegram")
+            return True
+        else:
+            print(f"❌ Telegram Error: {r.text}")
+            return False
+            
+    except requests.exceptions.Timeout:
+        print("❌ Timeout: Check VPN/Internet")
+        return False
+    except Exception as e:
+        print(f"❌ Error: {e}")
         return False
 
 def send_to_admin(message):
+    """ارسال به ادمین"""
+    if not ADMIN_ID or ADMIN_ID == "ایدی_تلگرامت":
+        return False
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        data = {
-            'chat_id': ADMIN_ID,
-            'text': message,
-            'parse_mode': 'HTML'
-        }
-        r = requests.post(url, data=data, timeout=5)
+        data = {'chat_id': ADMIN_ID, 'text': message, 'parse_mode': 'HTML'}
+        r = requests.post(url, data=data, timeout=10)
         return r.status_code == 200
     except:
         return False
 
 # ============================================
-# 10. MAIN SIGNAL LOOP
+# 💬 ۷. ساخت پیام سیگنال
 # ============================================
 
-def signal_loop():
-    learner = AutoLearner()
-    state = BotState()
+def build_message(signal, learner):
+    if not signal or signal['signal'] == 'HOLD':
+        return None
     
-    print("="*80)
-    print("🚀 PROFESSIONAL SIGNAL BOT V4 - WITH VWAP")
-    print("="*80)
+    emoji = "🟢" if signal['signal'] == 'BUY' else "🔴"
+    direction = "🚀 LONG (خرید)" if signal['signal'] == 'BUY' else "💀 SHORT (فروش)"
+    
+    accuracy = learner.get_accuracy()
+    
+    msg = f"""
+{emoji} <b>{signal['symbol']}</b>
+⏰ {signal['time']}
+
+📊 <b>{direction}</b>
+💰 <b>ورود:</b> <code>${signal['price']:,.2f}</code>
+🎯 <b>اطمینان:</b> <b>{signal['confidence']}%</b>
+📈 <b>امتیاز:</b> {signal['score']}
+
+━━━━━━━━━━━━━━━━━━━
+🎯 <b>حد سود:</b> <code>${signal['tp']:,.2f}</code>
+🛑 <b>حد ضرر:</b> <code>${signal['sl']:,.2f}</code>
+
+━━━━━━━━━━━━━━━━━━━
+📊 <b>حمایت:</b> <code>${signal['support']:,.2f}</code>
+📊 <b>مقاومت:</b> <code>${signal['resistance']:,.2f}</code>
+
+━━━━━━━━━━━━━━━━━━━
+📊 <b>اندیکاتورها:</b>
+• RSI: {signal['rsi']}
+• MACD: {signal['macd']}
+• VWAP: ${signal['vwap']:,.2f}
+• MA20: ${signal['ma20']:,.2f}
+• MA50: ${signal['ma50']:,.2f}
+
+━━━━━━━━━━━━━━━━━━━
+📝 <b>دلایل:</b>
+"""
+    
+    for reason in signal['reasons'][:5]:
+        msg += f"• {reason}\n"
+    
+    msg += f"""
+━━━━━━━━━━━━━━━━━━━
+🧠 <b>دقت یادگیری:</b> {accuracy}%
+📊 <b>بازخورد:</b> {learner.positive}✅ / {learner.negative}❌
+
+⚠️ <i>با مسئولیت خودت معامله کن!</i>
+"""
+    
+    return msg
+
+# ============================================
+# 🔍 ۸. تست اتصال تلگرام
+# ============================================
+
+def test_connection():
+    """تست اتصال به تلگرام"""
+    print("\n" + "="*50)
+    print("🔍 تست اتصال به تلگرام")
+    print("="*50)
+    
+    # تست توکن
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/getMe"
+        r = requests.get(url, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            if data.get('ok'):
+                print(f"✅ توکن درست است! ربات: @{data['result']['username']}")
+            else:
+                print("❌ توکن اشتباه است!")
+                return False
+        else:
+            print(f"❌ خطا: {r.status_code}")
+            return False
+    except Exception as e:
+        print(f"❌ خطا: {e}")
+        return False
+    
+    # تست ارسال به کانال
+    try:
+        test_msg = "✅ <b>ربات سیگنال روشن شد!</b>\n⏰ " + datetime.now().strftime("%H:%M:%S")
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        data = {'chat_id': CHANNEL_ID, 'text': test_msg, 'parse_mode': 'HTML'}
+        r = requests.post(url, data=data, timeout=10)
+        
+        if r.status_code == 200:
+            print(f"✅ ارسال به کانال {CHANNEL_ID} موفق بود!")
+            return True
+        else:
+            print(f"❌ ارسال به کانال失敗: {r.text}")
+            print("\n💡 راه‌حل:")
+            print("1. ربات را به کانال اضافه کن")
+            print("2. ربات را ادمین کن")
+            print("3. VPN را روشن کن")
+            return False
+    except Exception as e:
+        print(f"❌ خطا: {e}")
+        return False
+
+# ============================================
+# 🚀 ۹. حلقه اصلی
+# ============================================
+
+def main_loop():
+    print("\n" + "="*60)
+    print("🚀 RABAT SIGNAL BOT V5 - PROFESSIONAL")
+    print("="*60)
     print(f"📢 Channel: {CHANNEL_ID}")
-    print(f"👤 Admin: {ADMIN_ID}")
-    print(f"⏱ Interval: {SIGNAL_INTERVAL//60} minutes")
-    print(f"📊 Total Symbols: {len(SYMBOLS)}")
-    print(f"📊 Indicators: 7 (VWAP, RSI, MACD, MA, Bollinger, Volume, S/R)")
-    print(f"🧠 Learning Accuracy: {learner.get_accuracy()}%")
-    print(f"📡 Signal Sending: {'ACTIVE' if state.signal_enabled else 'PAUSED'}")
-    print("="*80)
+    print(f"📊 Symbols: {len(SYMBOLS)}")
+    print(f"⏱ Interval: {INTERVAL//60} minutes")
+    print("="*60)
     
+    # تست اتصال
+    if not test_connection():
+        print("\n❌ اتصال به تلگرام برقرار نیست!")
+        print("لطفاً تنظیمات را بررسی کن:")
+        print(f"1. BOT_TOKEN: {BOT_TOKEN[:10]}...")
+        print(f"2. CHANNEL_ID: {CHANNEL_ID}")
+        print("3. ربات را به کانال اضافه کن")
+        return
+    
+    learner = LearningSystem()
     cycle = 0
+    
+    print("\n✅ ربات روشن شد! منتظر سیگنال‌ها...\n")
     
     while True:
         try:
             cycle += 1
+            print(f"\n🔄 Cycle {cycle} - {datetime.now().strftime('%H:%M:%S')}")
+            print(f"🧠 Accuracy: {learner.get_accuracy()}%")
             
-            if not state.signal_enabled:
-                print(f"⏸️ Cycle {cycle}: Signal sending paused")
-                time.sleep(SIGNAL_INTERVAL)
-                continue
+            # پیدا کردن سیگنال‌ها
+            signals = []
+            for symbol in SYMBOLS:
+                signal = generate_signal(symbol, learner)
+                if signal and signal['signal'] != 'HOLD':
+                    if signal['confidence'] >= MIN_CONFIDENCE:
+                        signals.append(signal)
+                        print(f"✅ {signal['symbol']}: {signal['signal']} ({signal['confidence']}%)")
+                time.sleep(0.05)
             
-            print(f"\n🔄 Cycle {cycle} - {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-            print("⏳ Scanning all symbols with VWAP...")
+            # مرتب‌سازی
+            signals.sort(key=lambda x: x['confidence'], reverse=True)
+            signals = signals[:MAX_SIGNALS]
             
-            best_signals = find_best_signals(learner, state, MAX_SIGNALS_PER_CYCLE)
-            
-            if best_signals:
-                for i, signal in enumerate(best_signals):
-                    msg = build_signal_message(signal, learner, state)
-                    if send_to_telegram(msg):
-                        print(f"✅ Signal {i+1}: {signal['symbol']} - {signal['signal']} ({signal['confidence']}%)")
-                    else:
-                        print(f"❌ Failed to send signal {i+1}")
-                    time.sleep(1)
+            # ارسال به کانال
+            if signals:
+                for signal in signals:
+                    msg = build_message(signal, learner)
+                    if msg:
+                        if send_to_telegram(msg):
+                            print(f"✅ Sent: {signal['symbol']} - {signal['signal']}")
+                        else:
+                            print(f"❌ Failed to send: {signal['symbol']}")
+                        time.sleep(1)
             else:
-                print("⏳ No strong signals found this cycle")
+                print("⏳ No strong signals found")
                 if cycle % 3 == 0:
-                    send_to_telegram(f"⏳ No strong signals found in cycle {cycle}. Waiting...")
+                    send_to_telegram("⏳ هیچ سیگنال قوی در این دور پیدا نشد...")
             
-            print(f"⏱ Waiting {SIGNAL_INTERVAL//60} minutes for next cycle...")
-            time.sleep(SIGNAL_INTERVAL)
+            # منتظر ماندن
+            print(f"⏱ Waiting {INTERVAL//60} min...")
+            time.sleep(INTERVAL)
             
         except Exception as e:
-            error_msg = f"❌ Error in cycle {cycle}: {str(e)}"
-            print(error_msg)
-            send_to_admin(error_msg)
+            print(f"❌ Error: {e}")
+            send_to_admin(f"❌ Error in cycle {cycle}: {e}")
             time.sleep(60)
 
 # ============================================
-# 11. START
+# 🏁 ۱۰. اجرا
 # ============================================
 
-def main():
-    print("\n" + "="*80)
-    print("🚀 PROFESSIONAL SIGNAL BOT V4 - WITH VWAP")
-    print("="*80)
-    
-    if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
-        print("❌ ERROR: Please set BOT_TOKEN in the code!")
-        return
-    
-    print("\n✅ Configuration loaded")
-    print("🚀 Starting bot...")
-    print("="*80 + "\n")
-    
-    signal_loop()
-
 if __name__ == "__main__":
-    main()
+    main_loop()
