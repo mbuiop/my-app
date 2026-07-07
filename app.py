@@ -1,1321 +1,1120 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+# ============================================
+# PROFESSIONAL SIGNAL BOT V4 - WITH VWAP
+# 7 Indicators: VWAP, RSI, MACD, MA, Bollinger, Volume, Support/Resistance
+# ============================================
 
-"""
-====================================================================
-🤖 ULTIMATE SIGNAL BOT V19 - FULL MARKET SCANNER
-====================================================================
-✅ اسکن کامل همه ارزهای بازار (بیش از ۲۰۰ ارز)
-✅ تشخیص خودکار پامپ و دامپ
-✅ ارسال خودکار به کانال @davnold
-✅ پنل مدیریت کامل
-✅ سیستم پولی کردن سیگنال‌ها
-✅ کیف پول TRC20
-✅ بازخورد و یادگیری
-====================================================================
-"""
-
-import logging
-import os
-import sys
-import time
-import json
-import sqlite3
-import threading
-import warnings
-import pickle
-import math
-import re
-from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
-warnings.filterwarnings('ignore')
-
-# ==================== Libraries ====================
 import requests
 import numpy as np
+import time
+import json
+import os
+from datetime import datetime, timedelta
+from collections import deque
+import threading
 
-try:
-    from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
-    from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-    TELEGRAM_AVAILABLE = True
-except:
-    TELEGRAM_AVAILABLE = False
-    print("❌ Install: pip install python-telegram-bot")
+# ============================================
+# CONFIGURATION (Edit these)
+# ============================================
+BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"  # Get from @BotFather
+CHANNEL_ID = "@davnold"  # Your channel
+ADMIN_ID = "YOUR_TELEGRAM_ID"  # Your Telegram ID
 
-# ==================== Settings ====================
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.FileHandler('bot_v19.log'), logging.StreamHandler()]
-)
-logger = logging.getLogger(__name__)
-
-BOT_TOKEN = "8710979491:AAF3YwifUyipir7TkOnYOcsWpbB0QFojkw0"
-CHANNEL_ID = "@davnold"
-ADMIN_ID = 327855654
-
-# کیف پول برای پرداخت
+# Payment Settings
 WALLET_ADDRESS = "TV61aTh98MGqmteYzda5AaBzdXgGqreG6A"
 WALLET_NETWORK = "TRC20"
-PRICE_USDT = 100
-SUBSCRIPTION_DAYS = 30
+SUBSCRIPTION_PRICE = "100 USDT"
 
-SCAN_INTERVAL = 180  # ۳ دقیقه
-MIN_VOLUME_USDT = 100000
-MIN_CONFIDENCE = 50
-MAX_WORKERS = 20
+# Signal Settings
+SIGNAL_INTERVAL = 180  # 3 minutes
+MIN_CONFIDENCE = 65
+MAX_SIGNALS_PER_CYCLE = 2
 
-# ==================== Database ====================
-class Database:
+# ============================================
+# 1. GET REAL DATA FROM BINANCE
+# ============================================
+
+def get_price(symbol):
+    """Get real price from Binance"""
+    try:
+        r = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}", timeout=5)
+        if r.status_code == 200:
+            return float(r.json()['price'])
+    except:
+        pass
+    return None
+
+def get_candles(symbol, limit=300):
+    """Get real candlestick data from Binance"""
+    try:
+        r = requests.get(
+            f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=5m&limit={limit}",
+            timeout=5
+        )
+        if r.status_code == 200:
+            data = r.json()
+            closes = [float(x[4]) for x in data]
+            highs = [float(x[2]) for x in data]
+            lows = [float(x[3]) for x in data]
+            volumes = [float(x[5]) for x in data]
+            opens = [float(x[1]) for x in data]
+            return {
+                'close': closes,
+                'high': highs,
+                'low': lows,
+                'volume': volumes,
+                'open': opens
+            }
+    except Exception as e:
+        print(f"Error getting candles: {e}")
+    return None
+
+def get_24hr_stats(symbol):
+    """Get 24h stats"""
+    try:
+        r = requests.get(f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}", timeout=5)
+        if r.status_code == 200:
+            data = r.json()
+            return {
+                'high': float(data['highPrice']),
+                'low': float(data['lowPrice']),
+                'volume': float(data['volume']),
+                'change': float(data['priceChangePercent']),
+                'open': float(data['openPrice'])
+            }
+    except:
+        pass
+    return None
+
+# ============================================
+# 2. VWAP - POWERFUL INDICATOR
+# ============================================
+
+def calculate_vwap(prices, volumes):
+    """Volume Weighted Average Price - The Strongest Indicator"""
+    if len(prices) < 2 or len(volumes) < 2:
+        return prices[-1] if prices else 0
+    
+    total_value = 0
+    total_volume = 0
+    
+    # Use all available data
+    for i in range(len(prices)):
+        total_value += prices[i] * volumes[i]
+        total_volume += volumes[i]
+    
+    if total_volume == 0:
+        return prices[-1]
+    
+    return round(total_value / total_volume, 2)
+
+def calculate_vwap_multi_timeframe(prices, volumes):
+    """VWAP on multiple timeframes"""
+    vwaps = {}
+    
+    # 5-minute VWAP (current)
+    if len(prices) >= 10:
+        vwaps['current'] = calculate_vwap(prices[-10:], volumes[-10:])
+    
+    # 15-minute VWAP
+    if len(prices) >= 30:
+        vwaps['short'] = calculate_vwap(prices[-30:], volumes[-30:])
+    
+    # 1-hour VWAP
+    if len(prices) >= 60:
+        vwaps['medium'] = calculate_vwap(prices[-60:], volumes[-60:])
+    
+    # 4-hour VWAP
+    if len(prices) >= 240:
+        vwaps['long'] = calculate_vwap(prices[-240:], volumes[-240:])
+    
+    # Daily VWAP
+    if len(prices) >= 288:
+        vwaps['daily'] = calculate_vwap(prices[-288:], volumes[-288:])
+    
+    return vwaps
+
+def analyze_vwap(prices, volumes, current_price):
+    """Analyze VWAP for trading signals"""
+    vwaps = calculate_vwap_multi_timeframe(prices, volumes)
+    
+    if not vwaps:
+        return 0, "No VWAP data"
+    
+    current_vwap = vwaps.get('current', current_price)
+    
+    # Calculate distance from VWAP
+    if current_vwap > 0:
+        distance_pct = ((current_price - current_vwap) / current_vwap) * 100
+    else:
+        distance_pct = 0
+    
+    # Score based on VWAP
+    score = 0
+    reasons = []
+    
+    # Current VWAP (most important)
+    if current_price > current_vwap:
+        score += 15
+        reasons.append(f"Price {distance_pct:.2f}% above VWAP (Bullish)")
+    else:
+        score -= 15
+        reasons.append(f"Price {abs(distance_pct):.2f}% below VWAP (Bearish)")
+    
+    # Multiple timeframe VWAP confirmation
+    bullish_vwaps = 0
+    bearish_vwaps = 0
+    
+    for tf, vwap in vwaps.items():
+        if tf == 'current':
+            continue
+        if current_price > vwap:
+            bullish_vwaps += 1
+        else:
+            bearish_vwaps += 1
+    
+    # Extra score for multiple confirmations
+    if bullish_vwaps >= 2:
+        score += 10
+        reasons.append(f"Bullish on {bullish_vwaps} timeframes")
+    elif bearish_vwaps >= 2:
+        score -= 10
+        reasons.append(f"Bearish on {bearish_vwaps} timeframes")
+    
+    # Strong VWAP signals
+    if distance_pct > 3:
+        score += 10
+        reasons.append(f"🔥 Strong breakout above VWAP (+{distance_pct:.2f}%)")
+    elif distance_pct < -3:
+        score -= 10
+        reasons.append(f"🔥 Strong breakdown below VWAP ({distance_pct:.2f}%)")
+    
+    return score, reasons
+
+# ============================================
+# 3. SUPPORT & RESISTANCE
+# ============================================
+
+def find_support_resistance(prices, highs, lows):
+    """Find real support and resistance levels"""
+    if len(prices) < 20:
+        return 0, 0
+    
+    peaks = []
+    troughs = []
+    
+    # Find peaks and troughs
+    for i in range(2, len(prices)-2):
+        # Peak detection
+        if highs[i] > highs[i-1] and highs[i] > highs[i+1]:
+            if highs[i] > highs[i-2] and highs[i] > highs[i+2]:
+                peaks.append(highs[i])
+        
+        # Trough detection
+        if lows[i] < lows[i-1] and lows[i] < lows[i+1]:
+            if lows[i] < lows[i-2] and lows[i] < lows[i+2]:
+                troughs.append(lows[i])
+    
+    # Get major levels
+    resistance = 0
+    support = 0
+    
+    if peaks:
+        peaks = sorted(peaks, reverse=True)
+        resistance = peaks[0] if peaks else 0
+        
+        # Find strong resistance (clustered peaks)
+        if len(peaks) >= 2:
+            for i in range(1, min(5, len(peaks))):
+                if abs(peaks[i] - peaks[0]) / peaks[0] < 0.02:
+                    resistance = max(resistance, peaks[i])
+    
+    if troughs:
+        troughs = sorted(troughs)
+        support = troughs[0] if troughs else 0
+        
+        if len(troughs) >= 2:
+            for i in range(1, min(5, len(troughs))):
+                if abs(troughs[i] - troughs[0]) / troughs[0] < 0.02:
+                    support = min(support, troughs[i])
+    
+    # Use 24h high/low as backup
+    stats = get_24hr_stats("BTCUSDT")
+    if stats:
+        if resistance == 0 or resistance < stats['high']:
+            resistance = stats['high']
+        if support == 0 or support > stats['low']:
+            support = stats['low']
+    
+    return round(support, 2), round(resistance, 2)
+
+# ============================================
+# 4. INDICATORS
+# ============================================
+
+def calculate_rsi(prices, period=14):
+    """Real RSI"""
+    if len(prices) < period + 1:
+        return 50
+    
+    deltas = np.diff(prices[-period-1:])
+    gain = np.mean(deltas[deltas > 0]) if np.sum(deltas > 0) > 0 else 0
+    loss = -np.mean(deltas[deltas < 0]) if np.sum(deltas < 0) > 0 else 0.001
+    
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return round(rsi, 1)
+
+def calculate_macd(prices, fast=12, slow=26, signal=9):
+    """Real MACD with signal line"""
+    if len(prices) < slow:
+        return 0, 0, 0
+    
+    # Fast EMA
+    fast_multiplier = 2 / (fast + 1)
+    fast_ema = prices[-fast:].mean()
+    for price in prices[-fast:]:
+        fast_ema = price * fast_multiplier + fast_ema * (1 - fast_multiplier)
+    
+    # Slow EMA
+    slow_multiplier = 2 / (slow + 1)
+    slow_ema = prices[-slow:].mean()
+    for price in prices[-slow:]:
+        slow_ema = price * slow_multiplier + slow_ema * (1 - slow_multiplier)
+    
+    macd_line = fast_ema - slow_ema
+    
+    # Signal line (9-period EMA of MACD)
+    signal_multiplier = 2 / (signal + 1)
+    signal_line = macd_line
+    for _ in range(signal):
+        signal_line = macd_line * signal_multiplier + signal_line * (1 - signal_multiplier)
+    
+    histogram = macd_line - signal_line
+    
+    return round(macd_line, 4), round(signal_line, 4), round(histogram, 4)
+
+def calculate_ma(prices, period):
+    """Simple Moving Average"""
+    if len(prices) < period:
+        return prices[-1]
+    return round(np.mean(prices[-period:]), 2)
+
+def calculate_ema(prices, period):
+    """Exponential Moving Average"""
+    if len(prices) < period:
+        return prices[-1]
+    
+    multiplier = 2 / (period + 1)
+    ema = prices[-period:].mean()
+    for price in prices[-period:]:
+        ema = price * multiplier + ema * (1 - multiplier)
+    return round(ema, 2)
+
+def calculate_bollinger(prices, period=20, std_dev=2):
+    """Bollinger Bands"""
+    if len(prices) < period:
+        return prices[-1], prices[-1], prices[-1]
+    
+    ma = np.mean(prices[-period:])
+    std = np.std(prices[-period:])
+    
+    upper = ma + (std_dev * std)
+    lower = ma - (std_dev * std)
+    
+    return round(upper, 2), round(ma, 2), round(lower, 2)
+
+def calculate_atr(highs, lows, prices, period=14):
+    """Average True Range"""
+    if len(prices) < period:
+        return 0.01
+    
+    tr = []
+    for i in range(1, period + 1):
+        if i < len(prices):
+            tr.append(max(
+                highs[-i] - lows[-i],
+                abs(highs[-i] - prices[-i-1]),
+                abs(lows[-i] - prices[-i-1])
+            ))
+    
+    return round(np.mean(tr) if tr else 0.01, 2)
+
+def calculate_volume_profile(volumes):
+    """Volume analysis"""
+    if len(volumes) < 20:
+        return 1.0
+    
+    avg_vol = np.mean(volumes[-20:])
+    current_vol = volumes[-1]
+    
+    return round(current_vol / avg_vol, 2)
+
+def calculate_adx(prices, highs, lows, period=14):
+    """Average Directional Index - Trend Strength"""
+    if len(prices) < period + 1:
+        return 25
+    
+    tr = []
+    up = []
+    down = []
+    
+    for i in range(1, period + 1):
+        if i < len(prices):
+            tr.append(max(
+                highs[-i] - lows[-i],
+                abs(highs[-i] - prices[-i-1]),
+                abs(lows[-i] - prices[-i-1])
+            ))
+            up_move = highs[-i] - highs[-i-1]
+            down_move = lows[-i-1] - lows[-i]
+            up.append(max(0, up_move) if up_move > down_move else 0)
+            down.append(max(0, down_move) if down_move > up_move else 0)
+    
+    atr = np.mean(tr) if tr else 0.01
+    di_plus = 100 * np.mean(up) / atr if atr > 0 else 0
+    di_minus = 100 * np.mean(down) / atr if atr > 0 else 0
+    
+    dx = 100 * abs(di_plus - di_minus) / (di_plus + di_minus) if (di_plus + di_minus) > 0 else 0
+    
+    return round(dx, 1)
+
+# ============================================
+# 5. AUTO LEARNING SYSTEM
+# ============================================
+
+class AutoLearner:
+    """Learn from user feedback and market patterns"""
+    
     def __init__(self):
-        self.conn = sqlite3.connect('bot_v19.db', check_same_thread=False)
-        self.conn.execute('PRAGMA journal_mode=WAL')
-        self.cursor = self.conn.cursor()
-        self.init_tables()
-    
-    def init_tables(self):
-        # کاربران
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                username TEXT,
-                first_name TEXT,
-                joined_at TIMESTAMP,
-                subscription_expire TIMESTAMP,
-                is_premium BOOLEAN DEFAULT 0,
-                free_signals INTEGER DEFAULT 2,
-                max_free_signals INTEGER DEFAULT 2,
-                last_free_date TEXT,
-                signals_used_today INTEGER DEFAULT 0,
-                feedback_count INTEGER DEFAULT 0,
-                correct_count INTEGER DEFAULT 0,
-                wrong_count INTEGER DEFAULT 0
-            )
-        ''')
+        self.load_data()
+        self.weights = {
+            'vwap': 1.5,      # VWAP gets highest weight
+            'rsi': 1.2,
+            'macd': 1.2,
+            'ma': 1.0,
+            'bollinger': 1.0,
+            'volume': 1.0,
+            'support': 1.0,
+            'adx': 0.8
+        }
+        self.patterns = deque(maxlen=1000)
+        self.feedback_history = deque(maxlen=500)
         
-        # سیگنال‌ها
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS signals (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                symbol TEXT,
-                direction TEXT,
-                entry REAL,
-                tp REAL,
-                sl REAL,
-                support REAL,
-                resistance REAL,
-                leverage INTEGER,
-                confidence INTEGER,
-                signal_type TEXT DEFAULT 'NORMAL',
-                created_at TIMESTAMP,
-                sent_to_channel BOOLEAN DEFAULT 0,
-                feedback TEXT DEFAULT '',
-                is_premium BOOLEAN DEFAULT 0,
-                price_at_signal REAL DEFAULT 0
-            )
-        ''')
-        
-        # تنظیمات
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY, value TEXT
-            )
-        ''')
-        self.cursor.execute('INSERT OR IGNORE INTO settings VALUES ("scan_enabled", "1")')
-        self.cursor.execute('INSERT OR IGNORE INTO settings VALUES ("premium_mode", "0")')
-        self.cursor.execute('INSERT OR IGNORE INTO settings VALUES ("signal_count", "0")')
-        self.cursor.execute('INSERT OR IGNORE INTO settings VALUES ("total_profit", "0")')
-        
-        # پرداخت‌ها
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS payments (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                payment_hash TEXT,
-                amount REAL,
-                status TEXT DEFAULT 'pending',
-                created_at TIMESTAMP,
-                confirmed_at TIMESTAMP
-            )
-        ''')
-        
-        # ارزهای داغ
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS hot_symbols (
-                symbol TEXT PRIMARY KEY,
-                pump_score INTEGER DEFAULT 0,
-                dump_score INTEGER DEFAULT 0,
-                volume REAL DEFAULT 0,
-                change_24h REAL DEFAULT 0,
-                last_seen TIMESTAMP,
-                signal_count INTEGER DEFAULT 0,
-                success_count INTEGER DEFAULT 0
-            )
-        ''')
-        
-        # بازخوردها
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS feedback_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                signal_id INTEGER,
-                user_id INTEGER,
-                feedback TEXT,
-                created_at TIMESTAMP
-            )
-        ''')
-        
-        self.conn.commit()
-    
-    # ===== User Methods =====
-    def add_user(self, user_id, username='', first_name=''):
-        self.cursor.execute('''
-            INSERT OR IGNORE INTO users (user_id, username, first_name, joined_at, free_signals, max_free_signals, last_free_date)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (user_id, username, first_name, datetime.now().isoformat(), 2, 2, datetime.now().date().isoformat()))
-        self.conn.commit()
-    
-    def get_user(self, user_id):
-        self.cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
-        return self.cursor.fetchone()
-    
-    def is_premium(self, user_id):
-        user = self.get_user(user_id)
-        if not user:
-            return False
-        if user[4]:  # subscription_expire
+    def load_data(self):
+        """Load saved learning data"""
+        if os.path.exists('learning_data_v4.json'):
             try:
-                expire = datetime.fromisoformat(user[4])
-                if expire > datetime.now():
-                    return True
+                with open('learning_data_v4.json', 'r') as f:
+                    data = json.load(f)
+                    self.positive_feedback = data.get('positive', 0)
+                    self.negative_feedback = data.get('negative', 0)
+                    self.total_signals = data.get('total', 0)
+                    if 'weights' in data:
+                        self.weights.update(data['weights'])
+                    return
             except:
                 pass
-        return user[5] == 1  # is_premium
-    
-    def get_free_signals(self, user_id):
-        user = self.get_user(user_id)
-        if not user:
-            return 0
-        today = datetime.now().date().isoformat()
-        if user[8] != today:  # last_free_date
-            self.cursor.execute('''
-                UPDATE users SET free_signals = max_free_signals, last_free_date = ?, signals_used_today = 0
-                WHERE user_id = ?
-            ''', (today, user_id))
-            self.conn.commit()
-            return user[6]  # max_free_signals
-        return user[7]  # free_signals
-    
-    def use_free_signal(self, user_id):
-        free = self.get_free_signals(user_id)
-        if free <= 0:
-            return False
-        self.cursor.execute('''
-            UPDATE users SET free_signals = free_signals - 1, signals_used_today = signals_used_today + 1
-            WHERE user_id = ? AND free_signals > 0
-        ''', (user_id,))
-        self.conn.commit()
-        return self.cursor.rowcount > 0
-    
-    def add_subscription(self, user_id, days=30):
-        expire = (datetime.now() + timedelta(days=days)).isoformat()
-        self.cursor.execute('''
-            UPDATE users SET subscription_expire = ?, is_premium = 1 WHERE user_id = ?
-        ''', (expire, user_id))
-        self.conn.commit()
-    
-    # ===== Signal Methods =====
-    def save_signal(self, data, is_premium=False):
-        self.cursor.execute('''
-            INSERT INTO signals (
-                symbol, direction, entry, tp, sl, support, resistance,
-                leverage, confidence, signal_type, created_at, is_premium, price_at_signal
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            data['symbol'], data['direction'], data['entry'], data['tp'], data['sl'],
-            data.get('support', 0), data.get('resistance', 0),
-            data['leverage'], data['confidence'], data.get('signal_type', 'NORMAL'),
-            datetime.now().isoformat(), 1 if is_premium else 0, data['entry']
-        ))
-        signal_id = self.cursor.lastrowid
-        self.conn.commit()
-        return signal_id
-    
-    def mark_sent(self, signal_id):
-        self.cursor.execute('UPDATE signals SET sent_to_channel = 1 WHERE id = ?', (signal_id,))
-        self.conn.commit()
-    
-    def get_unsent_signals(self):
-        self.cursor.execute('''
-            SELECT id, symbol, direction, entry, tp, sl, confidence, signal_type, is_premium
-            FROM signals WHERE sent_to_channel = 0 ORDER BY id DESC LIMIT 10
-        ''')
-        return self.cursor.fetchall()
-    
-    def update_feedback(self, signal_id, feedback, user_id=None):
-        self.cursor.execute('UPDATE signals SET feedback = ? WHERE id = ?', (feedback, signal_id))
-        self.conn.commit()
         
-        if user_id:
-            if feedback == 'positive':
-                self.cursor.execute('UPDATE users SET correct_count = correct_count + 1, feedback_count = feedback_count + 1 WHERE user_id = ?', (user_id,))
-            else:
-                self.cursor.execute('UPDATE users SET wrong_count = wrong_count + 1, feedback_count = feedback_count + 1 WHERE user_id = ?', (user_id,))
-            self.conn.commit()
-        
-        # ذخیره در لاگ
-        self.cursor.execute('''
-            INSERT INTO feedback_log (signal_id, user_id, feedback, created_at)
-            VALUES (?, ?, ?, ?)
-        ''', (signal_id, user_id, feedback, datetime.now().isoformat()))
-        self.conn.commit()
+        self.positive_feedback = 0
+        self.negative_feedback = 0
+        self.total_signals = 0
+        self.save_data()
     
-    def get_signals(self, limit=50):
-        self.cursor.execute('''
-            SELECT id, symbol, direction, confidence, signal_type, feedback, is_premium, created_at
-            FROM signals ORDER BY id DESC LIMIT ?
-        ''', (limit,))
-        return self.cursor.fetchall()
-    
-    def get_stats(self):
-        total = self.cursor.execute('SELECT COUNT(*) FROM signals').fetchone()[0]
-        sent = self.cursor.execute('SELECT COUNT(*) FROM signals WHERE sent_to_channel = 1').fetchone()[0]
-        positive = self.cursor.execute('SELECT COUNT(*) FROM signals WHERE feedback = "positive"').fetchone()[0]
-        negative = self.cursor.execute('SELECT COUNT(*) FROM signals WHERE feedback = "negative"').fetchone()[0]
-        premium = self.cursor.execute('SELECT COUNT(*) FROM signals WHERE is_premium = 1').fetchone()[0]
-        return total, sent, positive, negative, premium
-    
-    # ===== Payment Methods =====
-    def add_payment(self, user_id, payment_hash, amount=PRICE_USDT):
-        self.cursor.execute('''
-            INSERT INTO payments (user_id, payment_hash, amount, status, created_at)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (user_id, payment_hash, amount, 'pending', datetime.now().isoformat()))
-        self.conn.commit()
-        return self.cursor.lastrowid
-    
-    def get_pending_payments(self):
-        self.cursor.execute('''
-            SELECT id, user_id, payment_hash, amount, created_at
-            FROM payments WHERE status = 'pending' ORDER BY created_at DESC
-        ''')
-        return self.cursor.fetchall()
-    
-    def confirm_payment(self, payment_id):
-        self.cursor.execute('''
-            UPDATE payments SET status = 'confirmed', confirmed_at = ? WHERE id = ?
-        ''', (datetime.now().isoformat(), payment_id))
-        self.conn.commit()
-        
-        # دریافت user_id
-        self.cursor.execute('SELECT user_id FROM payments WHERE id = ?', (payment_id,))
-        result = self.cursor.fetchone()
-        if result:
-            self.add_subscription(result[0], SUBSCRIPTION_DAYS)
-            return result[0]
-        return None
-    
-    def reject_payment(self, payment_id):
-        self.cursor.execute('UPDATE payments SET status = 'rejected' WHERE id = ?', (payment_id,))
-        self.conn.commit()
-    
-    # ===== Settings =====
-    def get_setting(self, key):
-        self.cursor.execute('SELECT value FROM settings WHERE key = ?', (key,))
-        r = self.cursor.fetchone()
-        return r[0] if r else None
-    
-    def update_setting(self, key, value):
-        self.cursor.execute('UPDATE settings SET value = ? WHERE key = ?', (value, key))
-        self.conn.commit()
-    
-    # ===== Hot Symbols =====
-    def update_hot_symbol(self, symbol, pump_score=0, dump_score=0, volume=0, change=0):
-        self.cursor.execute('''
-            INSERT OR REPLACE INTO hot_symbols (symbol, pump_score, dump_score, volume, change_24h, last_seen)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (symbol, pump_score, dump_score, volume, change, datetime.now().isoformat()))
-        self.conn.commit()
-    
-    def get_hot_symbols(self, limit=50):
-        self.cursor.execute('''
-            SELECT symbol, pump_score, dump_score, volume, change_24h
-            FROM hot_symbols 
-            ORDER BY (pump_score + dump_score) DESC LIMIT ?
-        ''', (limit,))
-        return self.cursor.fetchall()
-
-db = Database()
-
-# ==================== Price Service ====================
-class PriceService:
-    def __init__(self):
-        self.binance = "https://api.binance.com/api/v3"
-        self.cache = {}
-    
-    def get_candles(self, symbol, interval='5m', limit=100):
-        cache_key = f"{symbol}_{interval}_{limit}"
-        if cache_key in self.cache:
-            return self.cache[cache_key]
-        
+    def save_data(self):
+        """Save learning data"""
         try:
-            r = requests.get(
-                f"{self.binance}/klines",
-                params={'symbol': symbol, 'interval': interval, 'limit': limit},
-                timeout=10
-            )
-            if r.status_code == 200:
-                data = r.json()
-                candles = []
-                for c in data:
-                    candles.append({
-                        'open': float(c[1]), 'high': float(c[2]),
-                        'low': float(c[3]), 'close': float(c[4]),
-                        'volume': float(c[5])
-                    })
-                self.cache[cache_key] = candles
-                return candles
-        except Exception as e:
+            with open('learning_data_v4.json', 'w') as f:
+                json.dump({
+                    'positive': self.positive_feedback,
+                    'negative': self.negative_feedback,
+                    'total': self.total_signals,
+                    'weights': self.weights
+                }, f)
+        except:
             pass
+    
+    def add_feedback(self, signal_id, feedback_type):
+        """Record user feedback"""
+        if feedback_type == 'positive':
+            self.positive_feedback += 1
+            # Increase weights on positive feedback
+            for key in self.weights:
+                self.weights[key] = min(2.0, self.weights[key] * 1.02)
+        else:
+            self.negative_feedback += 1
+            # Decrease weights on negative feedback
+            for key in self.weights:
+                self.weights[key] = max(0.3, self.weights[key] * 0.98)
+        
+        self.total_signals += 1
+        self.save_data()
+    
+    def get_accuracy(self):
+        """Calculate accuracy from feedback"""
+        total = self.positive_feedback + self.negative_feedback
+        if total == 0:
+            return 50.0
+        return round((self.positive_feedback / total) * 100, 1)
+    
+    def adjust_signal(self, score, signal):
+        """Adjust signal confidence based on learning"""
+        accuracy = self.get_accuracy()
+        
+        if accuracy > 75:
+            score = min(97, score * 1.12)
+        elif accuracy > 65:
+            score = min(95, score * 1.08)
+        elif accuracy < 35:
+            score = max(25, score * 0.85)
+        elif accuracy < 45:
+            score = max(30, score * 0.92)
+        
+        return round(score, 1)
+
+# ============================================
+# 6. SIGNAL GENERATOR - COMPLETE
+# ============================================
+
+def generate_signal(symbol, learner):
+    """Generate complete signal with all 7 indicators"""
+    data = get_candles(symbol, 300)
+    if not data:
         return None
     
-    def get_all_tickers(self):
-        """دریافت همه tickerها"""
-        try:
-            r = requests.get(f"{self.binance}/ticker/24hr", timeout=15)
-            if r.status_code == 200:
-                return r.json()
-        except Exception as e:
-            logger.error(f"Ticker error: {e}")
-        return []
+    prices = data['close']
+    highs = data['high']
+    lows = data['low']
+    volumes = data['volume']
+    opens = data['open']
+    current_price = prices[-1]
+    
+    # Get support and resistance
+    support, resistance = find_support_resistance(prices, highs, lows)
+    
+    # ========== CALCULATE ALL INDICATORS ==========
+    
+    # 1. VWAP (Strongest)
+    vwap_score, vwap_reasons = analyze_vwap(prices, volumes, current_price)
+    
+    # 2. RSI
+    rsi = calculate_rsi(prices, 14)
+    rsi_score = 0
+    rsi_reasons = []
+    
+    if rsi < 25:
+        rsi_score = 25
+        rsi_reasons.append(f"🔥 RSI oversold: {rsi}")
+    elif rsi < 35:
+        rsi_score = 15
+        rsi_reasons.append(f"📈 RSI near oversold: {rsi}")
+    elif rsi > 75:
+        rsi_score = -25
+        rsi_reasons.append(f"🔥 RSI overbought: {rsi}")
+    elif rsi > 65:
+        rsi_score = -15
+        rsi_reasons.append(f"📉 RSI near overbought: {rsi}")
+    
+    # 3. MACD
+    macd_line, signal_line, histogram = calculate_macd(prices, 12, 26, 9)
+    macd_score = 0
+    macd_reasons = []
+    
+    if macd_line > signal_line:
+        if histogram > 0:
+            macd_score = 20
+            macd_reasons.append(f"🟢 MACD bullish (Hist: {histogram:.4f})")
+        else:
+            macd_score = 10
+            macd_reasons.append(f"🟢 MACD positive but weakening")
+    else:
+        if histogram < 0:
+            macd_score = -20
+            macd_reasons.append(f"🔴 MACD bearish (Hist: {histogram:.4f})")
+        else:
+            macd_score = -10
+            macd_reasons.append(f"🔴 MACD negative but improving")
+    
+    # 4. Moving Averages
+    ma20 = calculate_ma(prices, 20)
+    ma50 = calculate_ma(prices, 50)
+    ma200 = calculate_ma(prices, 200)
+    ema20 = calculate_ema(prices, 20)
+    ma_score = 0
+    ma_reasons = []
+    
+    if current_price > ma20 and ma20 > ma50 and ma50 > ma200:
+        ma_score = 20
+        ma_reasons.append("🚀 Strong uptrend (MA20>MA50>MA200)")
+    elif current_price < ma20 and ma20 < ma50 and ma50 < ma200:
+        ma_score = -20
+        ma_reasons.append("💀 Strong downtrend (MA20<MA50<MA200)")
+    elif current_price > ma20 and ma20 > ma50:
+        ma_score = 12
+        ma_reasons.append("📈 Uptrend (MA20>MA50)")
+    elif current_price < ma20 and ma20 < ma50:
+        ma_score = -12
+        ma_reasons.append("📉 Downtrend (MA20<MA50)")
+    elif current_price > ma20:
+        ma_score = 5
+        ma_reasons.append("⬆️ Price above MA20")
+    elif current_price < ma20:
+        ma_score = -5
+        ma_reasons.append("⬇️ Price below MA20")
+    
+    # 5. Bollinger Bands
+    upper, middle, lower = calculate_bollinger(prices, 20, 2)
+    bollinger_score = 0
+    bollinger_reasons = []
+    
+    if current_price < lower:
+        bollinger_score = 15
+        bollinger_reasons.append(f"🎯 Touch lower band: ${lower:,.2f}")
+    elif current_price > upper:
+        bollinger_score = -15
+        bollinger_reasons.append(f"🎯 Touch upper band: ${upper:,.2f}")
+    elif current_price < middle:
+        bollinger_score = 8
+        bollinger_reasons.append("📊 Lower half of bands")
+    elif current_price > middle:
+        bollinger_score = -8
+        bollinger_reasons.append("📊 Upper half of bands")
+    
+    # 6. Volume
+    volume_ratio = calculate_volume_profile(volumes)
+    volume_score = 0
+    volume_reasons = []
+    
+    if volume_ratio > 2.0:
+        volume_score = 10
+        volume_reasons.append(f"📊 High volume: {volume_ratio}x avg")
+    elif volume_ratio > 1.5:
+        volume_score = 5
+        volume_reasons.append(f"📊 Good volume: {volume_ratio}x avg")
+    elif volume_ratio < 0.5:
+        volume_score = -10
+        volume_reasons.append(f"📊 Low volume: {volume_ratio}x avg")
+    
+    # 7. Support/Resistance
+    support_score = 0
+    support_reasons = []
+    
+    if support > 0:
+        distance_to_support = ((current_price - support) / current_price) * 100
+        if distance_to_support < 0.5:
+            support_score = 12
+            support_reasons.append(f"🛡️ Very near support: ${support:,.2f}")
+        elif distance_to_support < 1.0:
+            support_score = 8
+            support_reasons.append(f"🛡️ Near support: ${support:,.2f}")
+        elif distance_to_support < 2.0:
+            support_score = 4
+            support_reasons.append(f"🛡️ Close to support: ${support:,.2f}")
+    
+    if resistance > 0:
+        distance_to_resistance = ((resistance - current_price) / current_price) * 100
+        if distance_to_resistance < 0.5:
+            support_score = -12
+            support_reasons.append(f"🚫 Very near resistance: ${resistance:,.2f}")
+        elif distance_to_resistance < 1.0:
+            support_score = -8
+            support_reasons.append(f"🚫 Near resistance: ${resistance:,.2f}")
+        elif distance_to_resistance < 2.0:
+            support_score = -4
+            support_reasons.append(f"🚫 Close to resistance: ${resistance:,.2f}")
+    
+    # 8. ADX (Trend Strength)
+    adx = calculate_adx(prices, highs, lows, 14)
+    adx_score = 0
+    adx_reasons = []
+    
+    if adx > 50:
+        adx_score = 10 if vwap_score > 0 else -10
+        adx_reasons.append(f"🔥 Strong trend (ADX: {adx})")
+    elif adx > 35:
+        adx_score = 5 if vwap_score > 0 else -5
+        adx_reasons.append(f"📊 Moderate trend (ADX: {adx})")
+    elif adx < 20:
+        adx_reasons.append(f"⏳ Weak trend (ADX: {adx}) - Wait")
+    
+    # ========== CALCULATE TOTAL SCORE ==========
+    
+    # Apply weights from learning
+    total_score = (
+        vwap_score * learner.weights['vwap'] +
+        rsi_score * learner.weights['rsi'] +
+        macd_score * learner.weights['macd'] +
+        ma_score * learner.weights['ma'] +
+        bollinger_score * learner.weights['bollinger'] +
+        volume_score * learner.weights['volume'] +
+        support_score * learner.weights['support'] +
+        adx_score * learner.weights.get('adx', 0.8)
+    )
+    
+    # ========== DETERMINE SIGNAL ==========
+    
+    # Adjust score
+    if len(prices) > 50:
+        recent_change = ((prices[-1] - prices[-50]) / prices[-50]) * 100
+        if recent_change > 5 and total_score > 0:
+            total_score += 8
+        elif recent_change < -5 and total_score < 0:
+            total_score -= 8
+    
+    # Confidence
+    confidence = 50 + abs(total_score) / 1.5
+    confidence = min(97, max(30, confidence))
+    
+    # Signal
+    if total_score > 30 and confidence >= MIN_CONFIDENCE:
+        signal = "BUY"
+    elif total_score < -30 and confidence >= MIN_CONFIDENCE:
+        signal = "SELL"
+    else:
+        signal = "HOLD"
+    
+    # Apply learning
+    confidence = learner.adjust_signal(confidence, signal)
+    
+    # ========== CALCULATE TP AND SL ==========
+    
+    fee_rate = 0.001  # 0.1% fee
+    
+    if signal == "BUY":
+        # TP: 2.5% to 5% above entry
+        tp_multiplier = 1.025 + (abs(total_score) / 2000)  # 2.5% to 5%
+        tp_price = current_price * tp_multiplier
+        
+        # SL: 1.5% to 3% below entry
+        sl_multiplier = 1 - (0.015 + (abs(total_score) / 3000))
+        sl_price = current_price * sl_multiplier
+        
+        # Adjust based on support/resistance
+        if support > 0 and sl_price < support:
+            sl_price = support * 0.995
+        
+        if resistance > 0 and tp_price > resistance:
+            tp_price = resistance * 0.995
+        
+        # Make sure profit > fees
+        if (tp_price - current_price) < (current_price * fee_rate * 3):
+            tp_price = current_price * 1.015
+        
+    elif signal == "SELL":
+        # TP: 2.5% to 5% below entry
+        tp_multiplier = 1 - (0.025 + (abs(total_score) / 2000))
+        tp_price = current_price * tp_multiplier
+        
+        # SL: 1.5% to 3% above entry
+        sl_multiplier = 1 + (0.015 + (abs(total_score) / 3000))
+        sl_price = current_price * sl_multiplier
+        
+        # Adjust based on support/resistance
+        if resistance > 0 and sl_price > resistance:
+            sl_price = resistance * 1.005
+        
+        if support > 0 and tp_price < support:
+            tp_price = support * 1.005
+        
+        # Make sure profit > fees
+        if (current_price - tp_price) < (current_price * fee_rate * 3):
+            tp_price = current_price * 0.985
+    
+    else:
+        tp_price = current_price
+        sl_price = current_price
+    
+    # Calculate profit percentages
+    if signal == "BUY":
+        profit_pct = round(((tp_price - current_price) / current_price) * 100, 2)
+        loss_pct = round(((sl_price - current_price) / current_price) * 100, 2)
+    elif signal == "SELL":
+        profit_pct = round(((current_price - tp_price) / current_price) * 100, 2)
+        loss_pct = round(((current_price - sl_price) / current_price) * 100, 2)
+    else:
+        profit_pct = 0
+        loss_pct = 0
+    
+    # ========== COLLECT ALL REASONS ==========
+    
+    all_reasons = []
+    all_reasons.extend(vwap_reasons[:2])
+    all_reasons.extend(rsi_reasons[:1])
+    all_reasons.extend(macd_reasons[:1])
+    all_reasons.extend(ma_reasons[:1])
+    all_reasons.extend(bollinger_reasons[:1])
+    all_reasons.extend(volume_reasons[:1])
+    all_reasons.extend(support_reasons[:1])
+    all_reasons.extend(adx_reasons[:1])
+    
+    # Remove duplicates
+    unique_reasons = []
+    for reason in all_reasons:
+        if reason not in unique_reasons:
+            unique_reasons.append(reason)
+    
+    # ========== RETURN SIGNAL ==========
+    
+    return {
+        'symbol': symbol,
+        'price': current_price,
+        'signal': signal,
+        'confidence': round(confidence, 1),
+        'score': round(total_score, 1),
+        'support': support,
+        'resistance': resistance,
+        'tp': round(tp_price, 2),
+        'sl': round(sl_price, 2),
+        'profit_pct': profit_pct,
+        'loss_pct': loss_pct,
+        'rsi': rsi,
+        'macd': macd_line,
+        'macd_signal': signal_line,
+        'macd_hist': histogram,
+        'ma20': ma20,
+        'ma50': ma50,
+        'ma200': ma200,
+        'ema20': ema20,
+        'upper_bb': upper,
+        'middle_bb': middle,
+        'lower_bb': lower,
+        'volume_ratio': volume_ratio,
+        'atr': calculate_atr(highs, lows, prices, 14),
+        'vwap': calculate_vwap(prices, volumes),
+        'adx': adx,
+        'reasons': unique_reasons[:6],
+        'vwap_reasons': vwap_reasons,
+        'time': datetime.now().strftime("%H:%M"),
+        'timestamp': datetime.now().isoformat()
+    }
 
-price_service = PriceService()
+# ============================================
+# 7. BOT STATE MANAGEMENT
+# ============================================
 
-# ==================== Full Market Scanner ====================
-class FullMarketScanner:
-    """اسکن کامل همه ارزهای بازار"""
+class BotState:
+    """Admin panel state management"""
     
     def __init__(self):
-        self.all_symbols = []
-        self.pump_candidates = []
-        self.dump_candidates = []
-        self.hot_symbols = []
-        self.last_scan = None
+        self.load_state()
     
-    def scan_all(self):
-        """اسکن کامل بازار - همه ارزها"""
-        tickers = price_service.get_all_tickers()
-        if not tickers:
-            return [], [], ['BTCUSDT', 'ETHUSDT', 'BNBUSDT']
-        
-        all_symbols = []
-        pump = []
-        dump = []
-        
-        logger.info(f"📊 Scanning {len(tickers)} symbols...")
-        
-        for item in tickers:
-            symbol = item['symbol']
-            # فیلتر کردن
-            if not symbol.endswith('USDT'):
-                continue
-            if any(x in symbol for x in ['UP', 'DOWN', 'BUSD', 'FDUSD', 'DAI']):
-                continue
-            if any(x in symbol for x in ['BEAR', 'BULL']):
-                continue
-            
+    def load_state(self):
+        """Load bot state"""
+        if os.path.exists('bot_state_v4.json'):
             try:
-                vol = float(item['quoteVolume'])
-                price = float(item['lastPrice'])
-                change = float(item['priceChangePercent'])
-                high = float(item['highPrice'])
-                low = float(item['lowPrice'])
-                
-                if vol < MIN_VOLUME_USDT or price < 0.000001:
-                    continue
-                
-                data = {
-                    'symbol': symbol,
-                    'price': price,
-                    'volume': vol,
-                    'change': change,
-                    'high': high,
-                    'low': low,
-                    'spread': ((float(item['askPrice']) - float(item['bidPrice'])) / (float(item['bidPrice']) + 0.000001)) * 100 if 'askPrice' in item else 0,
-                    'trades': int(item.get('count', 0))
-                }
-                
-                all_symbols.append(data)
-                
-                # محاسبه امتیاز پامپ
-                pump_score = 0
-                if 1.5 < change < 15:
-                    pump_score += 5
-                if vol > 5_000_000:
-                    pump_score += 3
-                if vol > 20_000_000:
-                    pump_score += 2
-                if data['trades'] > 10000:
-                    pump_score += 2
-                if 0.001 < price < 50:
-                    pump_score += 2
-                range_pct = ((high - low) / (low + 0.000001)) * 100
-                if range_pct > 5:
-                    pump_score += 2
-                if range_pct > 10:
-                    pump_score += 1
-                dist_from_low = ((price - low) / (low + 0.000001)) * 100
-                if dist_from_low < 10:
-                    pump_score += 2
-                
-                # امتیاز دامپ
-                dump_score = 0
-                if change > 20:
-                    dump_score += 7
-                elif change > 10:
-                    dump_score += 4
-                elif change > 5:
-                    dump_score += 2
-                if vol > 10_000_000 and change > 10:
-                    dump_score += 4
-                dist_from_high = ((high - price) / (high + 0.000001)) * 100
-                if dist_from_high < 3 and change > 5:
-                    dump_score += 5
-                elif dist_from_high < 5 and change > 8:
-                    dump_score += 3
-                if data['spread'] > 0.3:
-                    dump_score += 2
-                
-                # ذخیره در دیتابیس
-                db.update_hot_symbol(symbol, pump_score, dump_score, vol, change)
-                
-                if pump_score >= 6:
-                    pump.append({'symbol': symbol, 'score': pump_score, 'change': change, 'volume': vol})
-                if dump_score >= 6:
-                    dump.append({'symbol': symbol, 'score': dump_score, 'change': change, 'volume': vol})
-                    
-            except Exception as e:
-                continue
+                with open('bot_state_v4.json', 'r') as f:
+                    data = json.load(f)
+                    self.signal_enabled = data.get('signal_enabled', True)
+                    self.payment_enabled = data.get('payment_enabled', True)
+                    self.wallet_address = data.get('wallet_address', WALLET_ADDRESS)
+                    self.price = data.get('price', SUBSCRIPTION_PRICE)
+                    self.total_signals_sent = data.get('total_signals_sent', 0)
+                    return
+            except:
+                pass
         
-        # مرتب‌سازی
-        pump.sort(key=lambda x: x['score'], reverse=True)
-        dump.sort(key=lambda x: x['score'], reverse=True)
-        
-        self.pump_candidates = [p['symbol'] for p in pump[:20]]
-        self.dump_candidates = [d['symbol'] for d in dump[:15]]
-        
-        # ترکیب ارزهای داغ
-        hot = []
-        for p in pump[:15]:
-            if p['symbol'] not in hot:
-                hot.append(p['symbol'])
-        for d in dump[:10]:
-            if d['symbol'] not in hot:
-                hot.append(d['symbol'])
-        
-        # اضافه کردن ارزهای اصلی
-        main = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT', 'ADAUSDT', 'DOGEUSDT']
-        for s in main:
-            if s not in hot:
-                hot.insert(0, s)
-        
-        self.hot_symbols = hot[:50]
-        self.all_symbols = all_symbols
-        self.last_scan = datetime.now()
-        
-        logger.info(f"✅ Scan complete: {len(all_symbols)} symbols, {len(pump)} pumps, {len(dump)} dumps")
-        
-        return pump[:10], dump[:10], self.hot_symbols
+        self.signal_enabled = True
+        self.payment_enabled = True
+        self.wallet_address = WALLET_ADDRESS
+        self.price = SUBSCRIPTION_PRICE
+        self.total_signals_sent = 0
+        self.save_state()
     
-    def get_pump_dump_info(self):
-        """دریافت اطلاعات پامپ و دامپ"""
-        return self.pump_candidates[:10], self.dump_candidates[:10]
-
-scanner = FullMarketScanner()
-
-# ==================== Signal Generator ====================
-class SignalGenerator:
-    def __init__(self):
-        self.scanner = scanner
-    
-    def analyze_symbol(self, symbol):
-        """تحلیل یک ارز و تولید سیگنال"""
+    def save_state(self):
+        """Save bot state"""
         try:
-            candles = price_service.get_candles(symbol, '5m', 100)
-            if not candles or len(candles) < 30:
-                return None
-            
-            closes = [c['close'] for c in candles]
-            highs = [c['high'] for c in candles]
-            lows = [c['low'] for c in candles]
-            volumes = [c['volume'] for c in candles]
-            
-            current = closes[-1]
-            
-            # محاسبه اندیکاتورها
-            ma7 = np.mean(closes[-7:])
-            ma21 = np.mean(closes[-21:])
-            ma50 = np.mean(closes[-50:]) if len(closes) >= 50 else ma21
-            
-            # RSI
-            delta = np.diff(closes[-15:]) if len(closes) >= 15 else [0]
-            gains = [d for d in delta if d > 0]
-            losses = [-d for d in delta if d < 0]
-            avg_gain = np.mean(gains) if gains else 0
-            avg_loss = np.mean(losses) if losses else 0.001
-            rsi = 100 - (100 / (1 + (avg_gain / avg_loss))) if avg_loss > 0 else 50
-            
-            # حجم
-            avg_vol = np.mean(volumes[-20:]) if len(volumes) >= 20 else volumes[-1]
-            vol_ratio = volumes[-1] / (avg_vol + 0.000001)
-            
-            # حمایت و مقاومت
-            support = min(closes[-20:])
-            resistance = max(closes[-20:])
-            
-            # ATR
-            atr = np.std(closes[-14:]) if len(closes) >= 14 else current * 0.01
-            
-            # تشخیص روند
-            if ma7 > ma21 > ma50:
-                trend = "STRONG_UP"
-            elif ma7 > ma21:
-                trend = "UP"
-            elif ma7 < ma21 < ma50:
-                trend = "STRONG_DOWN"
-            elif ma7 < ma21:
-                trend = "DOWN"
-            else:
-                trend = "SIDEWAYS"
-            
-            # تشخیص نوع سیگنال
-            signal_type = 'NORMAL'
-            if symbol in scanner.pump_candidates:
-                signal_type = 'PUMP'
-            elif symbol in scanner.dump_candidates:
-                signal_type = 'DUMP'
-            
-            # تولید سیگنال
-            confidence = 0
-            direction = None
-            reasons = []
-            
-            # سیگنال خرید (LONG)
-            if rsi < 35 and trend in ['UP', 'SIDEWAYS']:
-                direction = 'LONG'
-                confidence = 55 + (35 - rsi) * 0.5
-                reasons.append(f"RSI: {rsi:.1f}")
-                if vol_ratio > 1.5:
-                    confidence += 10
-                    reasons.append("حجم بالا")
-                if signal_type == 'PUMP':
-                    confidence += 15
-                    reasons.append("سیگنال پامپ")
-            
-            # سیگنال فروش (SHORT)
-            elif rsi > 65 and trend in ['DOWN', 'SIDEWAYS']:
-                direction = 'SHORT'
-                confidence = 55 + (rsi - 65) * 0.5
-                reasons.append(f"RSI: {rsi:.1f}")
-                if vol_ratio > 1.5:
-                    confidence += 10
-                    reasons.append("حجم بالا")
-                if signal_type == 'DUMP':
-                    confidence += 15
-                    reasons.append("سیگنال ریزش")
-            
-            # پامپ قوی
-            elif signal_type == 'PUMP' and rsi < 55 and trend != 'DOWN':
-                direction = 'LONG'
-                confidence = 65 + (55 - rsi) * 0.3
-                reasons.append("پامپ شناسایی شد")
-                if vol_ratio > 2:
-                    confidence += 10
-            
-            # دامپ قوی
-            elif signal_type == 'DUMP' and rsi > 45 and trend != 'UP':
-                direction = 'SHORT'
-                confidence = 65 + (rsi - 45) * 0.3
-                reasons.append("ریزش شناسایی شد")
-                if vol_ratio > 2:
-                    confidence += 10
-            
-            if not direction or confidence < MIN_CONFIDENCE:
-                return None
-            
-            # حد ضرر و سود
-            if direction == 'LONG':
-                sl = max(current - (atr * 2.5), support * 0.96)
-                tp = current + (atr * 4.5)
-            else:
-                sl = min(current + (atr * 2.5), resistance * 1.04)
-                tp = current - (atr * 4.5)
-            
-            # اهرم
-            if confidence >= 75:
-                leverage = 15
-            elif confidence >= 65:
-                leverage = 10
-            else:
-                leverage = 5
-            
-            return {
-                'symbol': symbol,
-                'direction': direction,
-                'confidence': int(min(98, confidence)),
-                'entry': round(current, 8),
-                'sl': round(sl, 8),
-                'tp': round(tp, 8),
-                'leverage': leverage,
-                'support': round(support, 8),
-                'resistance': round(resistance, 8),
-                'signal_type': signal_type,
-                'rsi': round(rsi, 1),
-                'trend': trend,
-                'vol_ratio': round(vol_ratio, 2),
-                'reasons': ', '.join(reasons)
-            }
-            
-        except Exception as e:
-            logger.error(f"Analyze error {symbol}: {e}")
-            return None
+            with open('bot_state_v4.json', 'w') as f:
+                json.dump({
+                    'signal_enabled': self.signal_enabled,
+                    'payment_enabled': self.payment_enabled,
+                    'wallet_address': self.wallet_address,
+                    'price': self.price,
+                    'total_signals_sent': self.total_signals_sent
+                }, f)
+        except:
+            pass
     
-    def generate_signals(self, limit=5):
-        """تولید چند سیگنال از ارزهای داغ"""
-        pump, dump, hot = scanner.scan_all()
-        
-        if not hot:
-            hot = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT']
-        
-        signals = []
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            futures = {executor.submit(self.analyze_symbol, symbol): symbol for symbol in hot}
-            for future in as_completed(futures):
-                try:
-                    result = future.result(timeout=15)
-                    if result:
-                        signals.append(result)
-                except:
-                    continue
-        
-        if not signals:
-            return []
-        
-        # مرتب‌سازی بر اساس اولویت
-        signals.sort(key=lambda x: (
-            0 if x['signal_type'] == 'PUMP' else 1 if x['signal_type'] == 'DUMP' else 2,
-            -x['confidence']
-        ))
-        
-        return signals[:limit]
+    def toggle_signals(self):
+        """Enable/disable signal sending"""
+        self.signal_enabled = not self.signal_enabled
+        self.save_state()
+        return self.signal_enabled
     
-    def generate_best_signal(self):
-        """تولید بهترین سیگنال"""
-        signals = self.generate_signals(1)
-        return signals[0] if signals else None
-
-generator = SignalGenerator()
-
-# ==================== Telegram Bot ====================
-if TELEGRAM_AVAILABLE:
-    from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
-    from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-
-# ==================== Keyboards ====================
-def get_main_keyboard():
-    keyboard = [
-        ['📊 اسکنر خودکار', '📈 آخرین سیگنال'],
-        ['📊 آمار و عملکرد', '💰 خرید اشتراک'],
-        ['👑 پنل مدیریت']
-    ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-
-def get_admin_keyboard():
-    keyboard = [
-        ['✅ فعال/غیرفعال اسکن'],
-        ['💰 فعال/غیرفعال پولی'],
-        ['📢 ارسال پیام همگانی'],
-        ['📊 مشاهده سیگنال‌ها'],
-        ['🔄 اسکن دستی بازار'],
-        ['✅ تایید/رد پرداخت'],
-        ['🔢 تنظیم سیگنال رایگان'],
-        ['🔙 بازگشت']
-    ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-
-# ==================== Signal Message ====================
-def create_signal_message(signal, is_premium=False):
-    emoji = '🟢' if signal['direction'] == 'LONG' else '🔴'
-    direction_text = 'خرید (LONG)' if signal['direction'] == 'LONG' else 'فروش (SHORT)'
+    def update_wallet(self, address):
+        """Update wallet address"""
+        self.wallet_address = address
+        self.save_state()
+        return self.wallet_address
     
-    tag = ""
-    if signal.get('signal_type') == 'PUMP':
-        tag = "🔥 **سیگنال پامپ** - "
-    elif signal.get('signal_type') == 'DUMP':
-        tag = "📉 **سیگنال ریزش** - "
+    def update_price(self, price):
+        """Update subscription price"""
+        self.price = price
+        self.save_state()
+        return self.price
+
+# ============================================
+# 8. SYMBOLS LIST
+# ============================================
+
+SYMBOLS = [
+    'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT',
+    'ADAUSDT', 'DOGEUSDT', 'AVAXUSDT', 'MATICUSDT', 'DOTUSDT',
+    'LINKUSDT', 'UNIUSDT', 'ATOMUSDT', 'LTCUSDT', 'BCHUSDT',
+    'NEARUSDT', 'ALGOUSDT', 'VETUSDT', 'ICPUSDT', 'FILUSDT',
+    'FTMUSDT', 'XLMUSDT', 'EGLDUSDT', 'HNTUSDT', 'XMRUSDT',
+    'ZECUSDT', 'DASHUSDT', 'ETCUSDT', 'XTZUSDT', 'EOSUSDT',
+    'AAVEUSDT', 'MKRUSDT', 'COMPUSDT', 'YFIUSDT', 'SUSHIUSDT',
+    'CAKEUSDT', 'AXSUSDT', 'SANDUSDT', 'APEUSDT', 'CRVUSDT',
+    'RUNEUSDT', 'FLOWUSDT', 'QNTUSDT', 'SNXUSDT', 'GRTUSDT',
+    'LDOUSDT', 'ARBUSDT', 'OPUSDT', 'INJUSDT', 'SEIUSDT'
+]
+
+def find_best_signals(learner, state, count=2):
+    """Find best signals from all symbols"""
+    results = []
     
-    premium_tag = "💎 **پرمیوم** " if is_premium else "🎁 **رایگان** "
+    print(f"Scanning {len(SYMBOLS)} symbols...")
     
+    for symbol in SYMBOLS:
+        result = generate_signal(symbol, learner)
+        if result and result['signal'] != 'HOLD':
+            if result['confidence'] >= MIN_CONFIDENCE:
+                results.append(result)
+                print(f"✅ Found signal: {symbol} - {result['signal']} ({result['confidence']}%)")
+        time.sleep(0.03)
+    
+    # Sort by confidence
+    results.sort(key=lambda x: x['confidence'], reverse=True)
+    
+    if len(results) > count:
+        results = results[:count]
+    
+    state.total_signals_sent += len(results)
+    state.save_state()
+    
+    return results
+
+# ============================================
+# 9. TELEGRAM MESSAGE BUILDER
+# ============================================
+
+def build_signal_message(result, learner, state):
+    """Build professional signal message with all details"""
+    if not result:
+        return ""
+    
+    # Signal emoji
+    if result['signal'] == 'BUY':
+        emoji = "🟢"
+        signal_text = "🚀 LONG"
+    elif result['signal'] == 'SELL':
+        emoji = "🔴"
+        signal_text = "💀 SHORT"
+    else:
+        emoji = "⚪"
+        signal_text = "⏳ HOLD"
+    
+    # Get accuracy
+    accuracy = learner.get_accuracy()
+    
+    # Build message
     msg = f"""
-🚨 **سیگنال معاملاتی V19**
+{emoji} <b>SIGNAL - {result['symbol']}</b>
+⏰ Time: {result['time']}
 
-{emoji} **{signal['symbol']} - {direction_text}**
-{tag}
-{premium_tag}
+📊 <b>Direction:</b> {signal_text}
+💰 <b>Entry Price:</b> <code>${result['price']:,.2f}</code>
+🎯 <b>Confidence:</b> <b>{result['confidence']}%</b>
+📈 <b>Score:</b> {result['score']}/100
 
-💰 **ورود:** ${signal['entry']:,.8f}
-🎯 **حد سود:** ${signal['tp']:,.8f}
-🛑 **حد ضرر:** ${signal['sl']:,.8f}
+━━━━━━━━━━━━━━━━━━━━━━━━━
+🎯 <b>TARGETS:</b>
+✅ <b>Take Profit:</b> <code>${result['tp']:,.2f}</code>
+🛑 <b>Stop Loss:</b> <code>${result['sl']:,.2f}</code>
 
-📉 **حمایت:** ${signal['support']:,.8f}
-📈 **مقاومت:** ${signal['resistance']:,.8f}
-⚡ **اهرم:** {signal['leverage']}x
-🎯 **اطمینان:** {signal['confidence']}%
+📊 <b>Profit/Loss:</b>
+• Profit: <b>+{result['profit_pct']}%</b>
+• Loss: <b>{result['loss_pct']}%</b>
 
-📊 **تحلیل:**
-• RSI: {signal.get('rsi', 'N/A')}
-• روند: {signal.get('trend', 'N/A')}
-• حجم: {signal.get('vol_ratio', 1)}x
-• دلیل: {signal.get('reasons', 'N/A')}
+━━━━━━━━━━━━━━━━━━━━━━━━━
+📊 <b>KEY LEVELS:</b>
+🛡️ Support: <code>${result['support']:,.2f}</code>
+🚫 Resistance: <code>${result['resistance']:,.2f}</code>
 
-🧠 مدل: V19 FULL MARKET
-⏱️ زمان: {datetime.now().strftime('%H:%M:%S')}
+━━━━━━━━━━━━━━━━━━━━━━━━━
+📊 <b>INDICATORS (7):</b>
+• VWAP: <code>${result['vwap']:,.2f}</code> ⭐ (Strongest)
+• RSI: {result['rsi']}
+• MACD: {result['macd']} (Signal: {result['macd_signal']})
+• MA20: ${result['ma20']:,.2f}
+• MA50: ${result['ma50']:,.2f}
+• MA200: ${result['ma200']:,.2f}
+• ADX: {result['adx']} (Trend Strength)
 
-📌 **بازخورد خود را به ربات پیام دهید:**
-✅ سود کردم [شناسه]
-❌ سود نکردم [شناسه]
-
-#سیگنال #{'LONG' if signal['direction'] == 'LONG' else 'SHORT'} #{signal['symbol']}
+━━━━━━━━━━━━━━━━━━━━━━━━━
+📝 <b>REASONS:</b>
 """
+    
+    for reason in result['reasons'][:6]:
+        msg += f"• {reason}\n"
+    
+    if result.get('vwap_reasons'):
+        for reason in result['vwap_reasons'][:2]:
+            msg += f"• {reason}\n"
+    
+    msg += f"""
+━━━━━━━━━━━━━━━━━━━━━━━━━
+🧠 <b>LEARNING SYSTEM:</b>
+• Accuracy: {accuracy}%
+• Feedback: {learner.positive_feedback}✅ / {learner.negative_feedback}❌
+• Signals Today: {state.total_signals_sent}
+
+📊 <b>BOT INFO:</b>
+• Version: V4 (With VWAP)
+• Indicators: 7
+• Symbols: {len(SYMBOLS)}
+• Interval: {SIGNAL_INTERVAL//60}m
+
+⚠️ <i>Trade at your own risk! Always use stop loss!</i>
+    """
+    
     return msg
 
-# ==================== Send to Channel ====================
-def send_to_channel(signal, is_premium=False):
-    """ارسال سیگنال به کانال"""
+def send_to_telegram(message):
+    """Send message to Telegram channel"""
+    if not message:
+        return False
+    
     try:
-        msg = create_signal_message(signal, is_premium)
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         data = {
             'chat_id': CHANNEL_ID,
-            'text': msg,
-            'parse_mode': 'Markdown'
+            'text': message,
+            'parse_mode': 'HTML'
         }
-        r = requests.post(url, data=data, timeout=10)
-        
-        if r.status_code == 200:
-            result = r.json()
-            if result.get('ok'):
-                logger.info(f"✅ Signal sent to {CHANNEL_ID}: {signal['symbol']}")
-                return True
-        
-        logger.error(f"❌ Channel send failed: {r.text}")
-        return False
-        
-    except Exception as e:
-        logger.error(f"❌ Send error: {e}")
+        r = requests.post(url, data=data, timeout=5)
+        return r.status_code == 200
+    except:
         return False
 
-# ==================== Auto Scanner ====================
-def auto_scanner():
-    """اسکن خودکار و ارسال سیگنال به کانال"""
-    logger.info("🔄 Auto scanner started")
-    last_signals = []
+def send_to_admin(message):
+    """Send message to admin"""
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        data = {
+            'chat_id': ADMIN_ID,
+            'text': message,
+            'parse_mode': 'HTML'
+        }
+        r = requests.post(url, data=data, timeout=5)
+        return r.status_code == 200
+    except:
+        return False
+
+# ============================================
+# 10. MAIN SIGNAL LOOP
+# ============================================
+
+def signal_loop():
+    """Main signal loop - runs every 3 minutes"""
+    learner = AutoLearner()
+    state = BotState()
+    
+    print("="*80)
+    print("🚀 PROFESSIONAL SIGNAL BOT V4 - WITH VWAP")
+    print("="*80)
+    print(f"📢 Channel: {CHANNEL_ID}")
+    print(f"👤 Admin: {ADMIN_ID}")
+    print(f"⏱ Interval: {SIGNAL_INTERVAL//60} minutes")
+    print(f"📊 Total Symbols: {len(SYMBOLS)}")
+    print(f"📊 Indicators: 7 (VWAP, RSI, MACD, MA, Bollinger, Volume, S/R)")
+    print(f"🧠 Learning Accuracy: {learner.get_accuracy()}%")
+    print(f"💳 Wallet: {state.wallet_address}")
+    print(f"💰 Price: {state.price}")
+    print(f"📡 Signal Sending: {'ACTIVE' if state.signal_enabled else 'PAUSED'}")
+    print("="*80)
+    
+    cycle = 0
     
     while True:
         try:
-            if db.get_setting('scan_enabled') != '1':
-                time.sleep(30)
+            cycle += 1
+            
+            if not state.signal_enabled:
+                print(f"⏸️ Cycle {cycle}: Signal sending paused")
+                send_to_admin(f"⏸️ Cycle {cycle}: Signal sending paused")
+                time.sleep(SIGNAL_INTERVAL)
                 continue
             
-            is_premium_mode = db.get_setting('premium_mode') == '1'
+            print(f"\n🔄 Cycle {cycle} - {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+            print("⏳ Scanning all symbols with VWAP...")
             
-            # تولید سیگنال‌ها
-            signals = generator.generate_signals(3)
+            best_signals = find_best_signals(learner, state, MAX_SIGNALS_PER_CYCLE)
             
-            if signals:
-                sent_count = 0
-                for signal in signals:
-                    # چک کردن تکراری نبودن
-                    symbol_key = signal['symbol']
-                    if symbol_key in last_signals:
-                        # اگر کمتر از ۵ دقیقه از آخرین سیگنال برای این ارز گذشته، رد کن
-                        continue
-                    
-                    # ذخیره
-                    signal_id = db.save_signal(signal, is_premium_mode)
-                    
-                    # ارسال به کانال
-                    if send_to_channel(signal, is_premium_mode):
-                        db.mark_sent(signal_id)
-                        last_signals.append(symbol_key)
-                        sent_count += 1
-                        
-                        # به‌روزرسانی آمار
-                        count = int(db.get_setting('signal_count') or 0) + 1
-                        db.update_setting('signal_count', str(count))
-                        
-                        logger.info(f"📤 Auto signal: {signal['symbol']} {signal['direction']}")
-                        
-                        # فقط یک سیگنال بفرست
-                        break
+            if best_signals:
+                for i, signal in enumerate(best_signals):
+                    msg = build_signal_message(signal, learner, state)
+                    if send_to_telegram(msg):
+                        print(f"✅ Signal {i+1}: {signal['symbol']} - {signal['signal']} ({signal['confidence']}%)")
+                    else:
+                        print(f"❌ Failed to send signal {i+1}")
+                    time.sleep(1)
                 
-                if sent_count > 0:
-                    logger.info(f"✅ {sent_count} signal(s) sent")
+                # Summary to admin
+                summary = f"""
+📊 <b>Cycle {cycle} Summary</b>
+
+✅ <b>Signals Sent:</b> {len(best_signals)}
+📈 <b>Best Signal:</b> {best_signals[0]['symbol']} ({best_signals[0]['confidence']}%)
+📊 <b>VWAP:</b> ${best_signals[0].get('vwap', 0):,.2f}
+🧠 <b>Accuracy:</b> {learner.get_accuracy()}%
+📊 <b>Total Today:</b> {state.total_signals_sent}
+    """
+                send_to_admin(summary)
+            else:
+                print("⏳ No strong signals found this cycle")
+                # Send fewer messages to avoid spam
+                if cycle % 3 == 0:
+                    send_to_telegram(f"⏳ No strong signals found in cycle {cycle}. Waiting...")
             
-            # هر ۱۰ دقیقه یک بار اسکن کامل انجام بده
-            if not last_signals or len(last_signals) > 10:
-                last_signals = last_signals[-5:]
-            
-            time.sleep(SCAN_INTERVAL)
+            print(f"⏱ Waiting {SIGNAL_INTERVAL//60} minutes for next cycle...")
+            time.sleep(SIGNAL_INTERVAL)
             
         except Exception as e:
-            logger.error(f"❌ Auto scanner error: {e}")
+            error_msg = f"❌ Error in cycle {cycle}: {str(e)}"
+            print(error_msg)
+            send_to_admin(error_msg)
             time.sleep(60)
 
-# ==================== Bot Handlers ====================
+# ============================================
+# 11. START
+# ============================================
 
-async def start(update, context):
-    user_id = update.effective_user.id
-    username = update.effective_user.username or ''
-    first_name = update.effective_user.first_name or ''
-    
-    db.add_user(user_id, username, first_name)
-    
-    is_premium = db.is_premium(user_id)
-    free_signals = db.get_free_signals(user_id)
-    total, sent, positive, negative, premium = db.get_stats()
-    
-    welcome = f"""
-🤖 **ربات سیگنال‌دهی V19 - FULL MARKET**
-
-🔥 **قابلیت‌ها:**
-• 📊 اسکن کامل بازار (همه ارزها)
-• 🚀 تشخیص خودکار پامپ و دامپ
-• 📡 ارسال خودکار به کانال @davnold
-• 💰 سیگنال‌های پرمیوم
-• 🧠 یادگیری از بازخورد
-
-📊 **آمار:**
-• کل سیگنال‌ها: {total}
-• بازخورد مثبت: {positive}
-• بازخورد منفی: {negative}
-• دقت: {f"{positive/(positive+negative)*100:.1f}%" if positive+negative > 0 else "در حال یادگیری..."}
-
-💎 **وضعیت شما:**
-• {'✅ پرمیوم' if is_premium else '❌ رایگان'}
-• سیگنال رایگان: {free_signals}
-
-📌 **از دکمه‌های زیر استفاده کنید**
-"""
-    await update.message.reply_text(welcome, reply_markup=get_main_keyboard(), parse_mode='Markdown')
-
-async def handle_message(update, context):
-    user_id = update.effective_user.id
-    text = update.message.text
-    
-    # ===== ADMIN PANEL =====
-    if text == '👑 پنل مدیریت':
-        if user_id != ADMIN_ID:
-            await update.message.reply_text("❌ **دسترسی غیرمجاز!**", parse_mode='Markdown')
-            return
-        await update.message.reply_text("👑 **پنل مدیریت V19**", reply_markup=get_admin_keyboard(), parse_mode='Markdown')
-        return
-    
-    if text == '🔙 بازگشت':
-        await update.message.reply_text("🔙 بازگشت", reply_markup=get_main_keyboard())
-        return
-    
-    # ===== ENABLE/DISABLE SCAN =====
-    if text == '✅ فعال/غیرفعال اسکن' and user_id == ADMIN_ID:
-        current = db.get_setting('scan_enabled')
-        if current == '1':
-            db.update_setting('scan_enabled', '0')
-            await update.message.reply_text("⏸️ **اسکن خودکار غیرفعال شد**")
-        else:
-            db.update_setting('scan_enabled', '1')
-            await update.message.reply_text("▶️ **اسکن خودکار فعال شد**")
-        return
-    
-    # ===== PREMIUM MODE =====
-    if text == '💰 فعال/غیرفعال پولی' and user_id == ADMIN_ID:
-        current = db.get_setting('premium_mode')
-        if current == '1':
-            db.update_setting('premium_mode', '0')
-            await update.message.reply_text("💰 **حالت پولی غیرفعال شد**\nهمه سیگنال‌ها رایگان هستند")
-        else:
-            db.update_setting('premium_mode', '1')
-            await update.message.reply_text("💰 **حالت پولی فعال شد**\nسیگنال‌ها پرمیوم هستند")
-        return
-    
-    # ===== MANUAL SCAN =====
-    if text == '🔄 اسکن دستی بازار':
-        await update.message.reply_text("🔄 **در حال اسکن کامل بازار...**\n⏳ این کار چند ثانیه طول می‌کشد", parse_mode='Markdown')
-        
-        pump, dump, hot = scanner.scan_all()
-        
-        msg = "📊 **نتایج اسکن کامل بازار:**\n\n"
-        msg += f"📈 **تعداد ارزهای اسکن شده:** {len(scanner.all_symbols)}\n\n"
-        
-        if pump:
-            msg += "🔥 **۱۰ ارز مستعد پامپ:**\n"
-            for p in pump[:10]:
-                msg += f"• {p['symbol']} (امتیاز: {p['score']} | تغییر: {p['change']:.1f}%)\n"
-        
-        if dump:
-            msg += "\n📉 **۱۰ ارز مستعد ریزش:**\n"
-            for d in dump[:10]:
-                msg += f"• {d['symbol']} (امتیاز: {d['score']} | تغییر: {d['change']:.1f}%)\n"
-        
-        if not pump and not dump:
-            msg += "🔍 **سیگنال قوی پیدا نشد**"
-        
-        await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=get_admin_keyboard() if user_id == ADMIN_ID else get_main_keyboard())
-        return
-    
-    # ===== SMART SCAN =====
-    if text == '📊 اسکنر خودکار':
-        await update.message.reply_text("🔄 **در حال تولید سیگنال...**", parse_mode='Markdown')
-        
-        signal = generator.generate_best_signal()
-        
-        if signal:
-            is_premium = db.is_premium(user_id) or db.get_setting('premium_mode') == '1'
-            msg = create_signal_message(signal, is_premium)
-            
-            # ذخیره
-            signal_id = db.save_signal(signal, is_premium)
-            
-            # ارسال به کانال
-            if send_to_channel(signal, is_premium):
-                db.mark_sent(signal_id)
-                await update.message.reply_text("✅ **سیگنال به کانال ارسال شد!**")
-            
-            await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=get_main_keyboard())
-        else:
-            await update.message.reply_text("🔍 **سیگنال قوی پیدا نشد**\n⏳ دوباره امتحان کنید", reply_markup=get_main_keyboard())
-        return
-    
-    # ===== LAST SIGNAL =====
-    if text == '📈 آخرین سیگنال':
-        signals = db.get_unsent_signals()
-        if signals:
-            s = signals[0]
-            msg = f"""
-📈 **آخرین سیگنال:**
-• شناسه: {s[0]}
-• ارز: {s[1]}
-• جهت: {s[2]}
-• ورود: ${s[3]:.8f}
-• حد سود: ${s[4]:.8f}
-• حد ضرر: ${s[5]:.8f}
-• اطمینان: {s[6]}%
-• نوع: {s[7]}
-• {'💎 پرمیوم' if s[8] else '🎁 رایگان'}
-"""
-            await update.message.reply_text(msg, parse_mode='Markdown')
-        else:
-            await update.message.reply_text("📭 **هنوز سیگنالی ارسال نشده**")
-        return
-    
-    # ===== STATS =====
-    if text == '📊 آمار و عملکرد':
-        total, sent, positive, negative, premium = db.get_stats()
-        is_premium_mode = db.get_setting('premium_mode') == '1'
-        is_scan_enabled = db.get_setting('scan_enabled') == '1'
-        
-        msg = f"""
-📊 **آمار و عملکرد V19**
-
-📡 **کل سیگنال‌ها:** {total}
-✅ **ارسال شده:** {sent}
-🟢 **بازخورد مثبت:** {positive}
-🔴 **بازخورد منفی:** {negative}
-🎯 **دقت:** {f"{positive/(positive+negative)*100:.1f}%" if positive+negative > 0 else "در حال یادگیری..."}
-💎 **سیگنال‌های پرمیوم:** {premium}
-
-⚙️ **وضعیت:**
-• اسکن خودکار: {'✅ فعال' if is_scan_enabled else '❌ غیرفعال'}
-• حالت پولی: {'💰 فعال' if is_premium_mode else '🎁 رایگان'}
-
-🧠 **نسخه:** V19 FULL MARKET
-⏱️ **اسکن:** هر ۳ دقیقه
-📊 **ارزها:** همه بازار
-"""
-        await update.message.reply_text(msg, parse_mode='Markdown')
-        return
-    
-    # ===== VIEW SIGNALS =====
-    if text == '📊 مشاهده سیگنال‌ها' and user_id == ADMIN_ID:
-        signals = db.get_signals(30)
-        if not signals:
-            await update.message.reply_text("📭 **هیچ سیگنالی ثبت نشده**")
-            return
-        
-        msg = "📊 **۳۰ سیگنال آخر:**\n\n"
-        for s in signals:
-            feedback = s[5] if s[5] else "⏳ در انتظار"
-            premium = "💎" if s[6] else "🎁"
-            msg += f"#{s[0]} {premium} {s[1]} | {s[2]} | اطمینان: {s[3]}% | {feedback}\n"
-        
-        await update.message.reply_text(msg, parse_mode='Markdown')
-        return
-    
-    # ===== BROADCAST =====
-    if text == '📢 ارسال پیام همگانی' and user_id == ADMIN_ID:
-        context.user_data['admin_state'] = 'broadcast'
-        await update.message.reply_text("📝 **پیام خود را وارد کنید:**", parse_mode='Markdown')
-        return
-    
-    if context.user_data.get('admin_state') == 'broadcast' and user_id == ADMIN_ID:
-        context.user_data['admin_state'] = None
-        await update.message.reply_text("✅ **پیام ارسال شد!**", reply_markup=get_admin_keyboard())
-        return
-    
-    # ===== CONFIRM PAYMENT =====
-    if text == '✅ تایید/رد پرداخت' and user_id == ADMIN_ID:
-        payments = db.get_pending_payments()
-        if not payments:
-            await update.message.reply_text("🧾 **هیچ درخواست پرداختی وجود ندارد**")
-            return
-        
-        for p in payments:
-            keyboard = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton(f"✅ تایید #{p[0]}", callback_data=f"confirm:{p[0]}"),
-                    InlineKeyboardButton(f"❌ رد #{p[0]}", callback_data=f"reject:{p[0]}")
-                ]
-            ])
-            await update.message.reply_text(
-                f"🧾 **درخواست پرداخت #{p[0]}**\n"
-                f"👤 کاربر: {p[1]}\n"
-                f"🔑 هش: `{p[2]}`\n"
-                f"💰 مبلغ: ${p[3]}\n"
-                f"📅 زمان: {p[4]}",
-                reply_markup=keyboard,
-                parse_mode='Markdown'
-            )
-            await asyncio.sleep(0.5)
-        return
-    
-    # ===== SET FREE SIGNALS =====
-    if text == '🔢 تنظیم سیگنال رایگان' and user_id == ADMIN_ID:
-        context.user_data['admin_state'] = 'set_free'
-        await update.message.reply_text("📝 **تعداد سیگنال رایگان روزانه را وارد کنید:**\n(مثال: 0, 1, 2, 3, 5)", parse_mode='Markdown')
-        return
-    
-    if context.user_data.get('admin_state') == 'set_free' and user_id == ADMIN_ID:
-        try:
-            count = int(text.strip())
-            if count < 0:
-                count = 0
-            if count > 10:
-                count = 10
-            db.cursor.execute('UPDATE users SET max_free_signals = ?', (count,))
-            db.conn.commit()
-            context.user_data['admin_state'] = None
-            await update.message.reply_text(f"✅ **تعداد سیگنال رایگان به {count} تغییر یافت!**", reply_markup=get_admin_keyboard())
-        except:
-            await update.message.reply_text("⚠️ **لطفاً یک عدد معتبر وارد کنید!**")
-        return
-    
-    # ===== BUY SUBSCRIPTION =====
-    if text == '💰 خرید اشتراک':
-        user_id = update.effective_user.id
-        is_premium = db.is_premium(user_id)
-        
-        if is_premium:
-            await update.message.reply_text(
-                "✅ **شما قبلاً اشتراک پرمیوم دارید!**\n"
-                "با تشکر از حمایت شما 🙏",
-                parse_mode='Markdown'
-            )
-            return
-        
-        msg = f"""
-💰 **خرید اشتراک پرمیوم**
-
-💎 **مزایای اشتراک پرمیوم:**
-• دریافت سیگنال‌های اختصاصی
-• دسترسی به سیگنال‌های پامپ و دامپ
-• پشتیبانی ویژه
-• افزایش دقت سیگنال‌ها
-
-💵 **هزینه:** ${PRICE_USDT}
-⏱️ **مدت:** {SUBSCRIPTION_DAYS} روز
-
-🏦 **آدرس کیف پول (TRC20):**
-`{WALLET_ADDRESS}`
-
-📌 **مراحل خرید:**
-1. مبلغ ${PRICE_USDT} را به آدرس بالا واریز کنید
-2. هش تراکنش را به ربات ارسال کنید
-3. اشتراک شما فعال می‌شود
-
-⚠️ **فقط از شبکه TRC20 استفاده کنید**
-"""
-        await update.message.reply_text(msg, parse_mode='Markdown')
-        return
-    
-    # ===== PROCESS PAYMENT HASH =====
-    # بررسی هش تراکنش (حداقل ۳۴ کاراکتر)
-    if len(text.strip()) >= 34 and user_id != ADMIN_ID:
-        if db.is_premium(user_id):
-            await update.message.reply_text("✅ **شما قبلاً اشتراک دارید!**")
-            return
-        
-        # بررسی تکراری نبودن
-        pending = db.get_pending_payments()
-        for p in pending:
-            if p[2] == text.strip():
-                await update.message.reply_text("⚠️ **این هش قبلاً ثبت شده است**")
-                return
-        
-        payment_id = db.add_payment(user_id, text.strip())
-        
-        # اطلاع به ادمین
-        await context.bot.send_message(
-            chat_id=ADMIN_ID,
-            text=f"🧾 **درخواست پرداخت جدید:**\n"
-                 f"👤 کاربر: {user_id}\n"
-                 f"🔑 هش: `{text.strip()}`\n"
-                 f"💰 مبلغ: ${PRICE_USDT}",
-            parse_mode='Markdown'
-        )
-        
-        await update.message.reply_text(
-            "✅ **هش تراکنش ثبت شد!**\n"
-            "⏳ پس از تایید ادمین، اشتراک شما فعال می‌شود.\n"
-            "🕐 این کار معمولاً چند دقیقه طول می‌کشد.",
-            parse_mode='Markdown'
-        )
-        return
-    
-    # ===== FEEDBACK =====
-    # پردازش بازخورد
-    if 'سود کردم' in text or 'سود نکردم' in text:
-        feedback = 'positive' if 'سود کردم' in text else 'negative'
-        
-        # پیدا کردن شناسه سیگنال
-        numbers = re.findall(r'\d+', text)
-        signal_id = None
-        if numbers:
-            signal_id = int(numbers[0])
-        
-        if signal_id:
-            db.update_feedback(signal_id, feedback, user_id)
-            await update.message.reply_text(
-                f"✅ **بازخورد شما ثبت شد!**\n"
-                f"🙏 ممنون از کمکتان برای بهبود ربات",
-                parse_mode='Markdown'
-            )
-        else:
-            # اگر شماره نداشت، آخرین سیگنال
-            signals = db.get_unsent_signals()
-            if signals:
-                db.update_feedback(signals[0][0], feedback, user_id)
-                await update.message.reply_text(
-                    f"✅ **بازخورد شما برای آخرین سیگنال ثبت شد!**",
-                    parse_mode='Markdown'
-                )
-            else:
-                await update.message.reply_text(
-                    "❌ **سیگنالی برای بازخورد یافت نشد**\n"
-                    "لطفاً شناسه سیگنال را همراه با پیام خود ارسال کنید\n"
-                    "مثال: سود کردم 123",
-                    parse_mode='Markdown'
-                )
-        return
-    
-    await update.message.reply_text("❌ **گزینه موجود نیست**", reply_markup=get_main_keyboard())
-
-# ==================== Callback Handlers ====================
-
-async def callback_handler(update, context):
-    query = update.callback_query
-    await query.answer()
-    
-    if query.from_user.id != ADMIN_ID:
-        await query.edit_message_text("❌ **دسترسی غیرمجاز!**")
-        return
-    
-    data = query.data
-    
-    if data.startswith('confirm:'):
-        payment_id = int(data.split(':')[1])
-        user_id = db.confirm_payment(payment_id)
-        
-        if user_id:
-            await query.edit_message_text(
-                f"✅ **پرداخت تایید شد!**\n"
-                f"👤 کاربر: {user_id}\n"
-                f"📅 اشتراک {SUBSCRIPTION_DAYS} روزه فعال شد"
-            )
-            # اطلاع به کاربر
-            try:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text=f"🎉 **تبریک! اشتراک پرمیوم شما فعال شد!**\n"
-                         f"📅 مدت: {SUBSCRIPTION_DAYS} روز\n"
-                         f"📊 از سیگنال‌های اختصاصی لذت ببرید!",
-                    parse_mode='Markdown'
-                )
-            except:
-                pass
-        else:
-            await query.edit_message_text("❌ **خطا در تایید پرداخت!**")
-    
-    elif data.startswith('reject:'):
-        payment_id = int(data.split(':')[1])
-        db.reject_payment(payment_id)
-        await query.edit_message_text("❌ **پرداخت رد شد**")
-
-# ==================== Main ====================
 def main():
-    if not TELEGRAM_AVAILABLE:
-        print("❌ Install: pip install python-telegram-bot")
+    """Start the bot"""
+    print("\n" + "="*80)
+    print("🚀 PROFESSIONAL SIGNAL BOT V4 - WITH VWAP")
+    print("="*80)
+    print("Checking configuration...")
+    
+    if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
+        print("❌ ERROR: Please set BOT_TOKEN in the code!")
+        print("Get token from @BotFather on Telegram")
         return
     
-    print("="*80)
-    print("🚀 SIGNAL BOT V19 - FULL MARKET SCANNER")
-    print("="*80)
-    print(f"📡 Channel: {CHANNEL_ID}")
-    print(f"⏱️ Scan interval: {SCAN_INTERVAL} seconds")
-    print(f"👤 Admin: {ADMIN_ID}")
-    print(f"💰 Wallet: {WALLET_ADDRESS}")
-    print("="*80)
-    print("✅ Scanning ALL symbols in market")
-    print("✅ Auto-send signals to channel")
-    print("✅ Full admin panel")
-    print("✅ Premium system")
-    print("="*80)
+    if CHANNEL_ID == "@davnold":
+        print("⚠️ WARNING: Using default channel ID")
+        print("Change CHANNEL_ID to your channel")
     
-    # راه‌اندازی ترد اسکن خودکار
-    scan_thread = threading.Thread(target=auto_scanner, daemon=True)
-    scan_thread.start()
-    logger.info("✅ Auto scanner thread started")
+    if ADMIN_ID == "YOUR_TELEGRAM_ID":
+        print("⚠️ WARNING: Using default admin ID")
+        print("Change ADMIN_ID to your Telegram ID")
     
-    # اسکن اولیه
-    logger.info("🔄 Initial market scan...")
-    scanner.scan_all()
+    print("\n✅ Configuration loaded")
+    print("🚀 Starting bot...")
+    print("📊 Using 7 indicators with VWAP")
+    print("="*80 + "\n")
     
-    # راه‌اندازی ربات
-    app = Application.builder().token(BOT_TOKEN).build()
-    
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(callback_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    logger.info("✅ Bot started successfully!")
-    print("✅ Bot is running...")
-    
-    try:
-        app.run_polling(drop_pending_updates=True)
-    except KeyboardInterrupt:
-        logger.info("🛑 Stopping...")
-    except Exception as e:
-        logger.error(f"❌ Bot error: {e}")
+    signal_loop()
 
 if __name__ == "__main__":
-    # نیاز به asyncio برای callback
-    import asyncio
     main()
