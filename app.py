@@ -1,6 +1,6 @@
 # ============================================================
-# ULTIMATE SIGNAL BOT V22 - SMART MONEY EDITION
-# SMC | ORDER BLOCK | FVG | DIVERGENCE | ADAPTIVE AI
+# ULTIMATE SIGNAL BOT V23 - FINAL EDITION
+# SMART TREND FILTER | MULTI-FACTOR CONFIDENCE | REAL LEARNING
 # PROFESSIONAL WALLET STREET LEVEL ANALYSIS
 # ============================================================
 
@@ -131,7 +131,9 @@ class Database:
                 has_fvg INTEGER DEFAULT 0,
                 has_divergence INTEGER DEFAULT 0,
                 has_bos INTEGER DEFAULT 0,
-                candle_pattern TEXT
+                candle_pattern TEXT,
+                rr_ratio REAL DEFAULT 0,
+                trend_filter_score REAL DEFAULT 0
             )
         ''')
         
@@ -194,7 +196,8 @@ class Database:
             ('enable_fvg', '1'),
             ('enable_bos', '1'),
             ('enable_candle_patterns', '1'),
-            ('adaptive_scoring', '1')
+            ('adaptive_scoring', '1'),
+            ('trend_filter_strict', '1')
         ]
         
         for key, value in defaults:
@@ -237,8 +240,9 @@ class Database:
                 profit_percent3, profit_percent4, profit_percent5,
                 market_phase, volatility, trend_strength, adx, volume_trend,
                 bullish_timeframes, smc_score, has_order_block, has_fvg,
-                has_divergence, has_bos, candle_pattern
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                has_divergence, has_bos, candle_pattern, rr_ratio,
+                trend_filter_score
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             signal_data['symbol'],
             signal_data['signal'],
@@ -281,7 +285,9 @@ class Database:
             1 if signal_data.get('fvg') else 0,
             1 if signal_data.get('divergence') else 0,
             1 if signal_data.get('bos') else 0,
-            signal_data.get('candle_pattern', 'none')
+            signal_data.get('candle_pattern', 'none'),
+            signal_data.get('rr_ratio', 0),
+            signal_data.get('trend_filter_score', 0)
         ))
         signal_id = self.cursor.lastrowid
         self.conn.commit()
@@ -294,6 +300,17 @@ class Database:
     def get_signal(self, signal_id):
         self.cursor.execute('SELECT * FROM signals WHERE id = ?', (signal_id,))
         return self.cursor.fetchone()
+    
+    def get_signals_with_feedback(self, limit=100):
+        """دریافت سیگنال‌های دارای بازخورد برای یادگیری"""
+        self.cursor.execute('''
+            SELECT s.*, f.feedback, f.profit_amount 
+            FROM signals s
+            JOIN feedback_log f ON s.id = f.signal_id
+            ORDER BY f.created_at DESC
+            LIMIT ?
+        ''', (limit,))
+        return self.cursor.fetchall()
     
     def update_feedback(self, signal_id, feedback_type, user_id, profit_amount=0):
         self.cursor.execute('SELECT id FROM feedback_log WHERE signal_id = ? AND user_id = ?', (signal_id, user_id))
@@ -319,6 +336,12 @@ class Database:
         self.cursor.execute('INSERT INTO feedback_log (signal_id, user_id, feedback, created_at, profit_amount) VALUES (?, ?, ?, ?, ?)',
                            (signal_id, user_id, feedback_type, datetime.now().isoformat(), profit_amount))
         self.conn.commit()
+        
+        # به‌روزرسانی سیستم یادگیری
+        signal = self.get_signal(signal_id)
+        if signal:
+            update_learning_weights(signal, feedback_type)
+        
         return True, "بازخورد ثبت شد"
     
     def add_payment(self, user_id, payment_hash):
@@ -546,13 +569,6 @@ class AdvancedIndicators:
         }
     
     @staticmethod
-    def calculate_parabolic_sar(highs, lows, step=0.02, max_step=0.2):
-        if len(highs) < 5:
-            return lows[-1] if lows else 0
-        sar = lows[-1]
-        return round(sar, 8)
-    
-    @staticmethod
     def calculate_bollinger(prices, period=20, std_dev=2):
         if len(prices) < period:
             return prices[-1] if prices else 0, prices[-1] if prices else 0, prices[-1] if prices else 0
@@ -621,7 +637,13 @@ class AdvancedIndicators:
     @staticmethod
     def calculate_stochastic_rsi(prices, period=14):
         rsi = AdvancedIndicators.calculate_rsi(prices, period)
-        stoch_rsi = (rsi - min(prices[-period:])) / (max(prices[-period:]) - min(prices[-period:]) + 0.0000001) * 100
+        if len(prices) < period:
+            return 50
+        min_rsi = min(prices[-period:])
+        max_rsi = max(prices[-period:])
+        if max_rsi == min_rsi:
+            return 50
+        stoch_rsi = (rsi - min_rsi) / (max_rsi - min_rsi) * 100
         return round(stoch_rsi, 2)
     
     @staticmethod
@@ -639,6 +661,28 @@ class AdvancedIndicators:
         if avg_vol == 0:
             return 0
         return round(current_vol / avg_vol, 2)
+    
+    @staticmethod
+    def calculate_volume_trend(volumes):
+        if len(volumes) < 20:
+            return 0
+        avg_old = np.mean(volumes[-20:-10]) if len(volumes) >= 20 else 0
+        avg_new = np.mean(volumes[-10:]) if len(volumes) >= 10 else 0
+        if avg_old == 0:
+            return 0
+        return round((avg_new - avg_old) / avg_old * 100, 2)
+    
+    @staticmethod
+    def calculate_volatility(highs, lows, closes, period=20):
+        if len(closes) < period:
+            return 0
+        returns = []
+        for i in range(1, period):
+            if closes[-i] > 0:
+                returns.append((closes[-i] - closes[-i-1]) / closes[-i-1])
+        if not returns:
+            return 0
+        return round(np.std(returns) * 100, 2)
 
 # ============================================================
 # SMC (SMART MONEY CONCEPTS) DETECTOR
@@ -655,14 +699,12 @@ class SMCDetector:
         if len(self.highs) < lookback:
             return False
         
-        # پیدا کردن کندل‌های امپالسیو (حرکت قوی)
         for i in range(lookback - 10, lookback):
             if i < 2:
                 continue
             body = abs(self.closes[i] - self.closes[i-1])
             avg_body = np.mean([abs(self.closes[j] - self.closes[j-1]) for j in range(i-10, i)])
             if body > avg_body * 1.5:
-                # آخرین کندل صعودی با بدنه بزرگ
                 if self.closes[i] > self.closes[i-1] and self.closes[i] > self.highs[i-1]:
                     return True
                 if self.closes[i] < self.closes[i-1] and self.closes[i] < self.lows[i-1]:
@@ -677,10 +719,8 @@ class SMCDetector:
         for i in range(lookback - 15, lookback):
             if i < 2:
                 continue
-            # FVG صعودی: گپ بین پایین کندل i و بالای کندل i-2
             if self.lows[i] > self.highs[i-2]:
                 return True
-            # FVG نزولی: گپ بین بالای کندل i و پایین کندل i-2
             if self.highs[i] < self.lows[i-2]:
                 return True
         return False
@@ -688,9 +728,8 @@ class SMCDetector:
     def detect_divergence(self, indicator_values, price, lookback=20):
         """تشخیص دیورژنس"""
         if len(indicator_values) < lookback or len(price) < lookback:
-            return False
+            return False, 'none'
         
-        # پیدا کردن قله‌ها و دره‌ها
         peaks = []
         troughs = []
         
@@ -705,30 +744,27 @@ class SMCDetector:
             idx1 = troughs[-2]
             idx2 = troughs[-1]
             if indicator_values[idx2] > indicator_values[idx1] and price[idx2] < price[idx1]:
-                return True
+                return True, 'bullish'
         
         # دیورژنس منفی (نزولی)
         if len(peaks) >= 2:
             idx1 = peaks[-2]
             idx2 = peaks[-1]
             if indicator_values[idx2] < indicator_values[idx1] and price[idx2] > price[idx1]:
-                return True
+                return True, 'bearish'
         
-        return False
+        return False, 'none'
     
     def detect_bos(self, lookback=30):
         """تشخیص Break of Structure"""
         if len(self.highs) < lookback:
             return False
         
-        # پیدا کردن ساختارهای قبلی
         for i in range(lookback - 10, lookback):
             if i < 5:
                 continue
-            # شکستن ساختار صعودی
             if self.highs[i] > max(self.highs[max(0, i-5):i]):
                 return True
-            # شکستن ساختار نزولی
             if self.lows[i] < min(self.lows[max(0, i-5):i]):
                 return True
         return False
@@ -741,7 +777,6 @@ class SMCDetector:
         recent_high = max(self.highs[-lookback:-2])
         recent_low = min(self.lows[-lookback:-2])
         
-        # تست کردن سطح liquidity
         if self.highs[-1] > recent_high and self.closes[-1] < recent_high:
             return True
         if self.lows[-1] < recent_low and self.closes[-1] > recent_low:
@@ -753,7 +788,7 @@ class SMCDetector:
         if len(self.closes) < 3:
             return 'none'
         
-        open_ = self.closes[-2]  # تقریباً
+        open_ = self.closes[-2]
         high = self.highs[-1]
         low = self.lows[-1]
         close = self.closes[-1]
@@ -765,13 +800,11 @@ class SMCDetector:
         if total_range == 0:
             return 'none'
         
-        # Pin Bar
         if upper_wick > body * 2 and lower_wick < body * 0.5:
             return 'pin_bar_bearish'
         if lower_wick > body * 2 and upper_wick < body * 0.5:
             return 'pin_bar_bullish'
         
-        # Engulfing
         if len(self.closes) >= 2:
             prev_body = abs(self.closes[-2] - self.closes[-3])
             if body > prev_body * 1.5 and close > self.closes[-2] and open_ < self.closes[-3]:
@@ -779,19 +812,285 @@ class SMCDetector:
             if body > prev_body * 1.5 and close < self.closes[-2] and open_ > self.closes[-3]:
                 return 'bearish_engulfing'
         
-        # Doji
         if body < total_range * 0.1:
             return 'doji'
         
-        # Hammer
         if lower_wick > body * 2 and upper_wick < body * 0.5 and close > open_:
             return 'hammer'
         
-        # Shooting Star
         if upper_wick > body * 2 and lower_wick < body * 0.5 and close < open_:
             return 'shooting_star'
         
         return 'none'
+    
+    def detect_market_phase(self, adx, score):
+        """تشخیص فاز بازار"""
+        if adx > 35 and score > 55:
+            return 'bullish_trend'
+        elif adx > 35 and score < 45:
+            return 'bearish_trend'
+        elif adx < 20:
+            return 'ranging'
+        elif score > 60:
+            return 'accumulation'
+        elif score < 40:
+            return 'distribution'
+        return 'neutral'
+
+# ============================================================
+# REAL LEARNING SYSTEM - WEIGHT ADJUSTMENT
+# ============================================================
+
+class RealLearningSystem:
+    def __init__(self):
+        self.file = "real_learning_weights.json"
+        self.load()
+    
+    def load(self):
+        if os.path.exists(self.file):
+            try:
+                with open(self.file, 'r') as f:
+                    data = json.load(f)
+                    self.positive = data.get('positive', 0)
+                    self.negative = data.get('negative', 0)
+                    self.indicator_weights = data.get('indicator_weights', {
+                        'ema200': 1.0, 'supertrend': 1.0, 'volume_spike': 1.0,
+                        'obv': 1.0, 'divergence': 1.3, 'bos': 1.0,
+                        'order_block': 1.5, 'fvg': 1.3, 'candle_pattern': 1.0,
+                        'support': 1.0, 'adx': 1.0, 'mfi': 1.0,
+                        'cmf': 1.0, 'ichimoku': 1.0, 'bollinger': 1.0,
+                        'vwap': 1.0, 'ma_structure': 1.2, 'liquidity_sweep': 1.4,
+                        'rsi': 1.0, 'macd': 1.0, 'stoch_rsi': 1.0,
+                        'roc': 1.0, 'volume_trend': 1.0
+                    })
+                    self.phase_weights = data.get('phase_weights', {
+                        'bullish_trend': 1.0,
+                        'bearish_trend': 0.6,
+                        'ranging': 0.8,
+                        'accumulation': 1.2,
+                        'distribution': 0.7,
+                        'neutral': 1.0
+                    })
+                    self.smc_weights = data.get('smc_weights', {
+                        'order_block': 1.5,
+                        'fvg': 1.3,
+                        'liquidity_sweep': 1.4,
+                        'bos': 1.2,
+                        'divergence': 1.3
+                    })
+                    self.indicator_success = data.get('indicator_success', {})
+                    self.total_trades = data.get('total_trades', 0)
+                    self.winning_trades = data.get('winning_trades', 0)
+                    return
+            except:
+                pass
+        
+        self.positive = 0
+        self.negative = 0
+        self.total_trades = 0
+        self.winning_trades = 0
+        
+        self.indicator_weights = {
+            'ema200': 1.0, 'supertrend': 1.0, 'volume_spike': 1.0,
+            'obv': 1.0, 'divergence': 1.3, 'bos': 1.0,
+            'order_block': 1.5, 'fvg': 1.3, 'candle_pattern': 1.0,
+            'support': 1.0, 'adx': 1.0, 'mfi': 1.0,
+            'cmf': 1.0, 'ichimoku': 1.0, 'bollinger': 1.0,
+            'vwap': 1.0, 'ma_structure': 1.2, 'liquidity_sweep': 1.4,
+            'rsi': 1.0, 'macd': 1.0, 'stoch_rsi': 1.0,
+            'roc': 1.0, 'volume_trend': 1.0
+        }
+        
+        self.phase_weights = {
+            'bullish_trend': 1.0,
+            'bearish_trend': 0.6,
+            'ranging': 0.8,
+            'accumulation': 1.2,
+            'distribution': 0.7,
+            'neutral': 1.0
+        }
+        
+        self.smc_weights = {
+            'order_block': 1.5,
+            'fvg': 1.3,
+            'liquidity_sweep': 1.4,
+            'bos': 1.2,
+            'divergence': 1.3
+        }
+        
+        self.indicator_success = {}
+        self.save()
+    
+    def save(self):
+        try:
+            with open(self.file, 'w') as f:
+                json.dump({
+                    'positive': self.positive,
+                    'negative': self.negative,
+                    'indicator_weights': self.indicator_weights,
+                    'phase_weights': self.phase_weights,
+                    'smc_weights': self.smc_weights,
+                    'indicator_success': self.indicator_success,
+                    'total_trades': self.total_trades,
+                    'winning_trades': self.winning_trades
+                }, f, indent=2)
+        except:
+            pass
+    
+    def update_weights_from_feedback(self, signal_data, feedback_type):
+        """به‌روزرسانی وزن‌ها بر اساس بازخورد"""
+        self.total_trades += 1
+        
+        if feedback_type == 'positive':
+            self.positive += 1
+            self.winning_trades += 1
+            
+            # افزایش وزن اندیکاتورهایی که در سیگنال موفق حضور داشتند
+            indicators_present = self._extract_indicators(signal_data)
+            for indicator in indicators_present:
+                if indicator in self.indicator_weights:
+                    self.indicator_weights[indicator] = min(2.0, self.indicator_weights[indicator] * 1.03)
+                # ثبت موفقیت اندیکاتور
+                if indicator not in self.indicator_success:
+                    self.indicator_success[indicator] = {'wins': 0, 'losses': 0}
+                self.indicator_success[indicator]['wins'] += 1
+            
+            # افزایش وزن فاز بازار
+            phase = signal_data.get('market_phase', 'neutral')
+            if phase in self.phase_weights:
+                self.phase_weights[phase] = min(1.8, self.phase_weights[phase] * 1.02)
+            
+            # افزایش وزن SMC
+            if signal_data.get('order_block'):
+                self.smc_weights['order_block'] = min(2.0, self.smc_weights['order_block'] * 1.02)
+            if signal_data.get('fvg'):
+                self.smc_weights['fvg'] = min(2.0, self.smc_weights['fvg'] * 1.02)
+            if signal_data.get('divergence'):
+                self.smc_weights['divergence'] = min(2.0, self.smc_weights['divergence'] * 1.02)
+            if signal_data.get('bos'):
+                self.smc_weights['bos'] = min(2.0, self.smc_weights['bos'] * 1.02)
+            
+        else:
+            self.negative += 1
+            
+            # کاهش وزن اندیکاتورهایی که در سیگنال ناموفق حضور داشتند
+            indicators_present = self._extract_indicators(signal_data)
+            for indicator in indicators_present:
+                if indicator in self.indicator_weights:
+                    self.indicator_weights[indicator] = max(0.3, self.indicator_weights[indicator] * 0.97)
+                if indicator not in self.indicator_success:
+                    self.indicator_success[indicator] = {'wins': 0, 'losses': 0}
+                self.indicator_success[indicator]['losses'] += 1
+            
+            # کاهش وزن فاز بازار
+            phase = signal_data.get('market_phase', 'neutral')
+            if phase in self.phase_weights:
+                self.phase_weights[phase] = max(0.3, self.phase_weights[phase] * 0.98)
+            
+            # کاهش وزن SMC
+            if signal_data.get('order_block'):
+                self.smc_weights['order_block'] = max(0.3, self.smc_weights['order_block'] * 0.98)
+            if signal_data.get('fvg'):
+                self.smc_weights['fvg'] = max(0.3, self.smc_weights['fvg'] * 0.98)
+            if signal_data.get('divergence'):
+                self.smc_weights['divergence'] = max(0.3, self.smc_weights['divergence'] * 0.98)
+            if signal_data.get('bos'):
+                self.smc_weights['bos'] = max(0.3, self.smc_weights['bos'] * 0.98)
+        
+        self.save()
+    
+    def _extract_indicators(self, signal_data):
+        """استخراج اندیکاتورهای حاضر در سیگنال"""
+        indicators = []
+        
+        if signal_data.get('rsi', 50) < 70 and signal_data.get('rsi', 50) > 30:
+            indicators.append('rsi')
+        if signal_data.get('macd', 0) > 0:
+            indicators.append('macd')
+        if signal_data.get('adx', 0) > 25:
+            indicators.append('adx')
+        if signal_data.get('volume_spike', 0) > 1.5:
+            indicators.append('volume_spike')
+        if signal_data.get('obv', 0) > 0:
+            indicators.append('obv')
+        if signal_data.get('divergence'):
+            indicators.append('divergence')
+        if signal_data.get('bos'):
+            indicators.append('bos')
+        if signal_data.get('order_block'):
+            indicators.append('order_block')
+        if signal_data.get('fvg'):
+            indicators.append('fvg')
+        if signal_data.get('liquidity_sweep'):
+            indicators.append('liquidity_sweep')
+        if signal_data.get('candle_pattern') != 'none':
+            indicators.append('candle_pattern')
+        if signal_data.get('support1', 0) > 0:
+            indicators.append('support')
+        if signal_data.get('ma_structure', False):
+            indicators.append('ma_structure')
+        if signal_data.get('mfi', 50) < 30:
+            indicators.append('mfi')
+        if signal_data.get('cmf', 0) > 0:
+            indicators.append('cmf')
+        if signal_data.get('ichimoku', False):
+            indicators.append('ichimoku')
+        if signal_data.get('bollinger', False):
+            indicators.append('bollinger')
+        if signal_data.get('vwap', 0) > 0:
+            indicators.append('vwap')
+        if signal_data.get('stoch_rsi', 50) < 30:
+            indicators.append('stoch_rsi')
+        if signal_data.get('roc', 0) > 0:
+            indicators.append('roc')
+        if signal_data.get('volume_trend', 0) > 5:
+            indicators.append('volume_trend')
+        if signal_data.get('supertrend', False):
+            indicators.append('supertrend')
+        if signal_data.get('ema200', 0) > 0:
+            indicators.append('ema200')
+        
+        return list(set(indicators))
+    
+    def get_indicator_weight(self, indicator):
+        return self.indicator_weights.get(indicator, 1.0)
+    
+    def get_phase_weight(self, phase):
+        return self.phase_weights.get(phase, 1.0)
+    
+    def get_smc_weight(self, smc_type):
+        return self.smc_weights.get(smc_type, 1.0)
+    
+    def get_accuracy(self):
+        total = self.positive + self.negative
+        if total == 0:
+            return 50.0
+        return round((self.positive / total) * 100, 2)
+    
+    def get_best_indicators(self, top_n=5):
+        """دریافت بهترین اندیکاتورها بر اساس عملکرد"""
+        if not self.indicator_success:
+            return []
+        
+        scores = {}
+        for indicator, data in self.indicator_success.items():
+            wins = data.get('wins', 0)
+            losses = data.get('losses', 0)
+            total = wins + losses
+            if total > 0:
+                scores[indicator] = round((wins / total) * 100, 2)
+            else:
+                scores[indicator] = 50
+        
+        sorted_indicators = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        return sorted_indicators[:top_n]
+
+learner = RealLearningSystem()
+
+def update_learning_weights(signal, feedback_type):
+    """به‌روزرسانی وزن‌های یادگیری"""
+    signal_data = dict(signal)
+    learner.update_weights_from_feedback(signal_data, feedback_type)
 
 # ============================================================
 # SYMBOLS
@@ -811,13 +1110,12 @@ SYMBOLS = [
 ]
 
 # ============================================================
-# ULTRA SMART MONEY ANALYSIS
+# ULTRA SMART MONEY ANALYSIS WITH REAL LEARNING
 # ============================================================
 
 def ultra_smart_analysis(symbol):
-    """Complete Smart Money Analysis with all concepts"""
+    """Complete Smart Money Analysis with Real Learning"""
     try:
-        # ===== FETCH DATA =====
         timeframes = [
             {'name': '1m', 'limit': 100, 'weight': 0.02},
             {'name': '3m', 'limit': 100, 'weight': 0.04},
@@ -863,17 +1161,18 @@ def ultra_smart_analysis(symbol):
             cmf = ai.calculate_cmf(highs, lows, prices, volumes, 20)
             stoch_rsi = ai.calculate_stochastic_rsi(prices, 14)
             roc = ai.calculate_roc(prices, 14)
+            volume_trend = ai.calculate_volume_trend(volumes)
+            volatility = ai.calculate_volatility(highs, lows, prices, 20)
             
             # ===== ADVANCED INDICATORS =====
             supertrend = ai.calculate_supertrend(highs, lows, prices, 10, 3)
             ichimoku = ai.calculate_ichimoku(highs, lows, prices)
-            psar = ai.calculate_parabolic_sar(highs, lows)
             
             # ===== SMC DETECTION =====
             smc = SMCDetector(highs, lows, prices)
             order_block = smc.detect_order_block()
             fvg = smc.detect_fvg()
-            divergence = smc.detect_divergence([rsi] * len(prices), prices, 20)
+            divergence, divergence_type = smc.detect_divergence([rsi] * len(prices), prices, 20)
             bos = smc.detect_bos()
             liquidity_sweep = smc.detect_liquidity_sweep()
             candle_pattern = smc.detect_candle_pattern()
@@ -881,104 +1180,127 @@ def ultra_smart_analysis(symbol):
             # ===== SUPPORT/RESISTANCE =====
             support1, support2, resistance1, resistance2 = find_support_resistance(highs, lows, prices)
             
-            # ===== SCORING =====
+            # ===== WEIGHTED SCORING =====
             score = 50
             reasons = []
             smc_score = 0
+            trend_filter_score = 0
             
-            # ---------- 1. EMA 200 + SuperTrend (10 points) ----------
+            # ===== 1. TREND FILTER =====
+            market_phase = smc.detect_market_phase(adx, score)
+            
+            # ===== 2. REAL LEARNING WEIGHTS =====
+            rsi_weight = learner.get_indicator_weight('rsi')
+            macd_weight = learner.get_indicator_weight('macd')
+            adx_weight = learner.get_indicator_weight('adx')
+            volume_weight = learner.get_indicator_weight('volume_spike')
+            obv_weight = learner.get_indicator_weight('obv')
+            divergence_weight = learner.get_indicator_weight('divergence')
+            bos_weight = learner.get_indicator_weight('bos')
+            order_block_weight = learner.get_indicator_weight('order_block')
+            fvg_weight = learner.get_indicator_weight('fvg')
+            candle_weight = learner.get_indicator_weight('candle_pattern')
+            support_weight = learner.get_indicator_weight('support')
+            ma_weight = learner.get_indicator_weight('ma_structure')
+            
+            phase_weight = learner.get_phase_weight(market_phase)
+            
+            # ===== 3. INDICATOR SCORING WITH WEIGHTS =====
+            
+            # EMA200 + SuperTrend
             if current > ma200:
-                score += 10
+                score += 10 * rsi_weight
                 reasons.append(f"✅ Price above EMA200")
                 if supertrend:
                     upper, lower = supertrend
                     if current > upper:
-                        score += 5
+                        score += 5 * rsi_weight
                         reasons.append("✅ SuperTrend Bullish")
                         smc_score += 3
             else:
-                score -= 5
+                score -= 5 * rsi_weight
                 reasons.append("❌ Price below EMA200")
             
-            # ---------- 2. Volume Spike + OBV (10 points) ----------
+            # Volume Spike + OBV
             if volume_spike > float(db.get_setting('min_volume_spike') or 1.5):
-                score += 8
+                score += 8 * volume_weight
                 reasons.append(f"✅ Volume Spike: {volume_spike}x")
                 smc_score += 4
             if obv > 0:
-                score += 5
+                score += 5 * obv_weight
                 reasons.append("✅ OBV Bullish")
                 smc_score += 2
             
-            # ---------- 3. RSI/MACD Divergence (15 points) ----------
+            # Divergence
             if divergence:
-                score += 15
-                reasons.append("✅ RSI/MACD Divergence Detected")
+                score += 15 * divergence_weight
+                reasons.append(f"✅ RSI Divergence ({divergence_type})")
                 smc_score += 8
-            if stoch_rsi < 20:
-                score += 8
-                reasons.append(f"✅ Stochastic RSI Oversold: {stoch_rsi:.1f}")
+                trend_filter_score += 10  # سیگنال برگشت قوی
             
-            # ---------- 4. BOS + CHOCH (10 points) ----------
+            # BOS
             if bos:
-                score += 10
+                score += 10 * bos_weight
                 reasons.append("✅ Break of Structure (BOS)")
                 smc_score += 5
-            if liquidity_sweep:
-                score += 8
-                reasons.append("✅ Liquidity Sweep Detected")
-                smc_score += 5
+                trend_filter_score += 5
             
-            # ---------- 5. Order Block + FVG (15 points) ----------
+            # Order Block + FVG
             if order_block:
-                score += 15
+                score += 15 * order_block_weight
                 reasons.append("✅ Order Block Detected")
                 smc_score += 10
+                trend_filter_score += 8
             if fvg:
-                score += 12
+                score += 12 * fvg_weight
                 reasons.append("✅ Fair Value Gap (FVG)")
                 smc_score += 8
+                trend_filter_score += 5
             
-            # ---------- 6. Candle Patterns (10 points) ----------
+            # Candle Patterns
             if candle_pattern in ['bullish_engulfing', 'pin_bar_bullish', 'hammer']:
-                score += 10
+                score += 10 * candle_weight
                 reasons.append(f"✅ Bullish Candle: {candle_pattern}")
                 smc_score += 5
+                trend_filter_score += 5
             elif candle_pattern in ['doji']:
-                score += 5
+                score += 5 * candle_weight
                 reasons.append("✅ Doji - Reversal Signal")
                 smc_score += 3
+                trend_filter_score += 3
             
-            # ---------- 7. Support/Resistance ----------
+            # Support
             if support1 > 0:
                 dist_to_support = ((current - support1) / current) * 100
                 if dist_to_support < 0.5:
-                    score += 12
+                    score += 12 * support_weight
                     reasons.append("🛡️ Near Strong Support")
                     smc_score += 6
+                    trend_filter_score += 5
                 elif dist_to_support < 1.0:
-                    score += 8
+                    score += 8 * support_weight
                     reasons.append("🛡️ Close to Support")
                     smc_score += 4
             
+            # Resistance (avoid)
             if resistance1 > 0:
                 dist_to_resistance = ((resistance1 - current) / current) * 100
                 if dist_to_resistance < 0.5:
-                    score -= 10
+                    score -= 10 * support_weight
                     reasons.append("🚫 Near Resistance - Wait")
                     smc_score -= 5
             
-            # ---------- 8. ADX (Trend Strength) ----------
+            # ADX
             if adx > 35:
-                score += 8
+                score += 8 * adx_weight
                 reasons.append(f"🔥 Strong Trend (ADX: {adx:.1f})")
                 smc_score += 3
             elif adx > 25:
-                score += 4
+                score += 4 * adx_weight
                 reasons.append(f"✅ Trend (ADX: {adx:.1f})")
                 smc_score += 2
             
-            # ---------- 9. MFI & CMF ----------
+            # MFI & CMF
             if mfi < 20:
                 score += 5
                 reasons.append(f"✅ MFI Oversold: {mfi:.1f}")
@@ -986,12 +1308,12 @@ def ultra_smart_analysis(symbol):
                 score += 4
                 reasons.append(f"✅ CMF Bullish: {cmf:.2f}")
             
-            # ---------- 10. ROC (Momentum) ----------
+            # ROC
             if roc > 0:
                 score += 3
                 reasons.append(f"✅ Positive ROC: {roc:.2f}%")
             
-            # ---------- 11. Ichimoku Cloud ----------
+            # Ichimoku
             if ichimoku:
                 if current > ichimoku['senkou_a'] and current > ichimoku['senkou_b']:
                     score += 5
@@ -1002,13 +1324,7 @@ def ultra_smart_analysis(symbol):
                     reasons.append("☁️ Below Ichimoku Cloud")
                     smc_score -= 3
             
-            # ---------- 12. Parabolic SAR ----------
-            if psar and current > psar:
-                score += 3
-                reasons.append("✅ Parabolic SAR Bullish")
-                smc_score += 2
-            
-            # ---------- 13. Bollinger Bands ----------
+            # Bollinger
             if current < lower_bb:
                 score += 8
                 reasons.append("🎯 Below Lower BB - Oversold")
@@ -1018,17 +1334,17 @@ def ultra_smart_analysis(symbol):
                 reasons.append("🎯 Above Upper BB - Overbought")
                 smc_score -= 4
             
-            # ---------- 14. MACD ----------
+            # MACD
             if macd > 0 and macd_hist > 0:
-                score += 10
+                score += 10 * macd_weight
                 reasons.append("🟢 MACD Bullish Cross")
                 smc_score += 5
             elif macd > 0:
-                score += 5
+                score += 5 * macd_weight
                 reasons.append("🟡 MACD Positive")
                 smc_score += 2
             
-            # ---------- 15. VWAP ----------
+            # VWAP
             if current > vwap:
                 score += 5
                 reasons.append("✅ Above VWAP")
@@ -1038,47 +1354,58 @@ def ultra_smart_analysis(symbol):
                 reasons.append("❌ Below VWAP")
                 smc_score -= 3
             
-            # ---------- 16. MA Structure ----------
+            # MA Structure
             if current > ma20 > ma50 > ma100 > ma200:
-                score += 12
+                score += 12 * ma_weight
                 reasons.append("🚀 Perfect MA Structure")
                 smc_score += 8
             
-            # ---------- 17. RSI ----------
+            # RSI
             if 30 < rsi < 70:
-                score += 5
+                score += 5 * rsi_weight
                 reasons.append(f"✅ RSI Healthy: {rsi:.1f}")
             elif rsi < 30:
-                score += 10
+                score += 10 * rsi_weight
                 reasons.append(f"🔥 RSI Oversold: {rsi:.1f}")
                 smc_score += 5
             elif rsi > 70:
-                score -= 10
+                score -= 10 * rsi_weight
                 reasons.append(f"🔥 RSI Overbought: {rsi:.1f}")
                 smc_score -= 5
             
-            # ---------- 18. Volume Trend ----------
-            volume_trend = ai.calculate_volume_trend(volumes)
+            # Volume Trend
             if volume_trend > 10:
                 score += 5
                 reasons.append(f"📊 Volume Trend: {volume_trend:.1f}%")
                 smc_score += 3
             
-            market_phase = "neutral"
-            if adx > 35 and score > 55:
-                market_phase = "bullish_trend"
-            elif adx > 35 and score < 45:
-                market_phase = "bearish_trend"
-            elif adx < 20:
-                market_phase = "ranging"
-            elif score > 60:
-                market_phase = "accumulation"
-            elif score < 40:
-                market_phase = "distribution"
+            # Stochastic RSI
+            if stoch_rsi < 20:
+                score += 5
+                reasons.append(f"✅ Stoch RSI Oversold: {stoch_rsi:.1f}")
+            
+            # Liquidity Sweep
+            if liquidity_sweep:
+                score += 8
+                reasons.append("✅ Liquidity Sweep Detected")
+                smc_score += 5
+                trend_filter_score += 5
+            
+            # ===== APPLY PHASE WEIGHT =====
+            score = score * phase_weight
+            
+            # ===== TREND FILTER - برای روند نزولی =====
+            if market_phase == 'bearish_trend':
+                # در روند نزولی، فقط با نشانه‌های قوی برگشت سیگنال بده
+                if trend_filter_score < 15:
+                    # سیگنال برگشت قوی نیست
+                    score = score * 0.3
+                    reasons.append("⚠️ Bearish Trend - Weak Reversal Signs")
             
             analysis_results[tf['name']] = {
                 'score': score,
                 'smc_score': smc_score,
+                'trend_filter_score': trend_filter_score,
                 'rsi': rsi,
                 'macd': macd,
                 'macd_signal': macd_signal,
@@ -1097,6 +1424,7 @@ def ultra_smart_analysis(symbol):
                 'order_block': order_block,
                 'fvg': fvg,
                 'divergence': divergence,
+                'divergence_type': divergence_type,
                 'bos': bos,
                 'liquidity_sweep': liquidity_sweep,
                 'candle_pattern': candle_pattern,
@@ -1110,9 +1438,9 @@ def ultra_smart_analysis(symbol):
                 'volume_trend': volume_trend,
                 'supertrend': supertrend,
                 'ichimoku': ichimoku,
-                'psar': psar,
                 'upper_bb': upper_bb,
-                'lower_bb': lower_bb
+                'lower_bb': lower_bb,
+                'volatility': volatility
             }
             
             all_scores.append(score)
@@ -1123,11 +1451,13 @@ def ultra_smart_analysis(symbol):
         # ===== WEIGHTED SCORE =====
         weighted_score = 0
         weighted_smc = 0
+        weighted_trend_filter = 0
         total_weight = 0
         
         for tf_name, data in analysis_results.items():
             weighted_score += data['score'] * data['weight']
             weighted_smc += data['smc_score'] * data['weight']
+            weighted_trend_filter += data['trend_filter_score'] * data['weight']
             total_weight += data['weight']
         
         if total_weight == 0:
@@ -1135,6 +1465,7 @@ def ultra_smart_analysis(symbol):
         
         final_score = weighted_score / total_weight
         final_smc = weighted_smc / total_weight
+        final_trend_filter = weighted_trend_filter / total_weight
         
         # ===== FILTERS =====
         # 1. هم‌جهت بودن تایم‌فریم‌ها
@@ -1178,16 +1509,22 @@ def ultra_smart_analysis(symbol):
             logger.info(f"❌ {symbol}: فقط {smc_count} سیگنال SMC")
             return None
         
-        # 5. نه نزدیک مقاومت باشد
-        resistance1 = analysis_results.get('5m', {}).get('resistance1', 0)
+        # 5. Trend Filter - Bearish Trend Check
+        market_phase = analysis_results.get('5m', {}).get('market_phase', 'neutral')
+        if market_phase == 'bearish_trend' and final_trend_filter < 15:
+            logger.info(f"❌ {symbol}: Bearish Trend with weak reversal ({final_trend_filter:.1f})")
+            return None
+        
+        # 6. نه نزدیک مقاومت باشد
         current_price = analysis_results.get('5m', {}).get('ma20', 0)
+        resistance1 = analysis_results.get('5m', {}).get('resistance1', 0)
         if resistance1 > 0:
             dist_to_resistance = ((resistance1 - current_price) / current_price) * 100
             if dist_to_resistance < 0.5:
                 logger.info(f"❌ {symbol}: نزدیک مقاومت ({dist_to_resistance:.2f}%)")
                 return None
         
-        # 6. حداقل ۷۰٪ امتیاز SMC
+        # 7. حداقل ۷۰٪ امتیاز SMC
         if final_smc < 25:
             logger.info(f"❌ {symbol}: SMC Score پایین ({final_smc:.1f})")
             return None
@@ -1195,10 +1532,33 @@ def ultra_smart_analysis(symbol):
         # ===== DETERMINE SIGNAL =====
         if final_score >= 55:
             signal = "BUY"
-            confidence = 50 + abs(final_score - 50) * 0.8
-            confidence = max(55, min(95, confidence))
         else:
             return None
+        
+        # ===== MULTI-FACTOR CONFIDENCE =====
+        # محاسبه Confidence بر اساس چند عامل
+        base_confidence = 50 + abs(final_score - 50) * 0.6
+        
+        # فاکتور SMC
+        smc_factor = min(20, final_smc * 0.3)
+        
+        # فاکتور تایم‌فریم‌های هم‌جهت
+        tf_factor = min(15, (bullish_timeframes / 10) * 15)
+        
+        # فاکتور RR (بعداً محاسبه می‌شود)
+        rr_factor = 0
+        
+        # فاکتور روند (اگر bullish_trend باشد امتیاز بیشتر)
+        phase_bonus = 0
+        if market_phase == 'bullish_trend':
+            phase_bonus = 10
+        elif market_phase == 'accumulation':
+            phase_bonus = 8
+        elif market_phase == 'ranging':
+            phase_bonus = 3
+        
+        confidence = base_confidence + smc_factor + tf_factor + rr_factor + phase_bonus
+        confidence = max(55, min(98, confidence))
         
         # ===== CALCULATE TP/SL =====
         main_data = get_candles(symbol, 200, '5m')
@@ -1211,21 +1571,19 @@ def ultra_smart_analysis(symbol):
         risk = atr * 1.2
         entry = current_price * 0.999
         
-        # SL based on support
         support1 = analysis_results.get('5m', {}).get('support1', 0)
         if support1 > 0 and support1 < entry:
             sl = support1 * 0.998
         else:
             sl = entry - risk * 1.5
         
-        # TP based on ATR Fibonacci
         tp1 = entry + risk * 2
         tp2 = entry + risk * 3
         tp3 = entry + risk * 5
         tp4 = entry + risk * 8
         tp5 = entry + risk * 13
         
-        # Check RR Ratio
+        # محاسبه RR
         rr_ratio = (tp1 - entry) / (entry - sl)
         min_rr = float(db.get_setting('min_rr_ratio') or 2.0)
         
@@ -1233,13 +1591,17 @@ def ultra_smart_analysis(symbol):
             logger.info(f"❌ {symbol}: RR پایین ({rr_ratio:.2f})")
             return None
         
+        # اضافه کردن RR به Confidence
+        rr_factor = min(10, (rr_ratio / min_rr) * 5)
+        confidence = min(98, confidence + rr_factor)
+        
         profit_percent1 = round((tp1 - entry) / entry * 100, 2)
         profit_percent2 = round((tp2 - entry) / entry * 100, 2)
         profit_percent3 = round((tp3 - entry) / entry * 100, 2)
         profit_percent4 = round((tp4 - entry) / entry * 100, 2)
         profit_percent5 = round((tp5 - entry) / entry * 100, 2)
         
-        quality_score = min(100, confidence + final_smc * 0.3)
+        quality_score = min(100, confidence + final_smc * 0.2)
         
         # ===== COLLECT REASONS =====
         all_reasons = []
@@ -1252,7 +1614,8 @@ def ultra_smart_analysis(symbol):
         if analysis_results.get('5m', {}).get('fvg'):
             all_reasons.append("📉 Fair Value Gap (FVG)")
         if analysis_results.get('5m', {}).get('divergence'):
-            all_reasons.append("🔄 RSI/MACD Divergence")
+            div_type = analysis_results.get('5m', {}).get('divergence_type', '')
+            all_reasons.append(f"🔄 RSI Divergence ({div_type})")
         if analysis_results.get('5m', {}).get('bos'):
             all_reasons.append("📊 Break of Structure (BOS)")
         if analysis_results.get('5m', {}).get('liquidity_sweep'):
@@ -1265,6 +1628,13 @@ def ultra_smart_analysis(symbol):
         all_reasons.append(f"✅ SMC Score: {final_smc:.1f}")
         all_reasons.append(f"✅ {bullish_timeframes}/10 Timeframes Bullish")
         all_reasons.append(f"✅ RR Ratio: {rr_ratio:.2f}:1")
+        all_reasons.append(f"✅ Market Phase: {market_phase}")
+        
+        # اضافه کردن بهترین اندیکاتورها از سیستم یادگیری
+        best_indicators = learner.get_best_indicators(3)
+        if best_indicators:
+            best_str = ", ".join([f"{ind} ({acc}%)" for ind, acc in best_indicators])
+            all_reasons.append(f"🧠 Best Indicators: {best_str}")
         
         return {
             'symbol': symbol,
@@ -1274,6 +1644,7 @@ def ultra_smart_analysis(symbol):
             'score': round(final_score, 1),
             'quality_score': round(quality_score, 1),
             'smc_score': round(final_smc, 1),
+            'trend_filter_score': round(final_trend_filter, 1),
             'tp1': round(tp1, 8),
             'tp2': round(tp2, 8),
             'tp3': round(tp3, 8),
@@ -1299,7 +1670,7 @@ def ultra_smart_analysis(symbol):
             'adx': main_adx,
             'volatility': analysis_results.get('5m', {}).get('volatility', 0),
             'trend_strength': main_adx / 100,
-            'market_phase': analysis_results.get('5m', {}).get('market_phase', 'bullish_trend'),
+            'market_phase': market_phase,
             'reasons': all_reasons[:12],
             'time': datetime.now().strftime("%H:%M"),
             'timeframes': {k: {'score': v['score'], 'smc_score': v.get('smc_score', 0), 'phase': v.get('market_phase', 'neutral')} 
@@ -1311,7 +1682,13 @@ def ultra_smart_analysis(symbol):
             'divergence': analysis_results.get('5m', {}).get('divergence', False),
             'bos': analysis_results.get('5m', {}).get('bos', False),
             'candle_pattern': candle_pattern,
-            'rr_ratio': round(rr_ratio, 2)
+            'rr_ratio': round(rr_ratio, 2),
+            'divergence_type': analysis_results.get('5m', {}).get('divergence_type', 'none'),
+            'liquidity_sweep': analysis_results.get('5m', {}).get('liquidity_sweep', False),
+            'stoch_rsi': analysis_results.get('5m', {}).get('stoch_rsi', 50),
+            'mfi': analysis_results.get('5m', {}).get('mfi', 50),
+            'cmf': analysis_results.get('5m', {}).get('cmf', 0),
+            'roc': analysis_results.get('5m', {}).get('roc', 0)
         }
         
     except Exception as e:
@@ -1341,122 +1718,6 @@ def find_support_resistance(highs, lows, closes):
     resistance2 = resistance_levels[1] if len(resistance_levels) > 1 else 0
     
     return round(support1, 8), round(support2, 8), round(resistance1, 8), round(resistance2, 8)
-
-# ============================================================
-# ADAPTIVE LEARNING SYSTEM
-# ============================================================
-
-class AdaptiveLearningSystem:
-    def __init__(self):
-        self.file = "adaptive_learning.json"
-        self.load()
-    
-    def load(self):
-        if os.path.exists(self.file):
-            try:
-                with open(self.file, 'r') as f:
-                    data = json.load(f)
-                    self.positive = data.get('positive', 0)
-                    self.negative = data.get('negative', 0)
-                    self.indicator_weights = data.get('indicator_weights', {
-                        'ema200': 1.0, 'supertrend': 1.0, 'volume_spike': 1.0,
-                        'obv': 1.0, 'rsi_divergence': 1.0, 'macd_divergence': 1.0,
-                        'bos': 1.0, 'order_block': 1.5, 'fvg': 1.3,
-                        'candle_pattern': 1.0, 'support': 1.0, 'adx': 1.0,
-                        'mfi': 1.0, 'cmf': 1.0, 'ichimoku': 1.0,
-                        'bollinger': 1.0, 'vwap': 1.0, 'ma_structure': 1.2,
-                        'liquidity_sweep': 1.4, 'divergence': 1.3
-                    })
-                    self.phase_weights = data.get('phase_weights', {
-                        'bullish_trend': 1.0,
-                        'bearish_trend': 1.0,
-                        'ranging': 0.7,
-                        'accumulation': 1.2,
-                        'distribution': 0.8,
-                        'neutral': 1.0
-                    })
-                    self.smc_weights = data.get('smc_weights', {
-                        'order_block': 1.5,
-                        'fvg': 1.3,
-                        'liquidity_sweep': 1.4,
-                        'bos': 1.2,
-                        'divergence': 1.3
-                    })
-                    return
-            except:
-                pass
-        
-        self.positive = 0
-        self.negative = 0
-        self.indicator_weights = {
-            'ema200': 1.0, 'supertrend': 1.0, 'volume_spike': 1.0,
-            'obv': 1.0, 'rsi_divergence': 1.0, 'macd_divergence': 1.0,
-            'bos': 1.0, 'order_block': 1.5, 'fvg': 1.3,
-            'candle_pattern': 1.0, 'support': 1.0, 'adx': 1.0,
-            'mfi': 1.0, 'cmf': 1.0, 'ichimoku': 1.0,
-            'bollinger': 1.0, 'vwap': 1.0, 'ma_structure': 1.2,
-            'liquidity_sweep': 1.4, 'divergence': 1.3
-        }
-        self.phase_weights = {
-            'bullish_trend': 1.0,
-            'bearish_trend': 1.0,
-            'ranging': 0.7,
-            'accumulation': 1.2,
-            'distribution': 0.8,
-            'neutral': 1.0
-        }
-        self.smc_weights = {
-            'order_block': 1.5,
-            'fvg': 1.3,
-            'liquidity_sweep': 1.4,
-            'bos': 1.2,
-            'divergence': 1.3
-        }
-        self.save()
-    
-    def save(self):
-        try:
-            with open(self.file, 'w') as f:
-                json.dump({
-                    'positive': self.positive,
-                    'negative': self.negative,
-                    'indicator_weights': self.indicator_weights,
-                    'phase_weights': self.phase_weights,
-                    'smc_weights': self.smc_weights
-                }, f, indent=2)
-        except:
-            pass
-    
-    def add_feedback(self, feedback_type, market_phase='neutral', smc_signals=None):
-        if feedback_type == 'positive':
-            self.positive += 1
-            # افزایش وزن اندیکاتورها
-            for key in self.indicator_weights:
-                self.indicator_weights[key] = min(2.0, self.indicator_weights[key] * 1.02)
-            if market_phase in self.phase_weights:
-                self.phase_weights[market_phase] = min(1.8, self.phase_weights[market_phase] * 1.02)
-            # افزایش وزن SMC
-            for key in self.smc_weights:
-                self.smc_weights[key] = min(2.0, self.smc_weights[key] * 1.02)
-        else:
-            self.negative += 1
-            # کاهش وزن اندیکاتورها
-            for key in self.indicator_weights:
-                self.indicator_weights[key] = max(0.3, self.indicator_weights[key] * 0.98)
-            if market_phase in self.phase_weights:
-                self.phase_weights[market_phase] = max(0.3, self.phase_weights[market_phase] * 0.98)
-            # کاهش وزن SMC
-            for key in self.smc_weights:
-                self.smc_weights[key] = max(0.3, self.smc_weights[key] * 0.98)
-        self.save()
-    
-    def get_accuracy(self):
-        total = self.positive + self.negative
-        if total == 0:
-            return 50.0
-        return round((self.positive / total) * 100, 2)
-
-learner = AdaptiveLearningSystem()
 
 # ============================================================
 # TELEGRAM FUNCTIONS
@@ -1506,13 +1767,21 @@ def build_signal_message(signal, signal_id):
     if signal.get('fvg'):
         smc_badges.append("📉 FVG")
     if signal.get('divergence'):
-        smc_badges.append("🔄 DIV")
+        smc_badges.append(f"🔄 DIV")
     if signal.get('bos'):
         smc_badges.append("📊 BOS")
+    if signal.get('liquidity_sweep'):
+        smc_badges.append("💧 LS")
     if signal.get('candle_pattern') != 'none':
         smc_badges.append(f"🕯️ {signal.get('candle_pattern')}")
     
     smc_text = " | ".join(smc_badges) if smc_badges else "No SMC Signals"
+    
+    # Best Indicators
+    best_indicators = learner.get_best_indicators(3)
+    best_text = ""
+    if best_indicators:
+        best_text = " | ".join([f"{ind} ({acc}%)" for ind, acc in best_indicators[:3]])
     
     phase_emoji = {
         'bullish_trend': '🚀',
@@ -1529,6 +1798,7 @@ def build_signal_message(signal, signal_id):
 🧠 <b>SMC Score:</b> {signal.get('smc_score', 0):.1f}/100
 🎯 <b>RR Ratio:</b> {signal.get('rr_ratio', 0):.2f}:1
 🏷️ <b>SMC Signals:</b> {smc_text}
+📈 <b>Bullish TFs:</b> {signal.get('bullish_timeframes', 0)}/10
 
 <b>📊 ENTRY:</b> <code>${signal['entry']:.6f}</code>
 <b>🛑 SL:</b> <code>${signal['sl']:.6f}</code>
@@ -1542,7 +1812,7 @@ def build_signal_message(signal, signal_id):
 
 <b>📊 Confidence:</b> {signal['confidence']}%
 <b>⭐ Quality:</b> {signal.get('quality_score', 0)}/100
-<b>📈 Bullish TFs:</b> {signal.get('bullish_timeframes', 0)}/10
+<b>🔍 Trend Filter:</b> {signal.get('trend_filter_score', 0):.1f}
 
 <b>📈 INDICATORS:</b>
 • RSI: {signal['rsi']:.1f}
@@ -1550,6 +1820,9 @@ def build_signal_message(signal, signal_id):
 • ADX: {signal.get('adx', 0):.1f}
 • ATR: ${signal['atr']:.6f}
 • Volume Spike: {signal.get('volume_trend', 0):.1f}x
+• Stoch RSI: {signal.get('stoch_rsi', 50):.1f}
+• MFI: {signal.get('mfi', 50):.1f}
+• CMF: {signal.get('cmf', 0):.3f}
 
 <b>🛡️ KEY LEVELS:</b>
 • S1: ${signal.get('support1', 0):.4f}
@@ -1567,11 +1840,15 @@ def build_signal_message(signal, signal_id):
             score_emoji = "🟢" if data['score'] > 55 else "🔴" if data['score'] < 45 else "🟡"
             msg += f"• {tf}: {score_emoji} S:{data['score']:.0f} | SMC:{data.get('smc_score', 0):.0f}\n"
     
+    if best_text:
+        msg += f"\n🧠 <b>Best Indicators:</b> {best_text}"
+    
     msg += f"""
 ━━━━━━━━━━━━━━━━━━━━━━
-<b>🧠 ADAPTIVE LEARNING:</b>
+<b>🧠 REAL LEARNING SYSTEM:</b>
 • Win Rate: {learner.get_accuracy()}%
 • ✅ Wins: {learner.positive} | ❌ Losses: {learner.negative}
+• 📊 Total Trades: {learner.total_trades}
 • ⏰ {signal['time']}
 
 <i>⚠️ Trade at your own risk!</i>
@@ -1584,7 +1861,8 @@ def build_signal_message(signal, signal_id):
                 {'text': '❌ سود نکردم', 'callback_data': f'fb_negative_{signal_id}'}
             ],
             [
-                {'text': '📊 تحلیل کامل SMC', 'callback_data': f'analysis_{signal_id}'}
+                {'text': '📊 تحلیل کامل SMC', 'callback_data': f'analysis_{signal_id}'},
+                {'text': '🧠 بهترین اندیکاتورها', 'callback_data': f'best_indicators'}
             ]
         ]
     }
@@ -1630,8 +1908,11 @@ def show_admin_panel(chat_id=None):
     signal_enabled = settings.get('signal_enabled', '0') == '1'
     payment_enabled = settings.get('payment_enabled', '0') == '1'
     
+    best_indicators = learner.get_best_indicators(5)
+    best_text = "\n".join([f"  • {ind}: {acc}%" for ind, acc in best_indicators]) if best_indicators else "  • No data yet"
+    
     msg = f"""
-🔐 <b>🚀 پنل مدیریت V22 - SMART MONEY</b>
+🔐 <b>🚀 پنل مدیریت V23 - FINAL EDITION</b>
 ━━━━━━━━━━━━━━━━━━━━━━
 
 <b>📡 وضعیت سیستم:</b>
@@ -1653,11 +1934,16 @@ def show_admin_panel(chat_id=None):
 • 📊 حداقل ADX: {settings.get('min_adx', 25)}
 • 💥 حجم اسپایک: {settings.get('min_volume_spike', 1.5)}x
 • 🎯 حداقل RR: {settings.get('min_rr_ratio', 2.0)}:1
+• 🔍 فیلتر روند: {'🟢 فعال' if settings.get('trend_filter_strict', '1') == '1' else '🔴 غیرفعال'}
 
-<b>🧠 سیستم یادگیری تطبیقی:</b>
+<b>🧠 REAL LEARNING SYSTEM:</b>
 • دقت: {learner.get_accuracy()}%
 • ✅ برد: {learner.positive}
 • ❌ باخت: {learner.negative}
+• 📊 کل معاملات: {learner.total_trades}
+
+<b>🏆 بهترین اندیکاتورها:</b>
+{best_text}
 
 ━━━━━━━━━━━━━━━━━━━━━━
 <b>📌 برای مدیریت کلیک کنید:</b>
@@ -1695,14 +1981,25 @@ def handle_admin_callback(callback_data):
         
         elif callback_data == 'admin_stats':
             stats = db.get_stats()
+            best_indicators = learner.get_best_indicators(5)
+            best_text = "\n".join([f"• {ind}: {acc}%" for ind, acc in best_indicators]) if best_indicators else "• No data"
             msg = f"""
-📊 آمار کامل
+📊 <b>آمار کامل</b>
+━━━━━━━━━━━━━━━━━━━━━━
 👤 کاربران: {stats.get('users', 0)}
 🟢 فعال: {stats.get('active', 0)}
 👑 پریمیوم: {stats.get('premium', 0)}
 📈 سیگنال‌ها: {stats.get('signals', 0)}
 🎯 نرخ برد: {stats.get('win_rate', 0)}%
-🧠 دقت: {learner.get_accuracy()}%
+
+🧠 <b>سیستم یادگیری:</b>
+دقت: {learner.get_accuracy()}%
+برد: {learner.positive}
+باخت: {learner.negative}
+کل معاملات: {learner.total_trades}
+
+🏆 <b>بهترین اندیکاتورها:</b>
+{best_text}
 """
             send_admin(msg)
             show_admin_panel()
@@ -1725,10 +2022,18 @@ def handle_admin_callback(callback_data):
         
         elif callback_data == 'admin_settings':
             settings = db.get_all_settings()
-            msg = "⚙️ تنظیمات SMC\n"
+            msg = "⚙️ <b>تنظیمات SMC</b>\n━━━━━━━━━━━━━━━━━━━━━━\n"
             for key, value in settings.items():
                 msg += f"\n📌 {key}: {value}"
-            msg += "\n\n✏️ تغییر:\n/set min_bullish_timeframes 8\n/set min_adx 30\n/set min_volume_spike 2"
+            msg += """
+━━━━━━━━━━━━━━━━━━━━━━
+<b>✏️ تغییر تنظیمات:</b>
+<code>/set min_bullish_timeframes 8</code>
+<code>/set min_adx 30</code>
+<code>/set min_volume_spike 2</code>
+<code>/set min_rr_ratio 2.5</code>
+<code>/set trend_filter_strict 1</code>
+"""
             send_admin(msg)
             show_admin_panel()
             return True
@@ -1736,12 +2041,15 @@ def handle_admin_callback(callback_data):
         elif callback_data == 'admin_reset':
             learner.positive = 0
             learner.negative = 0
+            learner.total_trades = 0
+            learner.winning_trades = 0
             for key in learner.indicator_weights:
                 learner.indicator_weights[key] = 1.0
             for key in learner.phase_weights:
                 learner.phase_weights[key] = 1.0
             for key in learner.smc_weights:
                 learner.smc_weights[key] = 1.0
+            learner.indicator_success = {}
             learner.save()
             send_admin("🔄 سیستم یادگیری ریست شد")
             show_admin_panel()
@@ -1783,31 +2091,67 @@ def handle_feedback_callback(callback_data, user_id):
             send_telegram(f"⚠️ {message}", user_id)
             return False
         
-        market_phase = signal['market_phase'] if signal else 'neutral'
-        learner.add_feedback(feedback_type, market_phase)
-        
+        # پاسخ به کاربر
         if feedback_type == 'positive':
             msg = f"""
-✅ تبریک! سود کردید! 💰
-🎯 دقت: {learner.get_accuracy()}%
-✅ برد: {learner.positive}
-❌ باخت: {learner.negative}
+✅ <b>تبریک! سود کردید! 💰</b>
+━━━━━━━━━━━━━━━━━━━━━━
+🎯 دقت سیستم: {learner.get_accuracy()}%
+✅ کل بردها: {learner.positive}
+❌ کل باخت‌ها: {learner.negative}
+📊 کل معاملات: {learner.total_trades}
+
+🌟 بازخورد شما به بهبود الگوریتم کمک می‌کند!
+🚀 به سوددهی ادامه دهید!
 """
         else:
             msg = f"""
-❌ دفعه بعد موفق می‌شوید!
-🎯 دقت: {learner.get_accuracy()}%
-✅ برد: {learner.positive}
-❌ باخت: {learner.negative}
+❌ <b>دفعه بعد موفق می‌شوید!</b>
+━━━━━━━━━━━━━━━━━━━━━━
+🎯 دقت سیستم: {learner.get_accuracy()}%
+✅ کل بردها: {learner.positive}
+❌ کل باخت‌ها: {learner.negative}
+📊 کل معاملات: {learner.total_trades}
+
+🔧 بازخورد شما به بهبود الگوریتم کمک می‌کند!
+💪 به تلاش ادامه دهید!
 """
         
         send_telegram(msg, user_id)
-        send_admin(f"📊 بازخورد: کاربر {user_id} - {feedback_type}")
+        
+        # اطلاع به ادمین
+        admin_msg = f"""
+📊 بازخورد جدید
+👤 کاربر: {user_id}
+📈 نماد: {signal['symbol'] if signal else 'N/A'}
+📝 بازخورد: {'✅ سود' if feedback_type == 'positive' else '❌ ضرر'}
+🎯 دقت سیستم: {learner.get_accuracy()}%
+"""
+        send_admin(admin_msg)
         return True
         
     except Exception as e:
         logger.error(f"Feedback callback error: {e}")
         return False
+
+def handle_best_indicators_callback(user_id):
+    """نمایش بهترین اندیکاتورها به کاربر"""
+    best_indicators = learner.get_best_indicators(10)
+    if not best_indicators:
+        send_telegram("🧠 <b>هنوز داده‌ای برای نمایش وجود ندارد</b>\n\nپس از چند معامله، بهترین اندیکاتورها نمایش داده می‌شوند.", user_id)
+        return True
+    
+    msg = "🏆 <b>بهترین اندیکاتورها بر اساس عملکرد</b>\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    for i, (indicator, accuracy) in enumerate(best_indicators, 1):
+        emoji = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "📊"
+        msg += f"{emoji} <b>{indicator}</b>: {accuracy}%\n"
+    
+    msg += f"\n📊 <b>دقت کلی سیستم:</b> {learner.get_accuracy()}%"
+    msg += f"\n✅ <b>معاملات موفق:</b> {learner.positive}"
+    msg += f"\n❌ <b>معاملات ناموفق:</b> {learner.negative}"
+    
+    send_telegram(msg, user_id)
+    return True
 
 def handle_callback(callback_data, user_id):
     try:
@@ -1815,21 +2159,33 @@ def handle_callback(callback_data, user_id):
             return handle_admin_callback(callback_data)
         elif callback_data.startswith('fb_'):
             return handle_feedback_callback(callback_data, user_id)
+        elif callback_data == 'best_indicators':
+            return handle_best_indicators_callback(user_id)
         elif callback_data.startswith('analysis_'):
             signal_id = int(callback_data.replace('analysis_', ''))
             signal = db.get_signal(signal_id)
             if signal:
                 msg = f"""
-📊 تحلیل کامل SMC
-نماد: {signal['symbol']}
-جهت: {signal['direction']}
-اطمینان: {signal['confidence']}%
-SMC Score: {signal.get('smc_score', 0):.1f}
+📊 <b>تحلیل کامل SMC</b>
+━━━━━━━━━━━━━━━━━━━━━━
+<b>نماد:</b> {signal['symbol']}
+<b>جهت:</b> {signal['direction']}
+<b>اطمینان:</b> {signal['confidence']}%
+<b>SMC Score:</b> {signal.get('smc_score', 0):.1f}
+<b>Trend Filter:</b> {signal.get('trend_filter_score', 0):.1f}
 
-RSI: {signal['rsi']:.1f}
-ADX: {signal.get('adx', 0):.1f}
-ATR: ${signal['atr']:.6f}
-فاز بازار: {signal.get('market_phase', 'خنثی')}
+<b>📈 اندیکاتورها:</b>
+• RSI: {signal['rsi']:.1f}
+• ADX: {signal.get('adx', 0):.1f}
+• ATR: ${signal['atr']:.6f}
+• RR Ratio: {signal.get('rr_ratio', 0):.2f}:1
+
+<b>🛡️ سطوح کلیدی:</b>
+• S1: ${signal.get('support1', 0):.4f}
+• R1: ${signal.get('resistance1', 0):.4f}
+
+<b>📊 فاز بازار:</b> {signal.get('market_phase', 'خنثی').upper()}
+<b>📈 تایم‌فریم صعودی:</b> {signal.get('bullish_timeframes', 0)}/10
 """
                 send_telegram(msg, user_id)
                 return True
@@ -1887,11 +2243,17 @@ def handle_subscribe(user_id):
     price = db.get_setting('price') or PRICE
     
     msg = f"""
-💳 اشتراک
+💳 <b>اشتراک</b>
+━━━━━━━━━━━━━━━━━━━━━━
 💰 مبلغ: {price}
 📡 شبکه: TRC20 (USDT)
 🏦 آدرس: <code>{wallet}</code>
-📝 ارسال {price} USDT و هش تراکنش را ارسال کنید
+
+📝 مراحل:
+1. ارسال {price} USDT (TRC20)
+2. کپی هش تراکنش
+3. ارسال هش به ربات
+4. منتظر تایید ادمین
 """
     send_telegram(msg, user_id)
     return True
@@ -1901,7 +2263,7 @@ def handle_subscribe(user_id):
 # ============================================================
 
 def main_loop():
-    logger.info("🚀 Starting ULTIMATE SIGNAL BOT V22 - SMART MONEY EDITION...")
+    logger.info("🚀 Starting ULTIMATE SIGNAL BOT V23 - FINAL EDITION...")
     show_admin_panel()
     
     cycle = 0
@@ -1917,7 +2279,7 @@ def main_loop():
             max_signals = int(db.get_setting('max_signals') or 5)
             min_confidence = int(db.get_setting('min_confidence') or 55)
             
-            logger.info(f"🔄 Cycle {cycle} - Scanning {len(SYMBOLS)} symbols with SMC Analysis")
+            logger.info(f"🔄 Cycle {cycle} - Scanning {len(SYMBOLS)} symbols with SMC + Real Learning")
             
             signals = []
             for symbol in SYMBOLS:
@@ -1957,7 +2319,7 @@ def main_loop():
                         logger.error(f"Error sending signal: {e}")
             else:
                 if cycle % 3 == 0:
-                    logger.info("⏳ No signals passed SMC filters")
+                    logger.info("⏳ No signals passed SMC + Learning filters")
             
             if cycle % 3 == 0:
                 payments = db.get_pending_payments()
@@ -1966,12 +2328,15 @@ def main_loop():
             
             if cycle % 20 == 0:
                 stats = db.get_stats()
+                best_indicators = learner.get_best_indicators(3)
+                best_text = ", ".join([f"{ind} ({acc}%)" for ind, acc in best_indicators]) if best_indicators else "No data"
                 send_admin(f"""
 🔄 بروزرسانی
 📊 امروز: {stats.get('today', 0)}
 📈 کل: {stats.get('signals', 0)}
 🎯 نرخ برد: {stats.get('win_rate', 0)}%
 🧠 دقت: {learner.get_accuracy()}%
+🏆 بهترین: {best_text}
 """)
             
             logger.info(f"⏱ Waiting {INTERVAL//60} minutes...")
@@ -2023,16 +2388,31 @@ def process_message(message):
             else:
                 if text == '/start':
                     send_telegram("""
-🚀 ربات سیگنال SMC
-📌 دستورات:
+🚀 <b>ربات سیگنال SMC - FINAL EDITION</b>
+🤖 <b>نسخه V23 با یادگیری واقعی</b>
+
+📊 دریافت سیگنال‌های حرفه‌ای با مفاهیم SMC
+
+<b>📌 دستورات:</b>
 /subscribe - خرید اشتراک
 /help - راهنما
 /status - وضعیت اشتراک
+
+<b>🔐 ویژگی‌ها:</b>
+• Order Block + FVG
+• Divergence Detection
+• Break of Structure (BOS)
+• Real Learning System
+• Multi-Factor Confidence
 """, user_id)
                 elif text == '/subscribe':
                     handle_subscribe(user_id)
                 elif text == '/help':
-                    send_telegram("📚 راهنما\n/subscribe - خرید اشتراک\n/status - وضعیت اشتراک", user_id)
+                    send_telegram("""
+📚 راهنما
+/subscribe - خرید اشتراک
+/status - وضعیت اشتراک
+""", user_id)
                 elif text == '/status':
                     user = db.get_user(user_id)
                     if user and user['is_active'] == 1:
@@ -2136,20 +2516,23 @@ def handle_admin_command(text):
             return True
         elif text == '/stats':
             stats = db.get_stats()
+            best_indicators = learner.get_best_indicators(5)
+            best_text = ", ".join([f"{ind} ({acc}%)" for ind, acc in best_indicators]) if best_indicators else "No data"
             msg = f"""
-📊 آمار
+📊 آمار کامل
 👤 کاربران: {stats.get('users', 0)}
 🟢 فعال: {stats.get('active', 0)}
 👑 پریمیوم: {stats.get('premium', 0)}
 📈 سیگنال‌ها: {stats.get('signals', 0)}
 🎯 نرخ برد: {stats.get('win_rate', 0)}%
 🧠 دقت: {learner.get_accuracy()}%
+🏆 بهترین: {best_text}
 """
             send_admin(msg)
             return True
         elif text == '/help':
             msg = """
-📚 راهنما
+📚 راهنمای دستورات
 /panel - پنل مدیریت
 /on - فعال‌سازی سیگنال
 /off - غیرفعال‌سازی سیگنال
@@ -2223,27 +2606,24 @@ def run_bot():
 if __name__ == "__main__":
     try:
         print("\n" + "="*70)
-        print("🚀 ULTIMATE SIGNAL BOT V22 - SMART MONEY EDITION")
+        print("🚀 ULTIMATE SIGNAL BOT V23 - FINAL EDITION")
         print("="*70)
-        print("📊 PROFESSIONAL WALLET STREET LEVEL ANALYSIS")
+        print("📊 PROFESSIONAL SMC + REAL LEARNING")
         print("="*70)
-        print("🧠 SMC CONCEPTS:")
-        print("  ✅ Order Block Detection")
-        print("  ✅ Fair Value Gap (FVG)")
+        print("🧠 KEY FEATURES:")
+        print("  ✅ Order Block + FVG Detection")
         print("  ✅ RSI/MACD Divergence")
         print("  ✅ Break of Structure (BOS)")
         print("  ✅ Liquidity Sweep")
         print("  ✅ Candle Pattern Recognition")
-        print("  ✅ Support/Resistance")
+        print("  ✅ Multi-Factor Confidence")
+        print("  ✅ Trend Filter for Bearish Markets")
+        print("  ✅ Real Learning System (Weight Adjustment)")
         print("="*70)
         print("📈 INDICATORS:")
-        print("  ✅ EMA 20/50/100/200")
-        print("  ✅ SuperTrend")
-        print("  ✅ Bollinger Bands")
-        print("  ✅ Ichimoku Cloud")
-        print("  ✅ Parabolic SAR")
-        print("  ✅ Volume Spike + OBV")
-        print("  ✅ CMF + MFI")
+        print("  ✅ EMA 20/50/100/200 + SuperTrend")
+        print("  ✅ Bollinger Bands + Ichimoku")
+        print("  ✅ Volume Spike + OBV + CMF + MFI")
         print("  ✅ Stochastic RSI + ROC")
         print("="*70)
         print("🎯 TP Based on ATR: risk * 2,3,5,8,13")
