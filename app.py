@@ -175,7 +175,8 @@ class Database:
             ('min_profit_target', '30'),
             ('risk_reward_ratio', '3.0'),
             ('aggressive_mode', '0'),
-            ('broadcast_mode', '0')
+            ('broadcast_mode', '0'),
+            ('learning_enabled', '1')
         ]
         
         for key, value in defaults:
@@ -1185,6 +1186,15 @@ class LearningSystem:
                         'cci': 1.0, 'williams': 1.0, 'momentum': 1.0,
                         'obv': 1.0, 'regression': 1.0, 'fft': 1.2
                     })
+                    self.market_weights = data.get('market_weights', {
+                        'bullish_trend': 1.0,
+                        'bearish_trend': 1.0,
+                        'ranging': 0.8,
+                        'accumulation': 1.1,
+                        'distribution': 0.9,
+                        'neutral': 1.0
+                    })
+                    self.timeframe_weights = data.get('timeframe_weights', {})
                     return
             except:
                 pass
@@ -1198,6 +1208,15 @@ class LearningSystem:
             'cci': 1.0, 'williams': 1.0, 'momentum': 1.0,
             'obv': 1.0, 'regression': 1.0, 'fft': 1.2
         }
+        self.market_weights = {
+            'bullish_trend': 1.0,
+            'bearish_trend': 1.0,
+            'ranging': 0.8,
+            'accumulation': 1.1,
+            'distribution': 0.9,
+            'neutral': 1.0
+        }
+        self.timeframe_weights = {}
         self.save()
     
     def save(self):
@@ -1206,20 +1225,26 @@ class LearningSystem:
                 json.dump({
                     'positive': self.positive,
                     'negative': self.negative,
-                    'weights': self.weights
+                    'weights': self.weights,
+                    'market_weights': self.market_weights,
+                    'timeframe_weights': self.timeframe_weights
                 }, f, indent=2)
         except:
             pass
     
-    def add_feedback(self, feedback_type):
+    def add_feedback(self, feedback_type, market_phase='neutral', profit_percent=0):
         if feedback_type == 'positive':
             self.positive += 1
             for key in self.weights:
                 self.weights[key] = min(3.0, self.weights[key] * 1.03)
+            if market_phase in self.market_weights:
+                self.market_weights[market_phase] = min(2.0, self.market_weights[market_phase] * 1.02)
         else:
             self.negative += 1
             for key in self.weights:
                 self.weights[key] = max(0.2, self.weights[key] * 0.97)
+            if market_phase in self.market_weights:
+                self.market_weights[market_phase] = max(0.4, self.market_weights[market_phase] * 0.98)
         self.save()
     
     def get_accuracy(self):
@@ -1348,41 +1373,55 @@ def build_signal_message(signal, signal_id):
     return msg, keyboard
 
 # ============================================================
-# ADMIN PANEL - 5 FULLY FUNCTIONAL BUTTONS
+# ADMIN PANEL - FULLY FUNCTIONAL WITH 10 BUTTONS
 # ============================================================
 
 ADMIN_PANEL_BUTTONS = {
     'inline_keyboard': [
         [
-            {'text': '🟢 فعال‌سازی ارسال به کانال', 'callback_data': 'admin_signal_on'},
-            {'text': '🔴 غیرفعال‌سازی ارسال به کانال', 'callback_data': 'admin_signal_off'}
+            {'text': '🟢 فعال‌سازی سیگنال', 'callback_data': 'admin_signal_on'},
+            {'text': '🔴 غیرفعال‌سازی سیگنال', 'callback_data': 'admin_signal_off'}
         ],
         [
-            {'text': '💰 فعال‌سازی حالت پولی', 'callback_data': 'admin_pay_on'},
-            {'text': '💳 غیرفعال‌سازی حالت پولی', 'callback_data': 'admin_pay_off'}
+            {'text': '💰 فعال‌سازی پرداخت', 'callback_data': 'admin_pay_on'},
+            {'text': '💳 غیرفعال‌سازی پرداخت', 'callback_data': 'admin_pay_off'}
         ],
         [
-            {'text': '📢 ارسال پیام همگانی', 'callback_data': 'admin_broadcast'}
+            {'text': '📊 آمار کامل', 'callback_data': 'admin_stats'},
+            {'text': '💳 پرداخت‌های در انتظار', 'callback_data': 'admin_payments'}
+        ],
+        [
+            {'text': '⚙️ تنظیمات', 'callback_data': 'admin_settings'},
+            {'text': '🔄 ریست یادگیری', 'callback_data': 'admin_reset'}
+        ],
+        [
+            {'text': '📢 ارسال پیام همگانی', 'callback_data': 'admin_broadcast'},
+            {'text': '🔄 رفرش پنل', 'callback_data': 'admin_refresh'}
         ]
     ]
 }
 
-def show_admin_panel():
-    """Show admin panel with 5 functional buttons"""
+def show_admin_panel(chat_id=None):
+    """نمایش پنل مدیریت با ۱۰ دکمه کاملاً کاربردی"""
+    if chat_id is None:
+        chat_id = ADMIN_ID
+    
     settings = db.get_all_settings()
     stats = db.get_stats()
     
     signal_enabled = settings.get('signal_enabled', '0') == '1'
     payment_enabled = settings.get('payment_enabled', '0') == '1'
+    aggressive = settings.get('aggressive_mode', '0') == '1'
     
     msg = f"""
-🔐 <b>🚀 پنل مدیریت ربات</b>
+🔐 <b>🚀 پنل مدیریت ربات V21</b>
 ━━━━━━━━━━━━━━━━━━━━━━
 
 <b>📡 وضعیت سیستم:</b>
 • 🤖 ربات: 🟢 فعال
 • 📡 ارسال سیگنال: {'🟢 فعال' if signal_enabled else '🔴 غیرفعال'}
 • 💳 حالت پولی: {'🟢 فعال' if payment_enabled else '🔴 غیرفعال'}
+• ⚡ مود: {'🔥 تهاجمی' if aggressive else '📊 استاندارد'}
 
 <b>📈 آمار:</b>
 • 👤 کاربران: {stats.get('users', 0)}
@@ -1393,62 +1432,306 @@ def show_admin_panel():
 • 🎯 نرخ برد: {stats.get('win_rate', 0)}%
 • 💳 پرداخت‌های در انتظار: {stats.get('pending', 0)}
 
+<b>⚙️ تنظیمات:</b>
+• 🎯 حداقل اطمینان: {settings.get('min_confidence', 55)}%
+• 📊 حداکثر سیگنال: {settings.get('max_signals', 5)}
+• 💰 قیمت اشتراک: {settings.get('price', PRICE)}
+• 📈 حداقل سود: {settings.get('min_profit_target', 30)}%
+• 🎯 نسبت ریسک/ریوارد: {settings.get('risk_reward_ratio', 3.0)}
+
 <b>🧠 سیستم یادگیری:</b>
 • دقت: {learner.get_accuracy()}%
 • ✅ برد: {learner.positive}
 • ❌ باخت: {learner.negative}
 
 ━━━━━━━━━━━━━━━━━━━━━━
-<b>📌 دکمه‌های مدیریت:</b>
+<b>📌 برای مدیریت کلیک کنید:</b>
 """
     
-    send_admin(msg, ADMIN_PANEL_BUTTONS)
+    send_telegram(msg, chat_id, ADMIN_PANEL_BUTTONS)
 
 def handle_admin_callback(callback_data):
-    """Handle all admin button clicks - FULLY FUNCTIONAL"""
+    """مدیریت تمام دکمه‌های پنل ادمین - کاملاً کاربردی"""
     try:
-        # ===== دکمه 1: فعال‌سازی ارسال به کانال =====
+        # ===== دکمه 1: فعال‌سازی سیگنال =====
         if callback_data == 'admin_signal_on':
             db.update_setting('signal_enabled', '1')
-            send_admin("✅ <b>ارسال سیگنال به کانال فعال شد</b>\n\n📡 سیگنال‌ها به کانال ارسال می‌شوند.")
+            send_admin("✅ <b>ارسال سیگنال فعال شد</b>\n\n📡 سیگنال‌ها به کانال ارسال می‌شوند.")
             show_admin_panel()
             return True
         
-        # ===== دکمه 2: غیرفعال‌سازی ارسال به کانال =====
+        # ===== دکمه 2: غیرفعال‌سازی سیگنال =====
         elif callback_data == 'admin_signal_off':
             db.update_setting('signal_enabled', '0')
-            send_admin("🔴 <b>ارسال سیگنال به کانال غیرفعال شد</b>\n\n📡 ارسال سیگنال متوقف شد.")
+            send_admin("🔴 <b>ارسال سیگنال غیرفعال شد</b>\n\n📡 ارسال سیگنال متوقف شد.")
             show_admin_panel()
             return True
         
-        # ===== دکمه 3: فعال‌سازی حالت پولی =====
+        # ===== دکمه 3: فعال‌سازی پرداخت =====
         elif callback_data == 'admin_pay_on':
             db.update_setting('payment_enabled', '1')
             send_admin("💰 <b>حالت پولی فعال شد</b>\n\n💳 کاربران می‌توانند اشتراک خریداری کنند.")
             show_admin_panel()
             return True
         
-        # ===== دکمه 4: غیرفعال‌سازی حالت پولی =====
+        # ===== دکمه 4: غیرفعال‌سازی پرداخت =====
         elif callback_data == 'admin_pay_off':
             db.update_setting('payment_enabled', '0')
             send_admin("💳 <b>حالت پولی غیرفعال شد</b>\n\n💰 خرید اشتراک متوقف شد.")
             show_admin_panel()
             return True
         
-        # ===== دکمه 5: ارسال پیام همگانی =====
+        # ===== دکمه 5: آمار کامل =====
+        elif callback_data == 'admin_stats':
+            stats = db.get_stats()
+            msg = f"""
+📊 <b>آمار کامل سیستم</b>
+━━━━━━━━━━━━━━━━━━━━━━
+
+<b>👤 کاربران:</b>
+• کل: {stats.get('users', 0)}
+• فعال: {stats.get('active', 0)}
+• پریمیوم: {stats.get('premium', 0)}
+
+<b>📊 سیگنال‌ها:</b>
+• کل: {stats.get('signals', 0)}
+• امروز: {stats.get('today', 0)}
+
+<b>💳 پرداخت‌ها:</b>
+• در انتظار: {stats.get('pending', 0)}
+
+<b>📝 عملکرد:</b>
+• نرخ برد: {stats.get('win_rate', 0)}%
+• بردها: {stats.get('wins', 0)}
+• میانگین سود: ${stats.get('avg_profit', 0)}
+
+<b>🧠 یادگیری:</b>
+• دقت: {learner.get_accuracy()}%
+• مثبت: {learner.positive}
+• منفی: {learner.negative}
+"""
+            send_admin(msg)
+            return True
+        
+        # ===== دکمه 6: پرداخت‌های در انتظار =====
+        elif callback_data == 'admin_payments':
+            payments = db.get_pending_payments()
+            if not payments:
+                send_admin("💳 <b>هیچ پرداخت در انتظاری وجود ندارد</b>")
+                return True
+            
+            msg = f"💳 <b>پرداخت‌های در انتظار</b> ({len(payments)})\n━━━━━━━━━━━━━━━━━━━━━━\n"
+            for payment in payments[:10]:
+                payment_id, user_id, payment_hash, amount, created_at = payment
+                msg += f"""
+📌 <b>#{payment_id}</b>
+👤 کاربر: {user_id}
+💰 مبلغ: {amount}
+🔑 هش: <code>{payment_hash[:30]}...</code>
+📅 زمان: {created_at[:16]}
+✅ /confirm_{payment_id}
+❌ /reject_{payment_id}
+━━━━━━━━━━━━━━━━━━━━━━
+"""
+            send_admin(msg)
+            return True
+        
+        # ===== دکمه 7: تنظیمات =====
+        elif callback_data == 'admin_settings':
+            settings = db.get_all_settings()
+            msg = "⚙️ <b>تنظیمات سیستم</b>\n━━━━━━━━━━━━━━━━━━━━━━\n"
+            for key, value in settings.items():
+                msg += f"\n📌 <b>{key}:</b> <code>{value}</code>"
+            msg += """
+━━━━━━━━━━━━━━━━━━━━━━
+<b>✏️ تغییر تنظیمات:</b>
+<code>/set min_confidence 75</code>
+<code>/set max_signals 3</code>
+<code>/set min_profit_target 40</code>
+<code>/set risk_reward_ratio 4</code>
+"""
+            send_admin(msg)
+            return True
+        
+        # ===== دکمه 8: ریست یادگیری =====
+        elif callback_data == 'admin_reset':
+            learner.positive = 0
+            learner.negative = 0
+            for key in learner.weights:
+                learner.weights[key] = 1.0
+            for key in learner.market_weights:
+                learner.market_weights[key] = 1.0
+            learner.save()
+            send_admin("🔄 <b>سیستم یادگیری ریست شد</b>\n\n🧠 تمام داده‌های یادگیری به حالت اولیه بازگشت.")
+            show_admin_panel()
+            return True
+        
+        # ===== دکمه 9: ارسال پیام همگانی =====
         elif callback_data == 'admin_broadcast':
             db.update_setting('broadcast_mode', '1')
-            send_admin("📢 <b>ارسال پیام همگانی</b>\n\nلطفاً پیام خود را به صورت متن ارسال کنید.\n\n<i>پیام شما برای همه کاربران ارسال خواهد شد.</i>")
+            send_admin("📢 <b>حالت ارسال همگانی فعال شد</b>\n\nلطفاً پیام خود را ارسال کنید.\n\n<i>پیام برای همه کاربران ارسال خواهد شد.</i>")
+            return True
+        
+        # ===== دکمه 10: رفرش پنل =====
+        elif callback_data == 'admin_refresh':
+            show_admin_panel()
             return True
         
         return False
+        
     except Exception as e:
         logger.error(f"Admin callback error: {e}")
         send_admin(f"❌ <b>خطا:</b> {str(e)}")
         return False
 
+def handle_admin_command(text):
+    """مدیریت دستورات متنی ادمین"""
+    try:
+        if text == '/panel' or text == '/start':
+            show_admin_panel()
+            return True
+        
+        elif text == '/on':
+            db.update_setting('signal_enabled', '1')
+            send_admin("✅ سیگنال فعال شد")
+            show_admin_panel()
+            return True
+        
+        elif text == '/off':
+            db.update_setting('signal_enabled', '0')
+            send_admin("🔴 سیگنال غیرفعال شد")
+            show_admin_panel()
+            return True
+        
+        elif text == '/pay_on':
+            db.update_setting('payment_enabled', '1')
+            send_admin("💰 پرداخت فعال شد")
+            show_admin_panel()
+            return True
+        
+        elif text == '/pay_off':
+            db.update_setting('payment_enabled', '0')
+            send_admin("💳 پرداخت غیرفعال شد")
+            show_admin_panel()
+            return True
+        
+        elif text.startswith('/confirm_'):
+            try:
+                payment_id = int(text.replace('/confirm_', ''))
+                success, user_id = db.confirm_payment(payment_id)
+                if success:
+                    send_admin(f"✅ پرداخت #{payment_id} تایید شد")
+                    send_telegram("✅ پرداخت شما تایید شد! اشتراک شما فعال شد.", user_id)
+                    show_admin_panel()
+                else:
+                    send_admin(f"❌ پرداخت #{payment_id} یافت نشد")
+            except Exception as e:
+                send_admin(f"❌ خطا: {e}")
+            return True
+        
+        elif text.startswith('/reject_'):
+            try:
+                payment_id = int(text.replace('/reject_', ''))
+                success = db.reject_payment(payment_id)
+                if success:
+                    payment = db.cursor.execute('SELECT user_id FROM payments WHERE id = ?', (payment_id,)).fetchone()
+                    if payment:
+                        send_telegram("❌ پرداخت شما رد شد. لطفاً با پشتیبانی تماس بگیرید.", payment[0])
+                    send_admin(f"❌ پرداخت #{payment_id} رد شد")
+                    show_admin_panel()
+                else:
+                    send_admin(f"❌ پرداخت #{payment_id} یافت نشد")
+            except Exception as e:
+                send_admin(f"❌ خطا: {e}")
+            return True
+        
+        elif text.startswith('/set '):
+            try:
+                parts = text[5:].split(' ', 1)
+                if len(parts) != 2:
+                    send_admin("❌ فرمت: /set کلید مقدار")
+                    return True
+                key, value = parts
+                value = value.strip('"').strip("'")
+                db.update_setting(key, value)
+                send_admin(f"✅ {key} = {value}")
+                show_admin_panel()
+            except Exception as e:
+                send_admin(f"❌ خطا: {e}")
+            return True
+        
+        elif text == '/payments':
+            payments = db.get_pending_payments()
+            if not payments:
+                send_admin("💳 هیچ پرداخت در انتظاری وجود ندارد")
+                return True
+            msg = "💳 پرداخت‌های در انتظار\n━━━━━━━━━━━━━━━━━━━━━━\n"
+            for payment in payments[:10]:
+                payment_id, user_id, payment_hash, amount, created_at = payment
+                msg += f"""
+#{payment_id} | کاربر: {user_id}
+💰 {amount}
+🔑 {payment_hash[:30]}...
+📅 {created_at[:16]}
+/confirm_{payment_id} - تایید
+/reject_{payment_id} - رد
+━━━━━━━━━━━━━━━━━━━━━━
+"""
+            send_admin(msg)
+            return True
+        
+        elif text == '/stats':
+            stats = db.get_stats()
+            msg = f"""
+📊 آمار کامل
+━━━━━━━━━━━━━━━━━━━━━━
+👤 کاربران: {stats.get('users', 0)}
+🟢 فعال: {stats.get('active', 0)}
+👑 پریمیوم: {stats.get('premium', 0)}
+📈 سیگنال‌ها: {stats.get('signals', 0)}
+📊 امروز: {stats.get('today', 0)}
+💳 در انتظار: {stats.get('pending', 0)}
+🎯 نرخ برد: {stats.get('win_rate', 0)}%
+🧠 دقت: {learner.get_accuracy()}%
+✅ برد: {learner.positive}
+❌ باخت: {learner.negative}
+"""
+            send_admin(msg)
+            return True
+        
+        elif text == '/help':
+            msg = """
+📚 راهنمای دستورات ادمین
+━━━━━━━━━━━━━━━━━━━━━━
+
+<b>📡 کنترل سیگنال:</b>
+/panel - نمایش پنل مدیریت
+/on - فعال‌سازی سیگنال
+/off - غیرفعال‌سازی سیگنال
+
+<b>💰 کنترل پرداخت:</b>
+/pay_on - فعال‌سازی پرداخت
+/pay_off - غیرفعال‌سازی پرداخت
+/payments - مشاهده پرداخت‌ها
+/confirm_ID - تایید پرداخت
+/reject_ID - رد پرداخت
+
+<b>⚙️ سیستم:</b>
+/set کلید مقدار - تغییر تنظیمات
+/stats - آمار کامل
+/help - این راهنما
+"""
+            send_admin(msg)
+            return True
+        
+        return False
+        
+    except Exception as e:
+        logger.error(f"Admin command error: {e}")
+        return False
+
 def handle_broadcast_message(user_id, text):
-    """Handle broadcast message from admin"""
+    """مدیریت ارسال پیام همگانی"""
     try:
         users = db.cursor.execute('SELECT user_id FROM users').fetchall()
         
@@ -1491,23 +1774,20 @@ def handle_feedback_callback(callback_data, user_id):
         feedback_type = parts[1]
         signal_id = int(parts[2])
         
-        # Add user to database
         db.add_user(user_id)
         
-        # Get signal info
         signal = db.get_signal(signal_id)
         
-        # Check if user has already given feedback
         success, message = db.update_feedback(signal_id, feedback_type, user_id)
         
         if not success:
             send_telegram(f"⚠️ {message}", user_id)
             return False
         
-        # Update learning system
-        learner.add_feedback(feedback_type)
+        market_phase = signal['market_phase'] if signal else 'neutral'
+        profit_pct = signal['profit_percent1'] if signal else 0
+        learner.add_feedback(feedback_type, market_phase, profit_pct)
         
-        # Immediate response to user based on feedback
         if feedback_type == 'positive':
             response_msg = f"""
 ✅ <b>تبریک! سود کردید! 💰</b>
@@ -1539,7 +1819,6 @@ def handle_feedback_callback(callback_data, user_id):
         
         send_telegram(response_msg, user_id)
         
-        # Notify admin
         admin_msg = f"""
 📊 <b>بازخورد جدید</b>
 ━━━━━━━━━━━━━━━━━━━━━━
@@ -1566,15 +1845,12 @@ def handle_feedback_callback(callback_data, user_id):
 def handle_callback(callback_data, user_id):
     """Main callback handler - routes to appropriate handler"""
     try:
-        # Admin callbacks
         if callback_data.startswith('admin_'):
             return handle_admin_callback(callback_data)
         
-        # Feedback callbacks
         if callback_data.startswith('fb_'):
             return handle_feedback_callback(callback_data, user_id)
         
-        # Analysis callbacks
         if callback_data.startswith('analysis_'):
             signal_id = int(callback_data.replace('analysis_', ''))
             signal = db.get_signal(signal_id)
@@ -1691,6 +1967,7 @@ def handle_subscribe(user_id):
 def main_loop():
     logger.info("🚀 Starting Quantum Signal Bot V21...")
     
+    # نمایش پنل ادمین در ابتدا
     show_admin_panel()
     
     cycle = 0
@@ -1793,7 +2070,6 @@ def process_message(message):
         
         db.add_user(user_id, username, first_name)
         
-        # Check for broadcast mode
         if user_id == ADMIN_ID and db.get_setting('broadcast_mode') == '1':
             if text.startswith('/'):
                 return
@@ -1802,119 +2078,8 @@ def process_message(message):
         
         if text.startswith('/'):
             if user_id == ADMIN_ID:
-                # Handle admin commands
-                if text == '/panel':
-                    show_admin_panel()
-                elif text == '/on':
-                    db.update_setting('signal_enabled', '1')
-                    send_admin("✅ Signals ENABLED")
-                elif text == '/off':
-                    db.update_setting('signal_enabled', '0')
-                    send_admin("🔴 Signals DISABLED")
-                elif text == '/pay_on':
-                    db.update_setting('payment_enabled', '1')
-                    send_admin("💰 Payments ENABLED")
-                elif text == '/pay_off':
-                    db.update_setting('payment_enabled', '0')
-                    send_admin("💳 Payments DISABLED")
-                elif text.startswith('/confirm_'):
-                    try:
-                        payment_id = int(text.replace('/confirm_', ''))
-                        success, user_id_conf = db.confirm_payment(payment_id)
-                        if success:
-                            send_admin(f"✅ Payment #{payment_id} CONFIRMED")
-                            send_telegram("✅ Payment Confirmed! You now have full access.", user_id_conf)
-                        else:
-                            send_admin(f"❌ Payment #{payment_id} not found")
-                    except Exception as e:
-                        send_admin(f"❌ Error: {e}")
-                elif text.startswith('/reject_'):
-                    try:
-                        payment_id = int(text.replace('/reject_', ''))
-                        success = db.reject_payment(payment_id)
-                        if success:
-                            payment = db.cursor.execute('SELECT user_id FROM payments WHERE id = ?', (payment_id,)).fetchone()
-                            if payment:
-                                send_telegram("❌ Payment Rejected. Please contact support.", payment[0])
-                            send_admin(f"❌ Payment #{payment_id} REJECTED")
-                        else:
-                            send_admin(f"❌ Payment #{payment_id} not found")
-                    except Exception as e:
-                        send_admin(f"❌ Error: {e}")
-                elif text.startswith('/set '):
-                    try:
-                        parts = text[5:].split(' ', 1)
-                        if len(parts) != 2:
-                            send_admin("❌ Format: /set key value")
-                            return
-                        key, value = parts
-                        value = value.strip('"').strip("'")
-                        db.update_setting(key, value)
-                        send_admin(f"✅ {key} = {value}")
-                    except Exception as e:
-                        send_admin(f"❌ Error: {e}")
-                elif text == '/payments':
-                    payments = db.get_pending_payments()
-                    if not payments:
-                        send_admin("💳 No pending payments")
-                        return
-                    msg_pay = "💳 Pending Payments\n━━━━━━━━━━━━━━━━━━━━━━\n"
-                    for payment in payments[:10]:
-                        payment_id, user_id_pay, payment_hash, amount, created_at = payment
-                        msg_pay += f"""
-#{payment_id} | User: {user_id_pay}
-💰 {amount}
-🔑 {payment_hash[:30]}...
-📅 {created_at[:16]}
-/confirm_{payment_id} - Confirm
-/reject_{payment_id} - Reject
-━━━━━━━━━━━━━━━━━━━━━━
-"""
-                    send_admin(msg_pay)
-                elif text == '/stats':
-                    stats = db.get_stats()
-                    msg_stat = f"""
-📊 STATISTICS
-━━━━━━━━━━━━━━━━━━━━━━
-👤 Users: {stats.get('users', 0)}
-🟢 Active: {stats.get('active', 0)}
-👑 Premium: {stats.get('premium', 0)}
-📈 Signals: {stats.get('signals', 0)}
-📊 Today: {stats.get('today', 0)}
-💳 Pending: {stats.get('pending', 0)}
-🎯 Win Rate: {stats.get('win_rate', 0)}%
-🧠 Accuracy: {learner.get_accuracy()}%
-✅ Wins: {learner.positive}
-❌ Losses: {learner.negative}
-"""
-                    send_admin(msg_stat)
-                elif text == '/help':
-                    msg_help = """
-📚 ADMIN COMMANDS
-━━━━━━━━━━━━━━━━━━━━━━
-
-<b>📡 Signal Control:</b>
-/on - Enable signals
-/off - Disable signals
-
-<b>💰 Payment Control:</b>
-/pay_on - Enable payments
-/pay_off - Disable payments
-/payments - View pending
-/confirm_ID - Confirm
-/reject_ID - Reject
-
-<b>⚙️ System:</b>
-/set key value - Change setting
-/stats - Statistics
-/panel - Admin panel
-/help - This help
-"""
-                    send_admin(msg_help)
-                else:
-                    send_admin(f"❌ دستور نامعتبر: {text}\n\nبرای مشاهده راهنما از /help استفاده کنید.")
+                handle_admin_command(text)
             else:
-                # User commands
                 if text == '/start':
                     send_telegram("""
 🚀 <b>ربات سیگنال حرفه‌ای</b>
@@ -1977,11 +2142,8 @@ def process_message(message):
                             send_telegram("⚠️ <b>اشتراک فعال نیست</b>\n\nبا /subscribe تهیه کنید", user_id)
                     else:
                         send_telegram("⚠️ <b>اشتراک فعال نیست</b>\n\nبا /subscribe تهیه کنید", user_id)
-                else:
-                    send_telegram(f"❌ دستور نامعتبر: {text}\n\nبرای مشاهده راهنما از /help استفاده کنید.", user_id)
             return
         
-        # Payment hash
         if user_id != ADMIN_ID and db.get_setting('payment_enabled') == '1':
             hash_pattern = r'[0-9a-fA-F]{64}|0x[0-9a-fA-F]{64}|[A-Za-z0-9]{50,}'
             if re.search(hash_pattern, text):
@@ -2053,7 +2215,7 @@ if __name__ == "__main__":
         print(f"💳 Price: {PRICE}")
         print(f"🧠 Analysis: 10000X Stronger with Scipy")
         print(f"🎯 Targets: 5 Non-Equal Profit Levels")
-        print(f"🔘 Admin Panel: 5 Fully Functional Buttons")
+        print(f"🔘 Admin Panel: 10 Fully Functional Buttons")
         print("="*70)
         print("🤖 Starting bot...\n")
         
