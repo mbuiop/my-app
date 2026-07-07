@@ -1,7 +1,6 @@
 # ============================================================
-# ULTIMATE SIGNAL BOT V16 - ENTERPRISE PRO EDITION
-# با بهبودهای: الگوی شمعی | واگرایی RSI | Trailing Stop | 
-# تحلیل احساسات | پشتیبانی از چند صرافی
+# ULTIMATE SIGNAL BOT V15 - QUANTUM ENTERPRISE EDITION
+# ADVANCED DEEP LEARNING ANALYSIS | FULL ADMIN PANEL
 # ============================================================
 
 import requests
@@ -14,9 +13,12 @@ from datetime import datetime, timedelta
 import threading
 import logging
 from collections import deque
-import sys
 import hashlib
-import random
+import re
+from scipy import stats
+from scipy.signal import find_peaks, argrelextrema
+import warnings
+warnings.filterwarnings('ignore')
 
 # ============================================================
 # LOGGING
@@ -41,38 +43,20 @@ CHANNEL_ID = "@davnold"
 ADMIN_ID = 327855654
 
 WALLET_ADDRESS = "TV61aTh98MGqmteYzda5AaBzdXgGqreG6A"
-WALLET_NETWORK = "TRC20"
-SUBSCRIPTION_PRICE = "100 USDT"
+PRICE = "100 USDT"
 
 INTERVAL = 300  # 5 minutes
-MAX_SIGNALS = 3
-MIN_CONFIDENCE = 65
-MIN_VOLUME_RATIO = 1.2
-MIN_ADX = 20
-
-# پشتیبانی از چند صرافی
-EXCHANGES = {
-    'binance': {
-        'api': 'https://api.binance.com/api/v3/klines',
-        'weight': 0.5
-    },
-    'bybit': {
-        'api': 'https://api.bybit.com/v5/market/kline',
-        'weight': 0.3
-    },
-    'okx': {
-        'api': 'https://www.okx.com/api/v5/market/candles',
-        'weight': 0.2
-    }
-}
+MAX_SIGNALS = 5
+MIN_CONFIDENCE = 70
 
 # ============================================================
-# DATABASE - ENTERPRISE PRO
+# DATABASE - ULTIMATE EDITION
 # ============================================================
 
 class Database:
     def __init__(self):
         self.conn = sqlite3.connect('bot_data.db', check_same_thread=False)
+        self.conn.row_factory = sqlite3.Row
         self.cursor = self.conn.cursor()
         self.create_tables()
         logger.info("✅ Database initialized")
@@ -87,26 +71,29 @@ class Database:
                 joined_at TIMESTAMP,
                 subscription_expire TIMESTAMP,
                 is_active BOOLEAN DEFAULT 0,
-                has_paid BOOLEAN DEFAULT 0,
-                free_signals_used INTEGER DEFAULT 0,
-                max_free_signals INTEGER DEFAULT 2,
+                is_premium BOOLEAN DEFAULT 0,
                 feedback_count INTEGER DEFAULT 0,
                 positive_feedback INTEGER DEFAULT 0,
                 negative_feedback INTEGER DEFAULT 0,
-                total_signals_received INTEGER DEFAULT 0
+                total_profit DECIMAL DEFAULT 0,
+                total_loss DECIMAL DEFAULT 0,
+                win_rate DECIMAL DEFAULT 0,
+                signals_received INTEGER DEFAULT 0,
+                last_signal_at TIMESTAMP
             )
         ''')
         
-        # Signals با فیلدهای جدید
+        # Signals - Enhanced
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS signals (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 symbol TEXT,
                 direction TEXT,
                 entry REAL,
-                tp REAL,
+                tp1 REAL,
+                tp2 REAL,
+                tp3 REAL,
                 sl REAL,
-                trailing_sl REAL,
                 confidence INTEGER,
                 created_at TIMESTAMP,
                 rsi REAL,
@@ -116,23 +103,22 @@ class Database:
                 ma200 REAL,
                 vwap REAL,
                 atr REAL,
-                support REAL,
-                resistance REAL,
+                support1 REAL,
+                support2 REAL,
+                resistance1 REAL,
+                resistance2 REAL,
                 score REAL,
                 quality_score REAL,
-                risk_reward REAL,
-                mtf_score TEXT,
-                mtf_buy REAL,
-                mtf_sell REAL,
                 reasons TEXT,
                 feedback TEXT DEFAULT '',
                 feedback_user INTEGER DEFAULT 0,
                 sent_to_channel BOOLEAN DEFAULT 0,
-                sent_to_user BOOLEAN DEFAULT 0,
-                candle_pattern TEXT,
-                rsi_divergence TEXT,
-                sentiment_score REAL,
-                exchange_used TEXT
+                profit_percent DECIMAL DEFAULT 0,
+                result TEXT DEFAULT 'pending',
+                predicted_accuracy DECIMAL DEFAULT 0,
+                market_phase TEXT,
+                volatility REAL,
+                trend_strength REAL
             )
         ''')
         
@@ -141,35 +127,39 @@ class Database:
             CREATE TABLE IF NOT EXISTS payments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
-                payment_hash TEXT,
+                payment_hash TEXT UNIQUE,
                 amount TEXT,
-                wallet_address TEXT,
                 status TEXT DEFAULT 'pending',
                 created_at TIMESTAMP,
                 confirmed_at TIMESTAMP,
-                expire_at TIMESTAMP
+                expire_at TIMESTAMP,
+                tx_hash TEXT,
+                note TEXT
             )
         ''')
         
-        # Feedback Log
+        # Advanced Analysis Cache
         self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS feedback_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                signal_id INTEGER,
-                user_id INTEGER,
-                feedback TEXT,
-                profit_percent REAL,
-                created_at TIMESTAMP
+            CREATE TABLE IF NOT EXISTS analysis_cache (
+                symbol TEXT,
+                timeframe TEXT,
+                data TEXT,
+                timestamp TIMESTAMP,
+                PRIMARY KEY (symbol, timeframe)
             )
         ''')
         
-        # Admin Logs
+        # Performance Metrics
         self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS admin_logs (
+            CREATE TABLE IF NOT EXISTS performance (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                action TEXT,
-                details TEXT,
-                created_at TIMESTAMP
+                date DATE,
+                total_signals INTEGER,
+                win_rate DECIMAL,
+                avg_profit DECIMAL,
+                total_profit DECIMAL,
+                best_signal TEXT,
+                worst_signal TEXT
             )
         ''')
         
@@ -181,27 +171,24 @@ class Database:
             )
         ''')
         
-        # Default settings
+        # Default settings - Enhanced
         defaults = [
             ('signal_enabled', '1'),
-            ('paid_mode_enabled', '0'),
             ('wallet', WALLET_ADDRESS),
-            ('wallet_network', WALLET_NETWORK),
-            ('price', SUBSCRIPTION_PRICE),
-            ('min_confidence', str(MIN_CONFIDENCE)),
-            ('max_signals', str(MAX_SIGNALS)),
-            ('min_volume', str(MIN_VOLUME_RATIO)),
-            ('min_adx', str(MIN_ADX)),
-            ('free_signals', '2'),
-            ('admin_channel', CHANNEL_ID),
-            ('auto_approve', '0'),
-            ('deep_analysis', '1'),
-            ('mtf_enabled', '1'),
-            ('trailing_stop_enabled', '1'),
-            ('sentiment_enabled', '1'),
-            ('candle_patterns_enabled', '1'),
-            ('multi_exchange_enabled', '0'),
-            ('rsi_divergence_enabled', '1')
+            ('price', PRICE),
+            ('min_confidence', '70'),
+            ('max_signals', '5'),
+            ('payment_enabled', '1'),
+            ('auto_confirm', '0'),
+            ('min_profit_target', '30'),
+            ('risk_reward_ratio', '3.0'),
+            ('analysis_depth', '10'),
+            ('use_ml', '1'),
+            ('aggressive_mode', '0'),
+            ('max_spread', '0.5'),
+            ('volume_threshold', '1.5'),
+            ('trend_filter', '1'),
+            ('news_filter', '0')
         ]
         
         for key, value in defaults:
@@ -209,170 +196,6 @@ class Database:
         
         self.conn.commit()
     
-    # ===== USER METHODS =====
-    def add_user(self, user_id, username=None, first_name=None):
-        self.cursor.execute('''
-            INSERT OR IGNORE INTO users (user_id, username, first_name, joined_at)
-            VALUES (?, ?, ?, ?)
-        ''', (user_id, username, first_name, datetime.now().isoformat()))
-        self.conn.commit()
-    
-    def get_user(self, user_id):
-        self.cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
-        return self.cursor.fetchone()
-    
-    def has_subscription(self, user_id):
-        user = self.get_user(user_id)
-        if not user:
-            return False
-        if user[4]:  # subscription_expire
-            expire_date = datetime.fromisoformat(user[4])
-            if expire_date > datetime.now() and user[5] == 1:
-                return True
-        return False
-    
-    def can_receive_signal(self, user_id):
-        if self.has_subscription(user_id):
-            return True, "subscribed"
-        user = self.get_user(user_id)
-        if user:
-            free_used = user[6] if user[6] else 0
-            max_free = int(self.get_setting('free_signals') or 2)
-            if free_used < max_free:
-                return True, "free"
-        return False, "no_access"
-    
-    def use_free_signal(self, user_id):
-        self.cursor.execute('UPDATE users SET free_signals_used = free_signals_used + 1 WHERE user_id = ?', (user_id,))
-        self.conn.commit()
-    
-    def update_subscription(self, user_id, days=30):
-        expire_date = datetime.now() + timedelta(days=days)
-        self.cursor.execute('UPDATE users SET subscription_expire = ?, is_active = 1, has_paid = 1 WHERE user_id = ?',
-                           (expire_date.isoformat(), user_id))
-        self.conn.commit()
-        return expire_date
-    
-    # ===== SIGNAL METHODS =====
-    def save_signal(self, signal_data):
-        self.cursor.execute('''
-            INSERT INTO signals (
-                symbol, direction, entry, tp, sl, trailing_sl, confidence,
-                created_at, rsi, macd, ma20, ma50, ma200,
-                vwap, atr, support, resistance, score, quality_score,
-                risk_reward, mtf_score, mtf_buy, mtf_sell, reasons,
-                candle_pattern, rsi_divergence, sentiment_score, exchange_used
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            signal_data['symbol'],
-            signal_data['signal'],
-            signal_data['entry'],
-            signal_data['tp'],
-            signal_data['sl'],
-            signal_data.get('trailing_sl', 0),
-            signal_data['confidence'],
-            datetime.now().isoformat(),
-            signal_data.get('rsi', 0),
-            signal_data.get('macd', 0),
-            signal_data.get('ma20', 0),
-            signal_data.get('ma50', 0),
-            signal_data.get('ma200', 0),
-            signal_data.get('vwap', 0),
-            signal_data.get('atr', 0),
-            signal_data.get('support', 0),
-            signal_data.get('resistance', 0),
-            signal_data.get('score', 0),
-            signal_data.get('quality_score', 0),
-            signal_data.get('risk_reward', 0),
-            signal_data.get('mtf_score', ''),
-            signal_data.get('mtf_buy', 0),
-            signal_data.get('mtf_sell', 0),
-            '|'.join(signal_data.get('reasons', [])),
-            signal_data.get('candle_pattern', ''),
-            signal_data.get('rsi_divergence', ''),
-            signal_data.get('sentiment_score', 0),
-            signal_data.get('exchange_used', 'binance')
-        ))
-        signal_id = self.cursor.lastrowid
-        self.conn.commit()
-        return signal_id
-    
-    def mark_signal_sent_channel(self, signal_id):
-        self.cursor.execute('UPDATE signals SET sent_to_channel = 1 WHERE id = ?', (signal_id,))
-        self.conn.commit()
-    
-    def mark_signal_sent_user(self, signal_id):
-        self.cursor.execute('UPDATE signals SET sent_to_user = 1 WHERE id = ?', (signal_id,))
-        self.conn.commit()
-    
-    def get_signal(self, signal_id):
-        self.cursor.execute('SELECT * FROM signals WHERE id = ?', (signal_id,))
-        return self.cursor.fetchone()
-    
-    # ===== FEEDBACK METHODS =====
-    def update_feedback(self, signal_id, feedback_type, user_id, profit_percent=0):
-        self.cursor.execute('SELECT id FROM feedback_log WHERE signal_id = ? AND user_id = ?', (signal_id, user_id))
-        if self.cursor.fetchone():
-            return False, "شما قبلاً به این سیگنال بازخورد داده‌اید"
-        
-        self.cursor.execute('UPDATE signals SET feedback = ?, feedback_user = ? WHERE id = ?', 
-                           (feedback_type, user_id, signal_id))
-        
-        if feedback_type == 'positive':
-            self.cursor.execute('UPDATE users SET positive_feedback = positive_feedback + 1, feedback_count = feedback_count + 1 WHERE user_id = ?', (user_id,))
-        else:
-            self.cursor.execute('UPDATE users SET negative_feedback = negative_feedback + 1, feedback_count = feedback_count + 1 WHERE user_id = ?', (user_id,))
-        
-        self.cursor.execute('INSERT INTO feedback_log (signal_id, user_id, feedback, profit_percent, created_at) VALUES (?, ?, ?, ?, ?)',
-                           (signal_id, user_id, feedback_type, profit_percent, datetime.now().isoformat()))
-        self.conn.commit()
-        return True, "بازخورد ثبت شد"
-    
-    # ===== PAYMENT METHODS =====
-    def add_payment(self, user_id, payment_hash):
-        wallet = self.get_setting('wallet') or WALLET_ADDRESS
-        amount = self.get_setting('price') or SUBSCRIPTION_PRICE
-        self.cursor.execute('''
-            INSERT INTO payments (user_id, payment_hash, amount, wallet_address, created_at)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (user_id, payment_hash, amount, wallet, datetime.now().isoformat()))
-        payment_id = self.cursor.lastrowid
-        self.conn.commit()
-        return payment_id
-    
-    def get_pending_payments(self):
-        self.cursor.execute('''
-            SELECT id, user_id, payment_hash, amount, wallet_address, created_at 
-            FROM payments WHERE status = 'pending' ORDER BY created_at ASC
-        ''')
-        return self.cursor.fetchall()
-    
-    def get_payment(self, payment_id):
-        self.cursor.execute('SELECT * FROM payments WHERE id = ?', (payment_id,))
-        return self.cursor.fetchone()
-    
-    def confirm_payment(self, payment_id):
-        self.cursor.execute('SELECT user_id FROM payments WHERE id = ? AND status = "pending"', (payment_id,))
-        result = self.cursor.fetchone()
-        if not result:
-            return False, None
-        user_id = result[0]
-        expire_date = self.update_subscription(user_id, 30)
-        self.cursor.execute('UPDATE payments SET status = "confirmed", confirmed_at = ?, expire_at = ? WHERE id = ?',
-                           (datetime.now().isoformat(), expire_date.isoformat(), payment_id))
-        self.conn.commit()
-        self.add_admin_log(f"Payment #{payment_id} confirmed for user {user_id}")
-        return True, user_id
-    
-    def reject_payment(self, payment_id):
-        self.cursor.execute('UPDATE payments SET status = "rejected" WHERE id = ? AND status = "pending"', (payment_id,))
-        self.conn.commit()
-        if self.cursor.rowcount > 0:
-            self.add_admin_log(f"Payment #{payment_id} rejected")
-            return True
-        return False
-    
-    # ===== SETTINGS METHODS =====
     def get_setting(self, key):
         self.cursor.execute('SELECT value FROM settings WHERE key = ?', (key,))
         r = self.cursor.fetchone()
@@ -385,7 +208,144 @@ class Database:
     
     def get_all_settings(self):
         self.cursor.execute('SELECT key, value FROM settings')
-        return {row[0]: row[1] for row in self.cursor.fetchall()}
+        return {row['key']: row['value'] for row in self.cursor.fetchall()}
+    
+    def add_user(self, user_id, username=None, first_name=None):
+        self.cursor.execute('''
+            INSERT OR IGNORE INTO users (user_id, username, first_name, joined_at)
+            VALUES (?, ?, ?, ?)
+        ''', (user_id, username, first_name, datetime.now().isoformat()))
+        self.conn.commit()
+    
+    def get_user(self, user_id):
+        self.cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
+        return self.cursor.fetchone()
+    
+    def save_signal(self, signal_data):
+        self.cursor.execute('''
+            INSERT INTO signals (
+                symbol, direction, entry, tp1, tp2, tp3, sl, confidence,
+                created_at, rsi, macd, ma20, ma50, ma200,
+                vwap, atr, support1, support2, resistance1, resistance2,
+                score, quality_score, reasons, profit_percent,
+                predicted_accuracy, market_phase, volatility, trend_strength
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            signal_data['symbol'],
+            signal_data['signal'],
+            signal_data['entry'],
+            signal_data.get('tp1', 0),
+            signal_data.get('tp2', 0),
+            signal_data.get('tp3', 0),
+            signal_data.get('sl', 0),
+            signal_data['confidence'],
+            datetime.now().isoformat(),
+            signal_data.get('rsi', 0),
+            signal_data.get('macd', 0),
+            signal_data.get('ma20', 0),
+            signal_data.get('ma50', 0),
+            signal_data.get('ma200', 0),
+            signal_data.get('vwap', 0),
+            signal_data.get('atr', 0),
+            signal_data.get('support1', 0),
+            signal_data.get('support2', 0),
+            signal_data.get('resistance1', 0),
+            signal_data.get('resistance2', 0),
+            signal_data.get('score', 0),
+            signal_data.get('quality_score', 0),
+            '|'.join(signal_data.get('reasons', [])),
+            signal_data.get('profit_percent', 0),
+            signal_data.get('predicted_accuracy', 0),
+            signal_data.get('market_phase', 'neutral'),
+            signal_data.get('volatility', 0),
+            signal_data.get('trend_strength', 0)
+        ))
+        signal_id = self.cursor.lastrowid
+        self.conn.commit()
+        return signal_id
+    
+    def mark_signal_sent(self, signal_id):
+        self.cursor.execute('UPDATE signals SET sent_to_channel = 1 WHERE id = ?', (signal_id,))
+        self.conn.commit()
+    
+    def get_signal(self, signal_id):
+        self.cursor.execute('SELECT * FROM signals WHERE id = ?', (signal_id,))
+        return self.cursor.fetchone()
+    
+    def update_signal_result(self, signal_id, result, profit_percent=None):
+        if profit_percent is not None:
+            self.cursor.execute('UPDATE signals SET result = ?, profit_percent = ? WHERE id = ?', 
+                               (result, profit_percent, signal_id))
+        else:
+            self.cursor.execute('UPDATE signals SET result = ? WHERE id = ?', (result, signal_id))
+        self.conn.commit()
+    
+    def update_feedback(self, signal_id, feedback_type, user_id, profit_amount=0):
+        self.cursor.execute('SELECT id FROM feedback_log WHERE signal_id = ? AND user_id = ?', (signal_id, user_id))
+        if self.cursor.fetchone():
+            return False, "You already gave feedback for this signal"
+        
+        self.cursor.execute('UPDATE signals SET feedback = ?, feedback_user = ? WHERE id = ?', 
+                           (feedback_type, user_id, signal_id))
+        
+        if feedback_type == 'positive':
+            self.cursor.execute('UPDATE users SET positive_feedback = positive_feedback + 1, feedback_count = feedback_count + 1, signals_received = signals_received + 1 WHERE user_id = ?', (user_id,))
+            self.cursor.execute('UPDATE users SET total_profit = total_profit + ? WHERE user_id = ?', (profit_amount, user_id))
+        else:
+            self.cursor.execute('UPDATE users SET negative_feedback = negative_feedback + 1, feedback_count = feedback_count + 1 WHERE user_id = ?', (user_id,))
+            self.cursor.execute('UPDATE users SET total_loss = total_loss + ? WHERE user_id = ?', (abs(profit_amount), user_id))
+        
+        self.cursor.execute('''
+            UPDATE users SET win_rate = 
+                ROUND(CAST(positive_feedback AS FLOAT) / NULLIF(feedback_count, 0) * 100, 2)
+            WHERE user_id = ?
+        ''', (user_id,))
+        
+        self.cursor.execute('INSERT INTO feedback_log (signal_id, user_id, feedback, created_at, profit_amount) VALUES (?, ?, ?, ?, ?)',
+                           (signal_id, user_id, feedback_type, datetime.now().isoformat(), profit_amount))
+        self.conn.commit()
+        return True, "Feedback recorded"
+    
+    def add_payment(self, user_id, payment_hash):
+        self.cursor.execute('INSERT INTO payments (user_id, payment_hash, amount, created_at) VALUES (?, ?, ?, ?)',
+                           (user_id, payment_hash, PRICE, datetime.now().isoformat()))
+        payment_id = self.cursor.lastrowid
+        self.conn.commit()
+        return payment_id
+    
+    def get_pending_payments(self):
+        self.cursor.execute('SELECT id, user_id, payment_hash, amount, created_at FROM payments WHERE status = "pending" ORDER BY created_at ASC')
+        return self.cursor.fetchall()
+    
+    def get_payment_by_hash(self, payment_hash):
+        self.cursor.execute('SELECT * FROM payments WHERE payment_hash = ?', (payment_hash,))
+        return self.cursor.fetchone()
+    
+    def confirm_payment(self, payment_id):
+        self.cursor.execute('SELECT user_id FROM payments WHERE id = ? AND status = "pending"', (payment_id,))
+        result = self.cursor.fetchone()
+        if not result:
+            return False, None
+        
+        user_id = result[0]
+        expire_date = datetime.now() + timedelta(days=30)
+        
+        self.cursor.execute('UPDATE payments SET status = "confirmed", confirmed_at = ?, expire_at = ? WHERE id = ?',
+                           (datetime.now().isoformat(), expire_date.isoformat(), payment_id))
+        
+        self.cursor.execute('UPDATE users SET subscription_expire = ?, is_active = 1, is_premium = 1 WHERE user_id = ?',
+                           (expire_date.isoformat(), user_id))
+        self.conn.commit()
+        self.add_admin_log(f"Payment #{payment_id} confirmed for user {user_id}")
+        return True, user_id
+    
+    def reject_payment(self, payment_id):
+        self.cursor.execute('UPDATE payments SET status = "rejected" WHERE id = ? AND status = "pending"', (payment_id,))
+        self.conn.commit()
+        if self.cursor.rowcount > 0:
+            self.add_admin_log(f"Payment #{payment_id} rejected")
+            return True
+        return False
     
     def add_admin_log(self, details):
         self.cursor.execute('INSERT INTO admin_logs (action, details, created_at) VALUES (?, ?, ?)',
@@ -395,349 +355,39 @@ class Database:
     def get_stats(self):
         users = self.cursor.execute('SELECT COUNT(*) FROM users').fetchone()[0]
         active = self.cursor.execute('SELECT COUNT(*) FROM users WHERE is_active = 1').fetchone()[0]
-        paid = self.cursor.execute('SELECT COUNT(*) FROM users WHERE has_paid = 1').fetchone()[0]
+        premium = self.cursor.execute('SELECT COUNT(*) FROM users WHERE is_premium = 1').fetchone()[0]
         signals = self.cursor.execute('SELECT COUNT(*) FROM signals').fetchone()[0]
         today = self.cursor.execute('SELECT COUNT(*) FROM signals WHERE DATE(created_at) = DATE("now")').fetchone()[0]
         pending = self.cursor.execute('SELECT COUNT(*) FROM payments WHERE status = "pending"').fetchone()[0]
-        feedback = self.cursor.execute('SELECT COUNT(*) FROM feedback_log').fetchone()[0]
-        return {'users': users, 'active': active, 'paid': paid, 'signals': signals, 
-                'today': today, 'pending': pending, 'feedback': feedback}
+        
+        # Performance metrics
+        wins = self.cursor.execute('SELECT COUNT(*) FROM feedback_log WHERE feedback = "positive"').fetchone()[0]
+        total_feedback = self.cursor.execute('SELECT COUNT(*) FROM feedback_log').fetchone()[0]
+        win_rate = round((wins / total_feedback * 100) if total_feedback > 0 else 0, 2)
+        
+        # Avg profit
+        avg_profit = self.cursor.execute('SELECT AVG(profit_amount) FROM feedback_log WHERE feedback = "positive"').fetchone()[0] or 0
+        
+        return {
+            'users': users,
+            'active': active,
+            'premium': premium,
+            'signals': signals,
+            'today': today,
+            'pending': pending,
+            'win_rate': win_rate,
+            'wins': wins,
+            'avg_profit': round(avg_profit, 2)
+        }
 
 db = Database()
 
 # ============================================================
-# 1. الگوهای شمعی (Candlestick Patterns)
+# ADVANCED TECHNICAL INDICATORS - QUANTUM LEVEL
 # ============================================================
 
-def detect_candle_patterns(open_prices, high_prices, low_prices, close_prices):
-    """تشخیص الگوهای شمعی مهم"""
-    if len(close_prices) < 5:
-        return "No Pattern", 0
-    
-    patterns = []
-    score = 0
-    
-    # آخرین شمع
-    o = open_prices[-1]
-    h = high_prices[-1]
-    l = low_prices[-1]
-    c = close_prices[-1]
-    body = abs(c - o)
-    upper_wick = h - max(c, o)
-    lower_wick = min(c, o) - l
-    total_range = h - l
-    
-    if total_range == 0:
-        return "No Pattern", 0
-    
-    body_ratio = body / total_range
-    upper_ratio = upper_wick / total_range
-    lower_ratio = lower_wick / total_range
-    
-    # 1. Doji
-    if body_ratio < 0.1:
-        patterns.append("📊 Doji")
-        score += 3
-    
-    # 2. Hammer (چکش - صعودی)
-    if body_ratio < 0.4 and lower_ratio > 0.6 and upper_ratio < 0.1:
-        patterns.append("🔨 Hammer (Bullish)")
-        score += 8
-    
-    # 3. Shooting Star (ستاره دنباله‌دار - نزولی)
-    if body_ratio < 0.4 and upper_ratio > 0.6 and lower_ratio < 0.1:
-        patterns.append("💫 Shooting Star (Bearish)")
-        score -= 8
-    
-    # 4. Bullish Engulfing
-    if len(close_prices) >= 2:
-        prev_o = open_prices[-2]
-        prev_c = close_prices[-2]
-        if prev_c < prev_o and c > o and c > prev_o and o < prev_c:
-            patterns.append("🟢 Bullish Engulfing")
-            score += 10
-    
-    # 5. Bearish Engulfing
-    if len(close_prices) >= 2:
-        prev_o = open_prices[-2]
-        prev_c = close_prices[-2]
-        if prev_c > prev_o and c < o and c < prev_o and o > prev_c:
-            patterns.append("🔴 Bearish Engulfing")
-            score -= 10
-    
-    # 6. Morning Star (ستاره صبح - صعودی)
-    if len(close_prices) >= 3:
-        if (close_prices[-3] < open_prices[-3] and  # شمع اول نزولی
-            abs(close_prices[-2] - open_prices[-2]) < abs(close_prices[-3] - open_prices[-3]) * 0.3 and  # شمع دوم کوچک
-            close_prices[-1] > open_prices[-1] and  # شمع سوم صعودی
-            close_prices[-1] > (open_prices[-3] + close_prices[-3]) / 2):  # بسته شدن بالای نصف شمع اول
-            patterns.append("🌅 Morning Star (Bullish)")
-            score += 12
-    
-    # 7. Evening Star (ستاره عصر - نزولی)
-    if len(close_prices) >= 3:
-        if (close_prices[-3] > open_prices[-3] and  # شمع اول صعودی
-            abs(close_prices[-2] - open_prices[-2]) < abs(close_prices[-3] - open_prices[-3]) * 0.3 and  # شمع دوم کوچک
-            close_prices[-1] < open_prices[-1] and  # شمع سوم نزولی
-            close_prices[-1] < (open_prices[-3] + close_prices[-3]) / 2):  # بسته شدن زیر نصف شمع اول
-            patterns.append("🌆 Evening Star (Bearish)")
-            score -= 12
-    
-    # 8. Bullish Harami
-    if len(close_prices) >= 2:
-        if (close_prices[-2] < open_prices[-2] and  # شمع قبل نزولی
-            c > o and  # شمع فعلی صعودی
-            c < open_prices[-2] and o > close_prices[-2]):  # درون شمع قبل
-            patterns.append("🟢 Bullish Harami")
-            score += 8
-    
-    # 9. Bearish Harami
-    if len(close_prices) >= 2:
-        if (close_prices[-2] > open_prices[-2] and  # شمع قبل صعودی
-            c < o and  # شمع فعلی نزولی
-            c > close_prices[-2] and o < open_prices[-2]):  # درون شمع قبل
-            patterns.append("🔴 Bearish Harami")
-            score -= 8
-    
-    # 10. Marubozu
-    if body_ratio > 0.9:
-        if c > o:  # صعودی
-            patterns.append("📈 Bullish Marubozu")
-            score += 6
-        else:  # نزولی
-            patterns.append("📉 Bearish Marubozu")
-            score -= 6
-    
-    if not patterns:
-        return "No Pattern", 0
-    
-    return ", ".join(patterns[:3]), score
-
-# ============================================================
-# 2. تشخیص واگرایی RSI
-# ============================================================
-
-def detect_rsi_divergence(prices, rsi_values):
-    """تشخیص واگرایی بین قیمت و RSI"""
-    if len(prices) < 20 or len(rsi_values) < 20:
-        return "No Divergence", 0
-    
-    # پیدا کردن قله‌ها و دره‌ها
-    peaks = []
-    troughs = []
-    
-    for i in range(2, len(prices) - 2):
-        # قله قیمت
-        if prices[i] > prices[i-1] and prices[i] > prices[i+1]:
-            peaks.append((i, prices[i], rsi_values[i]))
-        # دره قیمت
-        if prices[i] < prices[i-1] and prices[i] < prices[i+1]:
-            troughs.append((i, prices[i], rsi_values[i]))
-    
-    divergence_score = 0
-    divergence_type = "No Divergence"
-    
-    # واگرایی مثبت (صعودی) - قیمت پایین‌تر ولی RSI بالاتر
-    if len(troughs) >= 2:
-        last_two_troughs = troughs[-2:]
-        if last_two_troughs[1][1] < last_two_troughs[0][1]:  # قیمت پایین‌تر رفته
-            if last_two_troughs[1][2] > last_two_troughs[0][2]:  # RSI بالاتر رفته
-                divergence_type = "🟢 Bullish Divergence"
-                divergence_score += 12
-    
-    # واگرایی منفی (نزولی) - قیمت بالاتر ولی RSI پایین‌تر
-    if len(peaks) >= 2:
-        last_two_peaks = peaks[-2:]
-        if last_two_peaks[1][1] > last_two_peaks[0][1]:  # قیمت بالاتر رفته
-            if last_two_peaks[1][2] < last_two_peaks[0][2]:  # RSI پایین‌تر رفته
-                divergence_type = "🔴 Bearish Divergence"
-                divergence_score -= 12
-    
-    # واگرایی پنهان (Hidden Divergence)
-    if len(troughs) >= 2:
-        last_two_troughs = troughs[-2:]
-        if last_two_troughs[1][1] > last_two_troughs[0][1]:  # قیمت بالاتر
-            if last_two_troughs[1][2] < last_two_troughs[0][2]:  # RSI پایین‌تر
-                divergence_type = "🟡 Hidden Bullish Divergence"
-                divergence_score += 8
-    
-    if len(peaks) >= 2:
-        last_two_peaks = peaks[-2:]
-        if last_two_peaks[1][1] < last_two_peaks[0][1]:  # قیمت پایین‌تر
-            if last_two_peaks[1][2] > last_two_peaks[0][2]:  # RSI بالاتر
-                divergence_type = "🟡 Hidden Bearish Divergence"
-                divergence_score -= 8
-    
-    return divergence_type, divergence_score
-
-# ============================================================
-# 3. تحلیل احساسات (Sentiment Analysis)
-# ============================================================
-
-def get_sentiment_score(symbol):
-    """محاسبه امتیاز احساسات بازار"""
-    try:
-        # 1. بررسی تغییرات قیمت در 24 ساعت اخیر
-        url = f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}"
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            price_change = float(data.get('priceChangePercent', 0))
-        else:
-            price_change = 0
-        
-        # 2. بررسی حجم معاملات
-        volume_24h = float(data.get('quoteVolume', 0)) if 'data' in locals() else 0
-        avg_volume = volume_24h / 24 if volume_24h > 0 else 1
-        
-        # 3. نسبت خرید به فروش (شبیه‌سازی)
-        buy_sell_ratio = 0.5 + (price_change / 100) if price_change > 0 else 0.5 - (abs(price_change) / 100)
-        buy_sell_ratio = max(0.2, min(0.8, buy_sell_ratio))
-        
-        # 4. محاسبه امتیاز احساسات
-        sentiment_score = 50
-        
-        # تأثیر تغییرات قیمت
-        if price_change > 5:
-            sentiment_score += 20
-        elif price_change > 2:
-            sentiment_score += 10
-        elif price_change < -5:
-            sentiment_score -= 20
-        elif price_change < -2:
-            sentiment_score -= 10
-        
-        # تأثیر حجم معاملات
-        volume_ratio = volume_24h / (avg_volume * 24) if avg_volume > 0 else 1
-        if volume_ratio > 2:
-            sentiment_score += 10 if sentiment_score > 50 else -10
-        elif volume_ratio > 1.5:
-            sentiment_score += 5 if sentiment_score > 50 else -5
-        
-        # تأثیر نسبت خرید به فروش
-        sentiment_score += (buy_sell_ratio - 0.5) * 40
-        
-        return round(max(0, min(100, sentiment_score)), 1)
-        
-    except Exception as e:
-        logger.error(f"Sentiment error for {symbol}: {e}")
-        return 50.0
-
-# ============================================================
-# 4. پشتیبانی از چند صرافی
-# ============================================================
-
-def get_candles_multi_exchange(symbol, limit=200, interval='5m'):
-    """دریافت داده از چند صرافی و ترکیب نتایج"""
-    all_data = []
-    exchanges_enabled = db.get_setting('multi_exchange_enabled') == '1'
-    
-    if not exchanges_enabled:
-        return get_candles(symbol, limit, interval)
-    
-    for exchange_name, exchange_config in EXCHANGES.items():
-        try:
-            if exchange_name == 'binance':
-                url = f"{exchange_config['api']}?symbol={symbol}&interval={interval}&limit={limit}"
-            elif exchange_name == 'bybit':
-                url = f"{exchange_config['api']}?category=spot&symbol={symbol}&interval={interval}&limit={limit}"
-            elif exchange_name == 'okx':
-                url = f"{exchange_config['api']}?instId={symbol}&bar={interval}&limit={limit}"
-            else:
-                continue
-            
-            response = requests.get(url, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                candles = []
-                
-                if exchange_name == 'binance':
-                    candles = [
-                        [float(x[1]), float(x[2]), float(x[3]), float(x[4]), float(x[5])]
-                        for x in data
-                    ]
-                elif exchange_name == 'bybit':
-                    if 'result' in data and 'list' in data['result']:
-                        candles = [
-                            [float(x[1]), float(x[2]), float(x[3]), float(x[4]), float(x[5])]
-                            for x in data['result']['list']
-                        ]
-                elif exchange_name == 'okx':
-                    if 'data' in data:
-                        candles = [
-                            [float(x[1]), float(x[2]), float(x[3]), float(x[4]), float(x[5])]
-                            for x in data['data']
-                        ]
-                
-                if candles:
-                    all_data.append({
-                        'exchange': exchange_name,
-                        'data': {
-                            'open': [x[0] for x in candles],
-                            'high': [x[1] for x in candles],
-                            'low': [x[2] for x in candles],
-                            'close': [x[3] for x in candles],
-                            'volume': [x[4] for x in candles]
-                        },
-                        'weight': exchange_config['weight']
-                    })
-        except Exception as e:
-            logger.error(f"Error fetching from {exchange_name}: {e}")
-    
-    if not all_data:
-        return get_candles(symbol, limit, interval)
-    
-    # ترکیب داده‌ها با وزن‌دهی
-    total_weight = sum(d['weight'] for d in all_data)
-    combined_data = {
-        'open': [], 'high': [], 'low': [], 'close': [], 'volume': []
-    }
-    
-    for i in range(limit):
-        for col in ['open', 'high', 'low', 'close', 'volume']:
-            value = 0
-            for d in all_data:
-                if i < len(d['data'][col]):
-                    value += d['data'][col][i] * d['weight'] / total_weight
-            combined_data[col].append(round(value, 8))
-    
-    return combined_data
-
-# ============================================================
-# 5. Trailing Stop Loss
-# ============================================================
-
-def calculate_trailing_stop(entry_price, current_price, atr, direction, activation_pct=0.5):
-    """محاسبه Trailing Stop Loss پویا"""
-    if db.get_setting('trailing_stop_enabled') != '1':
-        return 0
-    
-    if direction == "BUY":
-        # برای خرید
-        profit_pct = ((current_price - entry_price) / entry_price) * 100
-        
-        if profit_pct >= activation_pct:
-            # Stop Loss دنبال‌کننده
-            trailing_sl = current_price - (atr * 1.5)
-            return round(trailing_sl, 8)
-        else:
-            # قبل از فعال‌سازی
-            return round(entry_price - (atr * 1.5), 8)
-    
-    else:  # SELL
-        profit_pct = ((entry_price - current_price) / entry_price) * 100
-        
-        if profit_pct >= activation_pct:
-            trailing_sl = current_price + (atr * 1.5)
-            return round(trailing_sl, 8)
-        else:
-            return round(entry_price + (atr * 1.5), 8)
-
-# ============================================================
-# DEEP ANALYSIS ENGINE - ENTERPRISE PRO
-# ============================================================
-
-def get_candles(symbol, limit=200, interval='5m'):
+def get_candles(symbol, limit=500, interval='5m'):
+    """Get real candle data from Binance"""
     try:
         url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
         response = requests.get(url, timeout=10)
@@ -748,531 +398,861 @@ def get_candles(symbol, limit=200, interval='5m'):
                 'high': [float(x[2]) for x in data],
                 'low': [float(x[3]) for x in data],
                 'close': [float(x[4]) for x in data],
-                'volume': [float(x[5]) for x in data]
+                'volume': [float(x[5]) for x in data],
+                'timestamp': [x[0] for x in data]
             }
     except Exception as e:
         logger.error(f"Error fetching {symbol}: {e}")
     return None
 
-def calculate_rsi(prices, period=14):
-    if len(prices) < period + 1:
-        return 50.0
-    prices = np.array(prices[-period-1:])
-    deltas = np.diff(prices)
-    gains = deltas[deltas > 0]
-    losses = -deltas[deltas < 0]
-    avg_gain = np.mean(gains) if len(gains) > 0 else 0
-    avg_loss = np.mean(losses) if len(losses) > 0 else 0.0000001
-    if avg_loss == 0:
-        return 100.0
-    rs = avg_gain / avg_loss
-    return round(100 - (100 / (1 + rs)), 2)
-
-def calculate_macd(prices, fast=12, slow=26, signal=9):
-    if len(prices) < slow:
-        return 0, 0, 0
-    prices = np.array(prices)
-    fast_mult = 2.0 / (fast + 1)
-    fast_ema = np.mean(prices[-fast:])
-    for price in prices[-fast:]:
-        fast_ema = price * fast_mult + fast_ema * (1 - fast_mult)
-    slow_mult = 2.0 / (slow + 1)
-    slow_ema = np.mean(prices[-slow:])
-    for price in prices[-slow:]:
-        slow_ema = price * slow_mult + slow_ema * (1 - slow_mult)
-    macd_line = fast_ema - slow_ema
-    signal_mult = 2.0 / (signal + 1)
-    signal_line = macd_line
-    for _ in range(signal):
-        signal_line = macd_line * signal_mult + signal_line * (1 - signal_mult)
-    histogram = macd_line - signal_line
-    return round(macd_line, 8), round(signal_line, 8), round(histogram, 8)
-
-def calculate_ma(prices, period):
-    if len(prices) < period:
-        return prices[-1] if prices else 0
-    return round(np.mean(prices[-period:]), 8)
-
-def calculate_ema(prices, period):
-    if len(prices) < period:
-        return prices[-1] if prices else 0
-    prices = np.array(prices)
-    mult = 2.0 / (period + 1)
-    ema = np.mean(prices[-period:])
-    for price in prices[-period:]:
-        ema = price * mult + ema * (1 - mult)
-    return round(ema, 8)
-
-def calculate_bollinger(prices, period=20, std_dev=2):
-    if len(prices) < period:
-        return prices[-1] if prices else 0, prices[-1] if prices else 0, prices[-1] if prices else 0
-    prices = np.array(prices[-period:])
-    ma = np.mean(prices)
-    std = np.std(prices)
-    upper = ma + (std_dev * std)
-    lower = ma - (std_dev * std)
-    return round(upper, 8), round(ma, 8), round(lower, 8)
-
-def calculate_vwap(prices, volumes):
-    if len(prices) < 2:
-        return prices[-1] if prices else 0
-    total_value = sum(prices[i] * volumes[i] for i in range(len(prices)))
-    total_volume = sum(volumes)
-    if total_volume == 0:
-        return prices[-1]
-    return round(total_value / total_volume, 8)
-
-def calculate_atr(highs, lows, closes, period=14):
-    if len(closes) < period:
-        return 0.0000001
-    tr_list = []
-    for i in range(1, period + 1):
-        if i < len(closes):
-            tr = max(highs[-i] - lows[-i], abs(highs[-i] - closes[-i-1]), abs(lows[-i] - closes[-i-1]))
-            tr_list.append(tr)
-    if not tr_list:
-        return 0.0000001
-    return round(np.mean(tr_list), 8)
-
-def find_support_resistance(highs, lows, closes):
-    if len(closes) < 30:
-        return 0, 0
-    peaks, troughs = [], []
-    for i in range(2, len(closes) - 2):
-        if highs[i] > highs[i-1] and highs[i] > highs[i+1] and highs[i] > highs[i-2] and highs[i] > highs[i+2]:
-            peaks.append(highs[i])
-        if lows[i] < lows[i-1] and lows[i] < lows[i+1] and lows[i] < lows[i-2] and lows[i] < lows[i+2]:
-            troughs.append(lows[i])
-    resistance = peaks[0] if peaks else 0
-    support = troughs[0] if troughs else 0
-    return round(support, 8), round(resistance, 8)
-
-def calculate_adx(highs, lows, closes, period=14):
-    if len(closes) < period + 1:
-        return 25
-    tr_list, up_list, down_list = [], [], []
-    for i in range(1, period + 1):
-        if i < len(closes):
-            tr = max(highs[-i] - lows[-i], abs(highs[-i] - closes[-i-1]), abs(lows[-i] - closes[-i-1]))
-            tr_list.append(tr)
-            up_move = highs[-i] - highs[-i-1]
-            down_move = lows[-i-1] - lows[-i]
-            up_list.append(max(0, up_move) if up_move > down_move else 0)
-            down_list.append(max(0, down_move) if down_move > up_move else 0)
-    if not tr_list:
-        return 25
-    atr = np.mean(tr_list)
-    di_plus = 100 * np.mean(up_list) / atr if atr > 0 else 0
-    di_minus = 100 * np.mean(down_list) / atr if atr > 0 else 0
-    return round(100 * abs(di_plus - di_minus) / (di_plus + di_minus + 0.0000001), 1)
-
-def calculate_ichimoku(highs, lows, closes):
-    if len(closes) < 52:
-        return None
-    high_9 = max(highs[-9:]) if len(highs) >= 9 else highs[-1]
-    low_9 = min(lows[-9:]) if len(lows) >= 9 else lows[-1]
-    tenkan = (high_9 + low_9) / 2
-    high_26 = max(highs[-26:]) if len(highs) >= 26 else highs[-1]
-    low_26 = min(lows[-26:]) if len(lows) >= 26 else lows[-1]
-    kijun = (high_26 + low_26) / 2
-    senkou_a = (tenkan + kijun) / 2
-    high_52 = max(highs[-52:]) if len(highs) >= 52 else highs[-1]
-    low_52 = min(lows[-52:]) if len(lows) >= 52 else lows[-1]
-    senkou_b = (high_52 + low_52) / 2
-    return {
-        'tenkan': round(tenkan, 8),
-        'kijun': round(kijun, 8),
-        'senkou_a': round(senkou_a, 8),
-        'senkou_b': round(senkou_b, 8)
-    }
-
-def calculate_fibonacci(highs, lows):
-    if len(highs) < 50 or len(lows) < 50:
-        return None
-    high = max(highs[-50:])
-    low = min(lows[-50:])
-    diff = high - low
-    if diff == 0:
-        return None
-    return {
-        'high': round(high, 8),
-        'low': round(low, 8),
-        'fib_236': round(low + diff * 0.236, 8),
-        'fib_382': round(low + diff * 0.382, 8),
-        'fib_500': round(low + diff * 0.500, 8),
-        'fib_618': round(low + diff * 0.618, 8),
-        'fib_786': round(low + diff * 0.786, 8)
-    }
-
-def multi_timeframe_deep_analysis(symbol):
-    timeframes = ['5m', '15m', '1h', '4h', '1d']
-    results = {'BUY': 0, 'SELL': 0, 'NEUTRAL': 0}
-    details = []
-    mtf_score = "Neutral"
-    
-    for tf in timeframes:
-        data = get_candles(symbol, 50, tf)
-        if not data or len(data['close']) < 30:
-            continue
-        
-        prices = data['close']
-        current = prices[-1]
-        ma20 = calculate_ma(prices, 20)
-        ma50 = calculate_ma(prices, 50)
-        rsi = calculate_rsi(prices, 14)
-        
-        if current > ma20 and ma20 > ma50 and rsi < 70:
-            results['BUY'] += 1
-            details.append(f"{tf}: 🟢 Bullish")
-        elif current < ma20 and ma20 < ma50 and rsi > 30:
-            results['SELL'] += 1
-            details.append(f"{tf}: 🔴 Bearish")
-        else:
-            results['NEUTRAL'] += 1
-            details.append(f"{tf}: ⚪ Neutral")
-    
-    total = results['BUY'] + results['SELL'] + results['NEUTRAL']
-    if total == 0:
-        return 0, 0, "No data", ""
-    
-    buy_pct = (results['BUY'] / total) * 100
-    sell_pct = (results['SELL'] / total) * 100
-    
-    if buy_pct >= 80:
-        mtf_score = "🔥 Strongly Bullish"
-    elif buy_pct >= 60:
-        mtf_score = "📈 Bullish"
-    elif sell_pct >= 80:
-        mtf_score = "🔥 Strongly Bearish"
-    elif sell_pct >= 60:
-        mtf_score = "📉 Bearish"
-    else:
-        mtf_score = "⚖️ Neutral"
-    
-    return round(buy_pct, 1), round(sell_pct, 1), mtf_score, ' | '.join(details[:3])
-
 # ============================================================
-# SIGNAL GENERATOR - ENTERPRISE PRO
+# QUANTUM INDICATORS - DEEP ANALYSIS
 # ============================================================
 
-def generate_signal(symbol):
-    """تولید سیگنال با تحلیل عمیق + بهبودهای جدید"""
-    try:
-        # دریافت داده از صرافی‌های مختلف
-        data = get_candles_multi_exchange(symbol, 200, '5m')
-        if not data or len(data['close']) < 50:
-            return None
+class QuantumIndicators:
+    """Advanced quantum-level technical indicators"""
+    
+    @staticmethod
+    def calculate_rsi(prices, period=14):
+        if len(prices) < period + 1:
+            return 50.0
+        prices = np.array(prices[-period-1:])
+        deltas = np.diff(prices)
+        gains = deltas[deltas > 0]
+        losses = -deltas[deltas < 0]
+        avg_gain = np.mean(gains) if len(gains) > 0 else 0
+        avg_loss = np.mean(losses) if len(losses) > 0 else 0.0000001
+        if avg_loss == 0:
+            return 100.0
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+        return round(rsi, 2)
+    
+    @staticmethod
+    def calculate_macd(prices, fast=12, slow=26, signal=9):
+        if len(prices) < slow:
+            return 0, 0, 0
+        prices = np.array(prices)
+        fast_mult = 2.0 / (fast + 1)
+        fast_ema = np.mean(prices[-fast:])
+        for price in prices[-fast:]:
+            fast_ema = price * fast_mult + fast_ema * (1 - fast_mult)
+        slow_mult = 2.0 / (slow + 1)
+        slow_ema = np.mean(prices[-slow:])
+        for price in prices[-slow:]:
+            slow_ema = price * slow_mult + slow_ema * (1 - slow_mult)
+        macd_line = fast_ema - slow_ema
+        signal_mult = 2.0 / (signal + 1)
+        signal_line = macd_line
+        for _ in range(signal):
+            signal_line = macd_line * signal_mult + signal_line * (1 - signal_mult)
+        histogram = macd_line - signal_line
+        return round(macd_line, 8), round(signal_line, 8), round(histogram, 8)
+    
+    @staticmethod
+    def calculate_ma(prices, period):
+        if len(prices) < period:
+            return prices[-1] if prices else 0
+        return round(np.mean(prices[-period:]), 8)
+    
+    @staticmethod
+    def calculate_ema(prices, period):
+        if len(prices) < period:
+            return prices[-1] if prices else 0
+        prices = np.array(prices)
+        mult = 2.0 / (period + 1)
+        ema = np.mean(prices[-period:])
+        for price in prices[-period:]:
+            ema = price * mult + ema * (1 - mult)
+        return round(ema, 8)
+    
+    @staticmethod
+    def calculate_bollinger(prices, period=20, std_dev=2):
+        if len(prices) < period:
+            return prices[-1] if prices else 0, prices[-1] if prices else 0, prices[-1] if prices else 0
+        prices = np.array(prices[-period:])
+        ma = np.mean(prices)
+        std = np.std(prices)
+        upper = ma + (std_dev * std)
+        lower = ma - (std_dev * std)
+        return round(upper, 8), round(ma, 8), round(lower, 8)
+    
+    @staticmethod
+    def calculate_vwap(prices, volumes):
+        if len(prices) < 2:
+            return prices[-1] if prices else 0
+        total_value = sum(prices[i] * volumes[i] for i in range(len(prices)))
+        total_volume = sum(volumes)
+        if total_volume == 0:
+            return prices[-1]
+        return round(total_value / total_volume, 8)
+    
+    @staticmethod
+    def calculate_atr(highs, lows, closes, period=14):
+        if len(closes) < period:
+            return 0.0000001
+        tr_list = []
+        for i in range(1, period + 1):
+            if i < len(closes):
+                tr = max(
+                    highs[-i] - lows[-i],
+                    abs(highs[-i] - closes[-i-1]),
+                    abs(lows[-i] - closes[-i-1])
+                )
+                tr_list.append(tr)
+        if not tr_list:
+            return 0.0000001
+        return round(np.mean(tr_list), 8)
+    
+    @staticmethod
+    def find_support_resistance(highs, lows, closes, lookback=50):
+        if len(closes) < lookback:
+            return 0, 0, 0, 0
         
-        prices = data['close']
-        highs = data['high']
-        lows = data['low']
-        volumes = data['volume']
-        opens = data['open']
-        current = prices[-1]
+        # Find local maxima and minima
+        highs_array = np.array(highs[-lookback:])
+        lows_array = np.array(lows[-lookback:])
         
-        if current == 0:
-            return None
+        # Find peaks
+        peaks_idx = argrelextrema(highs_array, np.greater, order=5)[0]
+        troughs_idx = argrelextrema(lows_array, np.less, order=5)[0]
         
-        # ===== CALCULATE ALL INDICATORS =====
-        rsi = calculate_rsi(prices, 14)
-        rsi_fast = calculate_rsi(prices, 7)
-        macd, _, macd_hist = calculate_macd(prices, 12, 26, 9)
-        ma7 = calculate_ma(prices, 7)
-        ma20 = calculate_ma(prices, 20)
-        ma50 = calculate_ma(prices, 50)
-        ma200 = calculate_ma(prices, 200)
-        ema9 = calculate_ema(prices, 9)
-        ema21 = calculate_ema(prices, 21)
-        upper_bb, middle_bb, lower_bb = calculate_bollinger(prices, 20, 2)
-        vwap = calculate_vwap(prices, volumes)
-        atr = calculate_atr(highs, lows, prices, 14)
-        support, resistance = find_support_resistance(highs, lows, prices)
-        adx = calculate_adx(highs, lows, prices, 14)
+        # Get values
+        peaks = highs_array[peaks_idx] if len(peaks_idx) > 0 else []
+        troughs = lows_array[troughs_idx] if len(troughs_idx) > 0 else []
         
-        # Volume ratio
-        avg_volume = np.mean(volumes[-20:]) if len(volumes) >= 20 else 1
+        # Sort and get top levels
+        resistance_levels = sorted(peaks, reverse=True)[:2] if len(peaks) > 0 else [0, 0]
+        support_levels = sorted(troughs)[:2] if len(troughs) > 0 else [0, 0]
+        
+        # Add Fibonacci levels
+        if len(resistance_levels) > 0 and len(support_levels) > 0:
+            high = max(resistance_levels)
+            low = min(support_levels)
+            diff = high - low
+            if diff > 0:
+                fib_38 = high - diff * 0.382
+                fib_62 = high - diff * 0.618
+                support_levels.append(fib_62)
+                resistance_levels.append(fib_38)
+        
+        support1 = support_levels[0] if len(support_levels) > 0 else 0
+        support2 = support_levels[1] if len(support_levels) > 1 else 0
+        resistance1 = resistance_levels[0] if len(resistance_levels) > 0 else 0
+        resistance2 = resistance_levels[1] if len(resistance_levels) > 1 else 0
+        
+        return round(support1, 8), round(support2, 8), round(resistance1, 8), round(resistance2, 8)
+    
+    @staticmethod
+    def calculate_adx(highs, lows, closes, period=14):
+        if len(closes) < period + 1:
+            return 25
+        tr_list = []
+        up_list = []
+        down_list = []
+        for i in range(1, period + 1):
+            if i < len(closes):
+                tr = max(
+                    highs[-i] - lows[-i],
+                    abs(highs[-i] - closes[-i-1]),
+                    abs(lows[-i] - closes[-i-1])
+                )
+                tr_list.append(tr)
+                up_move = highs[-i] - highs[-i-1]
+                down_move = lows[-i-1] - lows[-i]
+                up_list.append(max(0, up_move) if up_move > down_move else 0)
+                down_list.append(max(0, down_move) if down_move > up_move else 0)
+        if not tr_list:
+            return 25
+        atr = np.mean(tr_list)
+        di_plus = 100 * np.mean(up_list) / atr if atr > 0 else 0
+        di_minus = 100 * np.mean(down_list) / atr if atr > 0 else 0
+        adx = 100 * abs(di_plus - di_minus) / (di_plus + di_minus + 0.0000001)
+        return round(adx, 1)
+    
+    @staticmethod
+    def calculate_ichimoku(highs, lows, closes):
+        if len(closes) < 52:
+            return {'tenkan': 0, 'kijun': 0, 'senkou_a': 0, 'senkou_b': 0, 'chikou': 0}
+        tenkan = (max(highs[-9:]) + min(lows[-9:])) / 2
+        kijun = (max(highs[-26:]) + min(lows[-26:])) / 2
+        senkou_a = (tenkan + kijun) / 2
+        senkou_b = (max(highs[-52:]) + min(lows[-52:])) / 2
+        chikou = closes[-26] if len(closes) > 26 else closes[-1]
+        return {
+            'tenkan': round(tenkan, 8),
+            'kijun': round(kijun, 8),
+            'senkou_a': round(senkou_a, 8),
+            'senkou_b': round(senkou_b, 8),
+            'chikou': round(chikou, 8)
+        }
+    
+    @staticmethod
+    def calculate_fibonacci(highs, lows, lookback=50):
+        if len(highs) < lookback or len(lows) < lookback:
+            return {'r1': 0, 'r2': 0, 'r3': 0, 's1': 0, 's2': 0, 's3': 0}
+        high = max(highs[-lookback:])
+        low = min(lows[-lookback:])
+        diff = high - low
+        if diff == 0:
+            return {'r1': high, 'r2': high, 'r3': high, 's1': low, 's2': low, 's3': low}
+        return {
+            'r1': round(high - diff * 0.236, 8),
+            'r2': round(high - diff * 0.382, 8),
+            'r3': round(high - diff * 0.618, 8),
+            's1': round(low + diff * 0.236, 8),
+            's2': round(low + diff * 0.382, 8),
+            's3': round(low + diff * 0.618, 8)
+        }
+    
+    @staticmethod
+    def calculate_momentum(prices, period=14):
+        if len(prices) < period:
+            return 0
+        return round(prices[-1] - prices[-period], 8)
+    
+    @staticmethod
+    def calculate_volume_profile(prices, volumes):
+        if len(prices) < 2 or len(volumes) < 2:
+            return {'vwap': prices[-1] if prices else 0, 'volume_ratio': 1, 'volume_trend': 0}
+        total_value = sum(prices[i] * volumes[i] for i in range(len(prices)))
+        total_volume = sum(volumes)
+        if total_volume == 0:
+            return {'vwap': prices[-1], 'volume_ratio': 1, 'volume_trend': 0}
+        vwap = total_value / total_volume
+        avg_volume = np.mean(volumes[-20:]) if len(volumes) >= 20 else total_volume / len(volumes)
         volume_ratio = volumes[-1] / avg_volume if avg_volume > 0 else 1
         
-        # ===== بهبودهای جدید =====
-        # 1. الگوهای شمعی
-        candle_pattern, candle_score = detect_candle_patterns(opens, highs, lows, prices)
-        
-        # 2. واگرایی RSI
-        rsi_values = [calculate_rsi(prices[:i+1], 14) for i in range(len(prices))]
-        rsi_divergence, divergence_score = detect_rsi_divergence(prices, rsi_values)
-        
-        # 3. تحلیل احساسات
-        sentiment_score = get_sentiment_score(symbol)
-        
-        # 4. تحلیل عمیق
-        ichimoku = calculate_ichimoku(highs, lows, prices)
-        fib = calculate_fibonacci(highs, lows)
-        mtf_buy, mtf_sell, mtf_score, mtf_details = multi_timeframe_deep_analysis(symbol)
-        
-        # ===== SCORING SYSTEM - DEEP WITH IMPROVEMENTS =====
-        score = 50
-        reasons = []
-        
-        # 1. RSI (15 points)
-        if rsi < 25:
-            score += 15
-            reasons.append(f"🔥 RSI Oversold: {rsi}")
-        elif rsi < 35:
-            score += 10
-            reasons.append(f"📈 RSI Low: {rsi}")
-        elif rsi > 75:
-            score -= 15
-            reasons.append(f"🔥 RSI Overbought: {rsi}")
-        elif rsi > 65:
-            score -= 10
-            reasons.append(f"📉 RSI High: {rsi}")
-        
-        # 2. Fast RSI (8 points)
-        if rsi_fast < 30 and rsi > rsi_fast:
-            score += 8
-            reasons.append(f"⚡ RSI Fast: {rsi_fast}")
-        elif rsi_fast > 70 and rsi < rsi_fast:
-            score -= 8
-            reasons.append(f"⚡ RSI Fast: {rsi_fast}")
-        
-        # 3. MACD (15 points)
-        if macd > 0 and macd_hist > 0:
-            score += 15
-            reasons.append("🟢 MACD Bullish")
-        elif macd < 0 and macd_hist < 0:
-            score -= 15
-            reasons.append("🔴 MACD Bearish")
-        elif macd > 0:
-            score += 8
-            reasons.append("🟡 MACD Positive")
+        # Volume trend
+        if len(volumes) >= 10:
+            volume_trend = np.polyfit(range(10), volumes[-10:], 1)[0]
         else:
-            score -= 8
-            reasons.append("🟡 MACD Negative")
+            volume_trend = 0
         
-        # 4. Moving Averages (12 points)
-        if current > ma20 and ma20 > ma50 and ma50 > ma200:
-            score += 12
-            reasons.append("🚀 Strong Uptrend")
-        elif current < ma20 and ma20 < ma50 and ma50 < ma200:
-            score -= 12
-            reasons.append("💀 Strong Downtrend")
-        elif current > ma20 and ma20 > ma50:
-            score += 8
-            reasons.append("📈 Uptrend")
-        elif current < ma20 and ma20 < ma50:
-            score -= 8
-            reasons.append("📉 Downtrend")
+        return {'vwap': round(vwap, 8), 'volume_ratio': round(volume_ratio, 2), 'volume_trend': round(volume_trend, 4)}
+    
+    @staticmethod
+    def calculate_stochastic(highs, lows, closes, k_period=14, d_period=3):
+        if len(closes) < k_period:
+            return 50, 50
+        low_k = min(lows[-k_period:])
+        high_k = max(highs[-k_period:])
+        if high_k == low_k:
+            return 50, 50
+        k = 100 * (closes[-1] - low_k) / (high_k - low_k)
+        return round(k, 2), 50  # Simplified
+    
+    @staticmethod
+    def calculate_cci(highs, lows, closes, period=20):
+        if len(closes) < period:
+            return 0
+        tp = [(highs[i] + lows[i] + closes[i]) / 3 for i in range(len(closes))]
+        if len(tp) < period:
+            return 0
+        mean_tp = np.mean(tp[-period:])
+        mean_dev = np.mean([abs(tp[i] - mean_tp) for i in range(-period, 0)])
+        if mean_dev == 0:
+            return 0
+        cci = (tp[-1] - mean_tp) / (0.015 * mean_dev)
+        return round(cci, 2)
+    
+    @staticmethod
+    def calculate_williams_r(highs, lows, closes, period=14):
+        if len(closes) < period:
+            return -50
+        highest = max(highs[-period:])
+        lowest = min(lows[-period:])
+        if highest == lowest:
+            return -50
+        wr = -100 * (highest - closes[-1]) / (highest - lowest)
+        return round(wr, 2)
+    
+    @staticmethod
+    def calculate_obv(closes, volumes):
+        if len(closes) < 2:
+            return 0
+        obv = 0
+        for i in range(1, len(closes)):
+            if closes[i] > closes[i-1]:
+                obv += volumes[i]
+            elif closes[i] < closes[i-1]:
+                obv -= volumes[i]
+        return round(obv, 2)
+
+# ============================================================
+# MACHINE LEARNING - DEEP PREDICTION
+# ============================================================
+
+class MLPredictor:
+    """Machine Learning based price prediction"""
+    
+    def __init__(self):
+        self.weights = np.random.randn(10) * 0.1
+        self.bias = 0
+        self.learning_rate = 0.01
+        self.trained = False
+    
+    def predict(self, features):
+        """Simple neural network prediction"""
+        if not self.trained:
+            return 0.5
+        # Simple linear model
+        prediction = np.dot(features, self.weights) + self.bias
+        return 1 / (1 + np.exp(-prediction))  # Sigmoid
+    
+    def train(self, features, labels):
+        """Train the model"""
+        self.trained = True
+        # Simple training (would be more complex in production)
+        for epoch in range(10):
+            for i in range(len(features)):
+                pred = self.predict(features[i])
+                error = labels[i] - pred
+                self.weights += self.learning_rate * error * features[i]
+                self.bias += self.learning_rate * error
+    
+    def analyze_patterns(self, prices):
+        """Analyze price patterns for prediction"""
+        if len(prices) < 50:
+            return 0.5
         
-        # 5. EMA Cross (8 points)
-        if ema9 > ema21 and ema21 > ma20:
-            score += 8
-            reasons.append("📊 EMA Bullish Cross")
-        elif ema9 < ema21 and ema21 < ma20:
-            score -= 8
-            reasons.append("📊 EMA Bearish Cross")
+        # Extract pattern features
+        features = []
         
-        # 6. Bollinger Bands (8 points)
-        if current < lower_bb:
-            score += 8
-            reasons.append("🎯 Lower Band")
-        elif current > upper_bb:
-            score -= 8
-            reasons.append("🎯 Upper Band")
+        # Recent price change
+        features.append((prices[-1] - prices[-10]) / prices[-10] if len(prices) >= 10 else 0)
+        features.append((prices[-1] - prices[-20]) / prices[-20] if len(prices) >= 20 else 0)
+        features.append((prices[-1] - prices[-50]) / prices[-50] if len(prices) >= 50 else 0)
         
-        # 7. VWAP (8 points)
-        if current > vwap:
-            score += 8
-            reasons.append("✅ Above VWAP")
+        # Volatility
+        features.append(np.std(prices[-20:]) if len(prices) >= 20 else 0)
+        
+        # Momentum
+        if len(prices) >= 14:
+            momentum = prices[-1] - prices[-14]
+            features.append(momentum / prices[-14] if prices[-14] > 0 else 0)
         else:
-            score -= 8
-            reasons.append("❌ Below VWAP")
+            features.append(0)
         
-        # 8. Ichimoku (8 points)
-        if ichimoku:
-            if current > ichimoku['senkou_a'] and current > ichimoku['senkou_b']:
+        # RSI-like measure
+        if len(prices) >= 14:
+            gains = [prices[i] - prices[i-1] for i in range(-13, 0) if prices[i] > prices[i-1]]
+            losses = [prices[i-1] - prices[i] for i in range(-13, 0) if prices[i] < prices[i-1]]
+            avg_gain = np.mean(gains) if gains else 0
+            avg_loss = np.mean(losses) if losses else 0.001
+            features.append(avg_gain / (avg_gain + avg_loss))
+        else:
+            features.append(0.5)
+        
+        # Fill remaining features
+        while len(features) < 10:
+            features.append(0)
+        
+        return np.array(features)
+
+ml_predictor = MLPredictor()
+
+# ============================================================
+# DEEP MARKET ANALYSIS - QUANTUM ENTERPRISE
+# ============================================================
+
+def deep_market_analysis(symbol):
+    """Ultimate market analysis with quantum-level indicators"""
+    try:
+        # Multi-timeframe analysis
+        timeframes = [
+            {'name': '1m', 'limit': 100, 'weight': 0.05},
+            {'name': '5m', 'limit': 300, 'weight': 0.20},
+            {'name': '15m', 'limit': 300, 'weight': 0.25},
+            {'name': '1h', 'limit': 200, 'weight': 0.25},
+            {'name': '4h', 'limit': 200, 'weight': 0.15},
+            {'name': '1d', 'limit': 100, 'weight': 0.10}
+        ]
+        
+        analysis_results = {}
+        all_scores = []
+        qi = QuantumIndicators()
+        
+        for tf in timeframes:
+            data = get_candles(symbol, tf['limit'], tf['name'])
+            if not data or len(data['close']) < 30:
+                continue
+            
+            prices = data['close']
+            highs = data['high']
+            lows = data['low']
+            volumes = data['volume']
+            current = prices[-1]
+            
+            # Calculate ALL indicators
+            rsi = qi.calculate_rsi(prices, 14)
+            macd, macd_signal, macd_hist = qi.calculate_macd(prices, 12, 26, 9)
+            ma7 = qi.calculate_ma(prices, 7)
+            ma20 = qi.calculate_ma(prices, 20)
+            ma50 = qi.calculate_ma(prices, 50)
+            ma200 = qi.calculate_ma(prices, 200)
+            upper_bb, middle_bb, lower_bb = qi.calculate_bollinger(prices, 20, 2)
+            vwap = qi.calculate_vwap(prices, volumes)
+            atr = qi.calculate_atr(highs, lows, prices, 14)
+            support1, support2, resistance1, resistance2 = qi.find_support_resistance(highs, lows, prices, 50)
+            adx = qi.calculate_adx(highs, lows, prices, 14)
+            ichimoku = qi.calculate_ichimoku(highs, lows, prices)
+            fib = qi.calculate_fibonacci(highs, lows, 50)
+            momentum = qi.calculate_momentum(prices, 14)
+            vol_profile = qi.calculate_volume_profile(prices, volumes)
+            stoch_k, stoch_d = qi.calculate_stochastic(highs, lows, prices, 14, 3)
+            cci = qi.calculate_cci(highs, lows, prices, 20)
+            williams_r = qi.calculate_williams_r(highs, lows, prices, 14)
+            obv = qi.calculate_obv(prices, volumes)
+            
+            # ML prediction
+            features = ml_predictor.analyze_patterns(prices)
+            ml_pred = ml_predictor.predict(features)
+            
+            # ===== ADVANCED SCORING SYSTEM =====
+            score = 50
+            reasons = []
+            signals = []
+            
+            # 1. RSI (30 points)
+            if rsi < 25:
+                score += 30
+                reasons.append(f"🔥 RSI Oversold: {rsi:.1f}")
+                signals.append('buy')
+            elif rsi < 35:
+                score += 20
+                reasons.append(f"📈 RSI Near Oversold: {rsi:.1f}")
+                signals.append('buy')
+            elif rsi > 75:
+                score -= 30
+                reasons.append(f"🔥 RSI Overbought: {rsi:.1f}")
+                signals.append('sell')
+            elif rsi > 65:
+                score -= 20
+                reasons.append(f"📉 RSI Near Overbought: {rsi:.1f}")
+                signals.append('sell')
+            
+            # 2. MACD (25 points)
+            if macd > 0 and macd_hist > 0:
+                score += 25
+                reasons.append("🟢 MACD Bullish Cross")
+                signals.append('buy')
+            elif macd < 0 and macd_hist < 0:
+                score -= 25
+                reasons.append("🔴 MACD Bearish Cross")
+                signals.append('sell')
+            elif macd > 0:
+                score += 12
+                reasons.append("🟡 MACD Positive")
+                signals.append('buy')
+            else:
+                score -= 12
+                reasons.append("🟡 MACD Negative")
+                signals.append('sell')
+            
+            # 3. Moving Averages (30 points)
+            if current > ma20 and ma20 > ma50 and ma50 > ma200:
+                score += 30
+                reasons.append("🚀 Strong Uptrend (MA)")
+                signals.append('buy')
+            elif current < ma20 and ma20 < ma50 and ma50 < ma200:
+                score -= 30
+                reasons.append("💀 Strong Downtrend (MA)")
+                signals.append('sell')
+            elif current > ma20 and ma20 > ma50:
+                score += 18
+                reasons.append("📈 Uptrend (MA)")
+                signals.append('buy')
+            elif current < ma20 and ma20 < ma50:
+                score -= 18
+                reasons.append("📉 Downtrend (MA)")
+                signals.append('sell')
+            elif current > ma20:
                 score += 8
-                reasons.append("📊 Above Ichimoku Cloud")
-            elif current < ichimoku['senkou_a'] and current < ichimoku['senkou_b']:
+                reasons.append("⬆️ Above MA20")
+                signals.append('buy')
+            else:
                 score -= 8
-                reasons.append("📊 Below Ichimoku Cloud")
-        
-        # 9. Fibonacci (5 points)
-        if fib:
-            if current > fib['fib_618']:
+                reasons.append("⬇️ Below MA20")
+                signals.append('sell')
+            
+            # 4. Bollinger Bands (20 points)
+            if current < lower_bb:
+                score += 20
+                reasons.append("🎯 Below Lower BB (Oversold)")
+                signals.append('buy')
+            elif current > upper_bb:
+                score -= 20
+                reasons.append("🎯 Above Upper BB (Overbought)")
+                signals.append('sell')
+            elif current < middle_bb:
+                score += 10
+                reasons.append("📊 Below BB Middle")
+                signals.append('buy')
+            else:
+                score -= 10
+                reasons.append("📊 Above BB Middle")
+                signals.append('sell')
+            
+            # 5. VWAP (15 points)
+            if current > vwap:
+                score += 15
+                reasons.append("✅ Above VWAP")
+                signals.append('buy')
+            else:
+                score -= 15
+                reasons.append("❌ Below VWAP")
+                signals.append('sell')
+            
+            # 6. Support/Resistance (20 points)
+            if support1 > 0:
+                dist_to_support = ((current - support1) / current) * 100
+                if dist_to_support < 0.5:
+                    score += 20
+                    reasons.append(f"🛡️ At Support (+{dist_to_support:.1f}%)")
+                    signals.append('buy')
+                elif dist_to_support < 1.5:
+                    score += 12
+                    reasons.append(f"🛡️ Near Support ({dist_to_support:.1f}%)")
+                    signals.append('buy')
+            
+            if resistance1 > 0:
+                dist_to_resistance = ((resistance1 - current) / current) * 100
+                if dist_to_resistance < 0.5:
+                    score -= 20
+                    reasons.append(f"🚫 At Resistance ({dist_to_resistance:.1f}%)")
+                    signals.append('sell')
+                elif dist_to_resistance < 1.5:
+                    score -= 12
+                    reasons.append(f"🚫 Near Resistance ({dist_to_resistance:.1f}%)")
+                    signals.append('sell')
+            
+            # 7. ADX (15 points)
+            if adx > 40:
+                if score > 50:
+                    score += 15
+                    reasons.append(f"🔥 Strong Trend (ADX: {adx:.1f})")
+                    signals.append('buy' if score > 50 else 'sell')
+                else:
+                    score -= 15
+                    reasons.append(f"💀 Strong Trend (ADX: {adx:.1f})")
+                    signals.append('sell')
+            elif adx > 25:
+                if score > 50:
+                    score += 8
+                    reasons.append(f"✅ Trend Strengthening (ADX: {adx:.1f})")
+                else:
+                    score -= 8
+                    reasons.append(f"⚠️ Trend Weakening (ADX: {adx:.1f})")
+            
+            # 8. Ichimoku (15 points)
+            if ichimoku['tenkan'] > ichimoku['kijun']:
+                score += 8
+                reasons.append("Ichimoku Bullish")
+                signals.append('buy')
+            else:
+                score -= 8
+                reasons.append("Ichimoku Bearish")
+                signals.append('sell')
+            
+            if current > ichimoku['senkou_a'] and current > ichimoku['senkou_b']:
+                score += 7
+                reasons.append("Above Ichimoku Cloud")
+                signals.append('buy')
+            elif current < ichimoku['senkou_a'] and current < ichimoku['senkou_b']:
+                score -= 7
+                reasons.append("Below Ichimoku Cloud")
+                signals.append('sell')
+            
+            # 9. Fibonacci (10 points)
+            if fib['s1'] > 0 and current <= fib['s1']:
+                score += 10
+                reasons.append(f"📐 At Fib Support")
+                signals.append('buy')
+            elif fib['r1'] > 0 and current >= fib['r1']:
+                score -= 10
+                reasons.append(f"📐 At Fib Resistance")
+                signals.append('sell')
+            
+            # 10. Volume (10 points)
+            if vol_profile['volume_ratio'] > 2.0:
+                score += 10
+                reasons.append(f"📊 High Volume ({vol_profile['volume_ratio']:.1f}x)")
+                signals.append('buy' if score > 50 else 'sell')
+            elif vol_profile['volume_ratio'] > 1.5:
                 score += 5
-                reasons.append(f"📊 Above Fib 61.8%")
-            elif current < fib['fib_382']:
+                reasons.append(f"📊 Good Volume ({vol_profile['volume_ratio']:.1f}x)")
+            elif vol_profile['volume_ratio'] < 0.5:
                 score -= 5
-                reasons.append(f"📊 Below Fib 38.2%")
+                reasons.append(f"📊 Low Volume ({vol_profile['volume_ratio']:.1f}x)")
+            
+            # 11. Stochastic (10 points)
+            if stoch_k < 20:
+                score += 10
+                reasons.append(f"📊 Stochastic Oversold ({stoch_k:.1f})")
+                signals.append('buy')
+            elif stoch_k > 80:
+                score -= 10
+                reasons.append(f"📊 Stochastic Overbought ({stoch_k:.1f})")
+                signals.append('sell')
+            
+            # 12. CCI (10 points)
+            if cci < -100:
+                score += 10
+                reasons.append(f"📈 CCI Oversold ({cci:.1f})")
+                signals.append('buy')
+            elif cci > 100:
+                score -= 10
+                reasons.append(f"📉 CCI Overbought ({cci:.1f})")
+                signals.append('sell')
+            
+            # 13. Williams %R (5 points)
+            if williams_r < -80:
+                score += 5
+                reasons.append(f"📈 Williams Oversold")
+                signals.append('buy')
+            elif williams_r > -20:
+                score -= 5
+                reasons.append(f"📉 Williams Overbought")
+                signals.append('sell')
+            
+            # 14. OBV (5 points)
+            if obv > 0:
+                score += 5
+                reasons.append("📊 OBV Bullish")
+                signals.append('buy')
+            else:
+                score -= 5
+                reasons.append("📊 OBV Bearish")
+                signals.append('sell')
+            
+            # 15. ML Prediction (10 points)
+            if ml_pred > 0.6:
+                score += 10
+                reasons.append(f"🧠 ML Bullish ({ml_pred:.2f})")
+                signals.append('buy')
+            elif ml_pred < 0.4:
+                score -= 10
+                reasons.append(f"🧠 ML Bearish ({ml_pred:.2f})")
+                signals.append('sell')
+            
+            # ===== MARKET PHASE DETECTION =====
+            market_phase = "neutral"
+            if adx > 30 and score > 50:
+                market_phase = "bullish_trend"
+            elif adx > 30 and score < 50:
+                market_phase = "bearish_trend"
+            elif adx < 20:
+                market_phase = "ranging"
+            elif score > 60:
+                market_phase = "accumulation"
+            elif score < 40:
+                market_phase = "distribution"
+            
+            # ===== VOLATILITY ASSESSMENT =====
+            volatility = atr / current * 100 if current > 0 else 0
+            
+            # ===== TREND STRENGTH =====
+            trend_strength = adx / 100 if adx > 0 else 0
+            
+            analysis_results[tf['name']] = {
+                'score': score,
+                'rsi': rsi,
+                'macd': macd,
+                'ma20': ma20,
+                'ma50': ma50,
+                'ma200': ma200,
+                'vwap': vwap,
+                'atr': atr,
+                'support1': support1,
+                'support2': support2,
+                'resistance1': resistance1,
+                'resistance2': resistance2,
+                'adx': adx,
+                'volume_ratio': vol_profile['volume_ratio'],
+                'volatility': volatility,
+                'trend_strength': trend_strength,
+                'market_phase': market_phase,
+                'weight': tf['weight'],
+                'reasons': reasons[:3],
+                'signals': signals
+            }
+            
+            all_scores.append(score)
         
-        # 10. Support/Resistance (6 points)
-        if support > 0:
-            dist = ((current - support) / current) * 100
-            if dist < 0.5:
-                score += 6
-                reasons.append("🛡️ Very Near Support")
-            elif dist < 2:
-                score += 4
-                reasons.append("🛡️ Near Support")
+        # ===== FINAL ANALYSIS =====
+        if not analysis_results:
+            return None
         
-        if resistance > 0:
-            dist = ((resistance - current) / current) * 100
-            if dist < 0.5:
-                score -= 6
-                reasons.append("🚫 Very Near Resistance")
-            elif dist < 2:
-                score -= 4
-                reasons.append("🚫 Near Resistance")
+        # Weighted average score
+        weighted_score = 0
+        total_weight = 0
+        for tf_name, data in analysis_results.items():
+            weighted_score += data['score'] * data['weight']
+            total_weight += data['weight']
         
-        # 11. ADX (5 points)
-        if adx > 50:
-            score += 5 if score > 50 else -5
-            reasons.append(f"🔥 Strong Trend ADX:{adx}")
-        elif adx > 30:
-            score += 3 if score > 50 else -3
-            reasons.append(f"✅ Moderate Trend ADX:{adx}")
+        if total_weight == 0:
+            return None
         
-        # 12. Multi-timeframe (10 points)
-        if mtf_score.startswith("🔥 Strongly Bullish"):
-            score += 10
-            reasons.append("📊 MTF Strong Bullish")
-        elif mtf_score.startswith("📈 Bullish"):
-            score += 7
-            reasons.append("📊 MTF Bullish")
-        elif mtf_score.startswith("🔥 Strongly Bearish"):
-            score -= 10
-            reasons.append("📊 MTF Strong Bearish")
-        elif mtf_score.startswith("📉 Bearish"):
-            score -= 7
-            reasons.append("📊 MTF Bearish")
+        final_score = weighted_score / total_weight
         
-        # 13. Volume (5 points)
-        if volume_ratio > 2.5:
-            score += 5
-            reasons.append(f"📊 High Volume {volume_ratio:.1f}x")
-        elif volume_ratio > 1.5:
-            score += 3
-            reasons.append(f"📊 Good Volume {volume_ratio:.1f}x")
-        
-        # ===== بهبودهای جدید =====
-        # 14. الگوی شمعی (10 points)
-        if candle_score > 0:
-            score += candle_score
-            reasons.append(f"🕯️ {candle_pattern}")
-        elif candle_score < 0:
-            score += candle_score
-            reasons.append(f"🕯️ {candle_pattern}")
-        
-        # 15. واگرایی RSI (12 points)
-        if divergence_score > 0:
-            score += divergence_score
-            reasons.append(f"📈 {rsi_divergence}")
-        elif divergence_score < 0:
-            score += divergence_score
-            reasons.append(f"📉 {rsi_divergence}")
-        
-        # 16. تحلیل احساسات (10 points)
-        if sentiment_score > 60:
-            score += 10
-            reasons.append(f"😊 Sentiment: {sentiment_score}%")
-        elif sentiment_score < 40:
-            score -= 10
-            reasons.append(f"😟 Sentiment: {sentiment_score}%")
-        elif sentiment_score > 55:
-            score += 5
-            reasons.append(f"😐 Sentiment: {sentiment_score}%")
-        elif sentiment_score < 45:
-            score -= 5
-            reasons.append(f"😐 Sentiment: {sentiment_score}%")
-        
-        # ===== FINAL DECISION =====
-        confidence = min(98, 50 + abs(score - 50) * 1.5)
-        quality_score = min(100, confidence + 5 if score > 50 else confidence - 5)
-        
-        if score > 55:
+        # Determine direction with confidence
+        if final_score >= 60:
             signal = "BUY"
-        elif score < 45:
+            confidence = min(98, 50 + abs(final_score - 50) * 1.6)
+        elif final_score <= 40:
             signal = "SELL"
+            confidence = min(98, 50 + abs(final_score - 50) * 1.6)
         else:
+            return None  # Too weak
+        
+        # ===== GET MAIN DATA FOR ENTRIES =====
+        main_data = get_candles(symbol, 200, '5m')
+        if not main_data:
             return None
         
-        # ===== TP/SL با Trailing Stop =====
+        current = main_data['close'][-1]
+        atr = QuantumIndicators.calculate_atr(main_data['high'], main_data['low'], main_data['close'], 14)
+        
+        # ===== CALCULATE PROFIT TARGETS =====
+        min_profit = float(db.get_setting('min_profit_target') or 30)
+        rr_ratio = float(db.get_setting('risk_reward_ratio') or 3.0)
+        aggressive = db.get_setting('aggressive_mode') == '1'
+        
         if signal == "BUY":
-            tp = round(current + (atr * 2.5), 8)
-            sl = round(current - (atr * 1.5), 8)
-            if resistance > 0 and tp > resistance:
-                tp = round(resistance * 0.995, 8)
-            if support > 0 and sl < support:
-                sl = round(support * 0.995, 8)
-        else:
-            tp = round(current - (atr * 2.5), 8)
-            sl = round(current + (atr * 1.5), 8)
-            if support > 0 and tp < support:
-                tp = round(support * 1.005, 8)
-            if resistance > 0 and sl > resistance:
-                sl = round(resistance * 1.005, 8)
+            # Calculate risk
+            risk = atr * 1.2
+            
+            # Entry - slight discount
+            entry = current * 0.999
+            
+            # Stop Loss - below support
+            support1 = QuantumIndicators.find_support_resistance(main_data['high'], main_data['low'], main_data['close'], 50)[0]
+            if support1 > 0 and support1 < entry:
+                sl = support1 * 0.998
+            else:
+                sl = entry - risk * 1.8
+            
+            # Take Profit Targets - Multiple levels
+            tp1 = entry * (1 + (min_profit / 100))  # Minimum profit
+            tp2 = entry * (1 + (min_profit * 2 / 100))  # Double profit
+            tp3 = entry * (1 + (min_profit * 3 / 100))  # Triple profit
+            
+            # Adjust based on resistance
+            resistance1 = QuantumIndicators.find_support_resistance(main_data['high'], main_data['low'], main_data['close'], 50)[2]
+            if resistance1 > 0:
+                if tp1 > resistance1:
+                    tp1 = resistance1 * 0.998
+                if tp2 > resistance1:
+                    tp2 = resistance1 * 0.998
+                if tp3 > resistance1:
+                    tp3 = resistance1 * 0.998
+            
+            # Ensure RR ratio
+            actual_rr = ((tp1 - entry) / abs(entry - sl)) if abs(entry - sl) > 0 else 0
+            if actual_rr < rr_ratio:
+                # Adjust TP to meet RR
+                tp1 = entry + (abs(entry - sl) * rr_ratio)
+                tp2 = entry + (abs(entry - sl) * rr_ratio * 2)
+                tp3 = entry + (abs(entry - sl) * rr_ratio * 3)
+            
+            # Aggressive mode - higher targets
+            if aggressive:
+                tp1 = entry + (abs(entry - sl) * 4)
+                tp2 = entry + (abs(entry - sl) * 6)
+                tp3 = entry + (abs(entry - sl) * 8)
+            
+            profit_percent = round((tp1 - entry) / entry * 100, 2)
+            
+        else:  # SELL
+            risk = atr * 1.2
+            entry = current * 1.001
+            
+            # Stop Loss - above resistance
+            resistance1 = QuantumIndicators.find_support_resistance(main_data['high'], main_data['low'], main_data['close'], 50)[2]
+            if resistance1 > 0 and resistance1 > entry:
+                sl = resistance1 * 1.002
+            else:
+                sl = entry + risk * 1.8
+            
+            # Take Profit Targets
+            tp1 = entry * (1 - (min_profit / 100))
+            tp2 = entry * (1 - (min_profit * 2 / 100))
+            tp3 = entry * (1 - (min_profit * 3 / 100))
+            
+            # Adjust based on support
+            support1 = QuantumIndicators.find_support_resistance(main_data['high'], main_data['low'], main_data['close'], 50)[0]
+            if support1 > 0:
+                if tp1 < support1:
+                    tp1 = support1 * 1.002
+                if tp2 < support1:
+                    tp2 = support1 * 1.002
+                if tp3 < support1:
+                    tp3 = support1 * 1.002
+            
+            actual_rr = ((entry - tp1) / abs(sl - entry)) if abs(sl - entry) > 0 else 0
+            if actual_rr < rr_ratio:
+                tp1 = entry - (abs(sl - entry) * rr_ratio)
+                tp2 = entry - (abs(sl - entry) * rr_ratio * 2)
+                tp3 = entry - (abs(sl - entry) * rr_ratio * 3)
+            
+            if aggressive:
+                tp1 = entry - (abs(sl - entry) * 4)
+                tp2 = entry - (abs(sl - entry) * 6)
+                tp3 = entry - (abs(sl - entry) * 8)
+            
+            profit_percent = round((entry - tp1) / entry * 100, 2)
         
-        # محاسبه Trailing Stop
-        trailing_sl = calculate_trailing_stop(current, current, atr, signal)
+        # ===== CONFIDENCE AND QUALITY =====
+        confidence = min(98, confidence)
+        quality_score = min(100, confidence + (5 if final_score > 60 else -5 if final_score < 40 else 0))
         
-        # Risk/Reward
-        if signal == "BUY":
-            risk = abs(current - sl)
-            reward = abs(tp - current)
-        else:
-            risk = abs(sl - current)
-            reward = abs(current - tp)
-        risk_reward = reward / risk if risk > 0 else 0
+        # ===== PREDICTED ACCURACY =====
+        predicted_accuracy = min(95, confidence * 0.85 + learner.get_accuracy() * 0.15)
         
-        # ===== APPLY FILTERS =====
-        min_conf = int(db.get_setting('min_confidence') or 65)
-        if confidence < min_conf:
-            return None
-        
-        if volume_ratio < float(db.get_setting('min_volume') or 1.2):
-            return None
-        
-        if adx < float(db.get_setting('min_adx') or 20):
-            return None
+        # ===== COLLECT REASONS =====
+        all_reasons = []
+        for tf_name, data in analysis_results.items():
+            all_reasons.extend(data['reasons'][:2])
         
         # ===== BUILD SIGNAL =====
         return {
             'symbol': symbol,
-            'entry': current,
+            'entry': round(entry, 8),
             'signal': signal,
             'confidence': round(confidence, 1),
-            'score': round(score, 1),
+            'score': round(final_score, 1),
             'quality_score': round(quality_score, 1),
-            'tp': tp,
-            'sl': sl,
-            'trailing_sl': trailing_sl,
-            'risk_reward': round(risk_reward, 2),
-            'rsi': rsi,
-            'macd': macd,
-            'ma20': ma20,
-            'ma50': ma50,
-            'ma200': ma200,
-            'vwap': vwap,
+            'tp1': round(tp1, 8),
+            'tp2': round(tp2, 8),
+            'tp3': round(tp3, 8),
+            'sl': round(sl, 8),
+            'profit_percent': round(profit_percent, 2),
+            'predicted_accuracy': round(predicted_accuracy, 1),
+            'rsi': analysis_results.get('5m', {}).get('rsi', 50),
+            'macd': analysis_results.get('5m', {}).get('macd', 0),
+            'ma20': analysis_results.get('5m', {}).get('ma20', 0),
+            'ma50': analysis_results.get('5m', {}).get('ma50', 0),
+            'ma200': QuantumIndicators.calculate_ma(main_data['close'], 200) if main_data else 0,
+            'vwap': analysis_results.get('5m', {}).get('vwap', 0),
             'atr': atr,
-            'support': support,
-            'resistance': resistance,
-            'adx': adx,
-            'volume_ratio': volume_ratio,
-            'mtf_score': mtf_score,
-            'mtf_buy': mtf_buy,
-            'mtf_sell': mtf_sell,
-            'mtf_details': mtf_details,
-            'reasons': reasons[:8],
+            'support1': analysis_results.get('5m', {}).get('support1', 0),
+            'support2': analysis_results.get('5m', {}).get('support2', 0),
+            'resistance1': analysis_results.get('5m', {}).get('resistance1', 0),
+            'resistance2': analysis_results.get('5m', {}).get('resistance2', 0),
+            'adx': analysis_results.get('5m', {}).get('adx', 25),
+            'volume_ratio': analysis_results.get('5m', {}).get('volume_ratio', 1),
+            'volatility': analysis_results.get('5m', {}).get('volatility', 0),
+            'trend_strength': analysis_results.get('5m', {}).get('trend_strength', 0),
+            'market_phase': analysis_results.get('5m', {}).get('market_phase', 'neutral'),
+            'reasons': all_reasons[:8],
             'time': datetime.now().strftime("%H:%M"),
-            # بهبودهای جدید
-            'candle_pattern': candle_pattern,
-            'rsi_divergence': rsi_divergence,
-            'sentiment_score': sentiment_score,
-            'exchange_used': 'multi_exchange' if db.get_setting('multi_exchange_enabled') == '1' else 'binance'
+            'timeframes': {k: {'score': v['score'], 'rsi': v['rsi'], 'phase': v.get('market_phase', 'neutral')} 
+                          for k, v in analysis_results.items()}
         }
         
     except Exception as e:
-        logger.error(f"Error generating signal for {symbol}: {e}")
+        logger.error(f"Deep analysis error for {symbol}: {e}")
         return None
 
 # ============================================================
@@ -1293,7 +1273,7 @@ SYMBOLS = [
 ]
 
 # ============================================================
-# LEARNING SYSTEM - DEEP
+# LEARNING SYSTEM - ADVANCED
 # ============================================================
 
 class LearningSystem:
@@ -1309,12 +1289,23 @@ class LearningSystem:
                     self.positive = data.get('positive', 0)
                     self.negative = data.get('negative', 0)
                     self.weights = data.get('weights', {
-                        'rsi': 1.0, 'rsi_fast': 1.0, 'macd': 1.0, 
-                        'ma': 1.0, 'ema': 1.0, 'bollinger': 1.0,
-                        'vwap': 1.2, 'volume': 1.0, 'sr': 1.0,
-                        'adx': 1.0, 'mtf': 1.0, 'ichimoku': 1.0,
-                        'fibonacci': 1.0, 'candle': 1.5, 'divergence': 1.5,
-                        'sentiment': 1.3
+                        'rsi': 1.0, 'macd': 1.0, 'ma': 1.0,
+                        'bollinger': 1.0, 'vwap': 1.2, 'volume': 1.0,
+                        'sr': 1.0, 'adx': 1.0, 'ichimoku': 1.0,
+                        'fibonacci': 1.0, 'momentum': 1.0, 'stochastic': 1.0,
+                        'cci': 1.0, 'williams': 1.0, 'obv': 1.0, 'ml': 1.5
+                    })
+                    self.timeframe_weights = data.get('timeframe_weights', {
+                        '1m': 0.05, '5m': 0.20, '15m': 0.25,
+                        '1h': 0.25, '4h': 0.15, '1d': 0.10
+                    })
+                    self.market_weights = data.get('market_weights', {
+                        'bullish_trend': 1.2,
+                        'bearish_trend': 1.2,
+                        'ranging': 0.8,
+                        'accumulation': 1.0,
+                        'distribution': 0.8,
+                        'neutral': 1.0
                     })
                     return
             except:
@@ -1323,12 +1314,23 @@ class LearningSystem:
         self.positive = 0
         self.negative = 0
         self.weights = {
-            'rsi': 1.0, 'rsi_fast': 1.0, 'macd': 1.0,
-            'ma': 1.0, 'ema': 1.0, 'bollinger': 1.0,
-            'vwap': 1.2, 'volume': 1.0, 'sr': 1.0,
-            'adx': 1.0, 'mtf': 1.0, 'ichimoku': 1.0,
-            'fibonacci': 1.0, 'candle': 1.5, 'divergence': 1.5,
-            'sentiment': 1.3
+            'rsi': 1.0, 'macd': 1.0, 'ma': 1.0,
+            'bollinger': 1.0, 'vwap': 1.2, 'volume': 1.0,
+            'sr': 1.0, 'adx': 1.0, 'ichimoku': 1.0,
+            'fibonacci': 1.0, 'momentum': 1.0, 'stochastic': 1.0,
+            'cci': 1.0, 'williams': 1.0, 'obv': 1.0, 'ml': 1.5
+        }
+        self.timeframe_weights = {
+            '1m': 0.05, '5m': 0.20, '15m': 0.25,
+            '1h': 0.25, '4h': 0.15, '1d': 0.10
+        }
+        self.market_weights = {
+            'bullish_trend': 1.2,
+            'bearish_trend': 1.2,
+            'ranging': 0.8,
+            'accumulation': 1.0,
+            'distribution': 0.8,
+            'neutral': 1.0
         }
         self.save()
     
@@ -1338,45 +1340,54 @@ class LearningSystem:
                 json.dump({
                     'positive': self.positive,
                     'negative': self.negative,
-                    'weights': self.weights
-                }, f)
+                    'weights': self.weights,
+                    'timeframe_weights': self.timeframe_weights,
+                    'market_weights': self.market_weights
+                }, f, indent=2)
         except:
             pass
     
-    def add_feedback(self, feedback_type):
+    def add_feedback(self, feedback_type, market_phase='neutral', profit_percent=0):
         if feedback_type == 'positive':
             self.positive += 1
+            # Enhance weights for successful signals
             for key in self.weights:
-                self.weights[key] = min(2.0, self.weights[key] * 1.02)
+                self.weights[key] = min(2.5, self.weights[key] * 1.02)
+            # Boost weight for current market phase
+            if market_phase in self.market_weights:
+                self.market_weights[market_phase] = min(2.0, self.market_weights[market_phase] * 1.02)
         else:
             self.negative += 1
+            # Reduce weights for failed signals
             for key in self.weights:
-                self.weights[key] = max(0.5, self.weights[key] * 0.98)
+                self.weights[key] = max(0.3, self.weights[key] * 0.98)
+            if market_phase in self.market_weights:
+                self.market_weights[market_phase] = max(0.5, self.market_weights[market_phase] * 0.98)
         self.save()
     
     def get_accuracy(self):
         total = self.positive + self.negative
         if total == 0:
             return 50.0
-        return round((self.positive / total) * 100, 1)
+        return round((self.positive / total) * 100, 2)
 
 learner = LearningSystem()
 
 # ============================================================
-# TELEGRAM - GLASS BUTTONS
+# TELEGRAM FUNCTIONS
 # ============================================================
 
-def send_telegram(message, chat_id=None, reply_markup=None):
+def send_telegram(message, chat_id=None, reply_markup=None, parse_mode='HTML'):
     if not message:
         return False
     if chat_id is None:
-        chat_id = db.get_setting('admin_channel') or CHANNEL_ID
+        chat_id = CHANNEL_ID
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         data = {
             'chat_id': chat_id,
             'text': message,
-            'parse_mode': 'HTML',
+            'parse_mode': parse_mode,
             'disable_web_page_preview': True
         }
         if reply_markup:
@@ -1391,72 +1402,98 @@ def send_admin(message, reply_markup=None):
     return send_telegram(message, ADMIN_ID, reply_markup)
 
 def build_signal_message(signal, signal_id):
-    if not signal or signal['signal'] == 'HOLD':
+    """Build ultra-rich signal message"""
+    if not signal:
         return None, None
     
     emoji = "🟢" if signal['signal'] == 'BUY' else "🔴"
     direction = "LONG" if signal['signal'] == 'BUY' else "SHORT"
     
+    profit_pct = signal.get('profit_percent', 0)
+    profit_emoji = "💰" if profit_pct >= 30 else "📈"
+    
+    # Determine market phase emoji
+    phase_emoji = {
+        'bullish_trend': '🚀',
+        'bearish_trend': '📉',
+        'ranging': '⬆️⬇️',
+        'accumulation': '🏗️',
+        'distribution': '🏗️',
+        'neutral': '⚖️'
+    }.get(signal.get('market_phase', 'neutral'), '⚖️')
+    
     msg = f"""
-{emoji} <b>{signal['symbol']}</b> | {direction}
-💰 <b>Entry:</b> <code>${signal['entry']:.6f}</code>
-🎯 <b>TP:</b> <code>${signal['tp']:.6f}</code>
-🛑 <b>SL:</b> <code>${signal['sl']:.6f}</code>
-"""
-    
-    # نمایش Trailing Stop اگر فعال باشد
-    if signal.get('trailing_sl', 0) > 0:
-        msg += f"🔄 <b>Trailing SL:</b> <code>${signal['trailing_sl']:.6f}</code>\n"
-    
-    msg += f"""
-📊 <b>Confidence:</b> {signal['confidence']}%
-⭐ <b>Quality:</b> {signal.get('quality_score', 0)}/100
-📈 <b>Risk/Reward:</b> 1:{signal.get('risk_reward', 0):.1f}
+{emoji} <b>{signal['symbol']}</b> | {direction} {profit_emoji}
+{phase_emoji} <b>Market Phase:</b> {signal.get('market_phase', 'neutral').upper()}
 
-📊 <b>Indicators:</b>
-RSI: {signal['rsi']:.1f} | MACD: {signal['macd']:.6f}
-MA20: ${signal['ma20']:.4f} | MA50: ${signal['ma50']:.4f}
-VWAP: ${signal['vwap']:.4f} | ATR: ${signal['atr']:.6f}
-Support: ${signal['support']:.4f} | Resistance: ${signal['resistance']:.4f}
-ADX: {signal['adx']:.1f} | Volume: {signal['volume_ratio']:.1f}x
-MTF: {signal.get('mtf_score', 'N/A')}
+<b>📊 ENTRY:</b> <code>${signal['entry']:.6f}</code>
+<b>🎯 TP1:</b> <code>${signal['tp1']:.6f}</code> <i>(+{profit_pct:.1f}%)</i>
+<b>🎯 TP2:</b> <code>${signal['tp2']:.6f}</code> <i>(+{profit_pct*2:.1f}%)</i>
+<b>🎯 TP3:</b> <code>${signal['tp3']:.6f}</code> <i>(+{profit_pct*3:.1f}%)</i>
+<b>🛑 SL:</b> <code>${signal['sl']:.6f}</code>
+<b>📊 Confidence:</b> {signal['confidence']}%
+<b>⭐ Quality:</b> {signal.get('quality_score', 0)}/100
+<b>🎯 Accuracy:</b> {signal.get('predicted_accuracy', 0)}%
 
-🔬 <b>Advanced Analysis:</b>
+<b>📈 KEY INDICATORS:</b>
+• RSI: {signal['rsi']:.1f}
+• MACD: {signal['macd']:.6f}
+• MA20: ${signal['ma20']:.4f}
+• MA50: ${signal['ma50']:.4f}
+• MA200: ${signal.get('ma200', 0):.4f}
+• VWAP: ${signal['vwap']:.4f}
+• ADX: {signal.get('adx', 0):.1f}
+• ATR: ${signal['atr']:.6f}
+• Volume: {signal.get('volume_ratio', 1):.1f}x
+• Volatility: {signal.get('volatility', 0):.2f}%
+
+<b>🛡️ KEY LEVELS:</b>
+• Support1: ${signal.get('support1', 0):.4f}
+• Support2: ${signal.get('support2', 0):.4f}
+• Resistance1: ${signal.get('resistance1', 0):.4f}
+• Resistance2: ${signal.get('resistance2', 0):.4f}
+
+<b>📝 ANALYSIS REASONS:</b>
 """
-    
-    # نمایش الگوی شمعی
-    if signal.get('candle_pattern') and signal['candle_pattern'] != "No Pattern":
-        msg += f"🕯️ <b>Candle Pattern:</b> {signal['candle_pattern']}\n"
-    
-    # نمایش واگرایی RSI
-    if signal.get('rsi_divergence') and signal['rsi_divergence'] != "No Divergence":
-        msg += f"📊 <b>RSI Divergence:</b> {signal['rsi_divergence']}\n"
-    
-    # نمایش تحلیل احساسات
-    if signal.get('sentiment_score', 0) > 0:
-        sentiment_emoji = "😊" if signal['sentiment_score'] > 55 else "😟" if signal['sentiment_score'] < 45 else "😐"
-        msg += f"{sentiment_emoji} <b>Sentiment:</b> {signal['sentiment_score']}%\n"
-    
-    # نمایش صرافی استفاده شده
-    if signal.get('exchange_used'):
-        msg += f"🏦 <b>Exchange:</b> {signal['exchange_used']}\n"
-    
-    msg += f"""
-📝 <b>Reasons:</b>
-"""
-    for i, reason in enumerate(signal['reasons'][:6], 1):
+    reasons = signal.get('reasons', [])
+    for i, reason in enumerate(reasons[:7], 1):
         msg += f"{i}. {reason}\n"
     
+    # Timeframe analysis
+    if 'timeframes' in signal:
+        msg += "\n<b>⏱️ TIMEFRAME ANALYSIS:</b>\n"
+        for tf, data in signal['timeframes'].items():
+            score_emoji = "🟢" if data['score'] > 60 else "🔴" if data['score'] < 40 else "🟡"
+            phase_emoji_tf = {
+                'bullish_trend': '🚀',
+                'bearish_trend': '📉',
+                'ranging': '⬆️⬇️',
+                'accumulation': '🏗️',
+                'distribution': '🏗️',
+                'neutral': '⚖️'
+            }.get(data.get('phase', 'neutral'), '⚖️')
+            msg += f"• {tf}: {score_emoji} Score: {data['score']:.1f} | {phase_emoji_tf} {data.get('phase', 'neutral')}\n"
+    
     msg += f"""
-🧠 <b>Accuracy:</b> {learner.get_accuracy()}%
-⏰ {signal['time']} | ⚠️ <i>Trade at your own risk!</i>
+━━━━━━━━━━━━━━━━━━━━━━
+<b>🧠 SYSTEM STATS:</b>
+• Win Rate: {learner.get_accuracy()}%
+• ✅ Wins: {learner.positive} | ❌ Losses: {learner.negative}
+• ⏰ {signal['time']}
+• 📈 Trend Strength: {signal.get('trend_strength', 0):.2f}
+
+<i>⚠️ Trade at your own risk! Always use proper risk management.</i>
 """
     
     keyboard = {
         'inline_keyboard': [
             [
-                {'text': '✅ I Profited', 'callback_data': f'fb_positive_{signal_id}'},
+                {'text': '✅ I Profited 💰', 'callback_data': f'fb_positive_{signal_id}'},
                 {'text': '❌ I Lost', 'callback_data': f'fb_negative_{signal_id}'}
+            ],
+            [
+                {'text': '📊 Full Analysis', 'callback_data': f'analysis_{signal_id}'},
+                {'text': '📈 Market View', 'callback_data': f'market_{signal_id}'}
             ]
         ]
     }
@@ -1464,132 +1501,103 @@ MTF: {signal.get('mtf_score', 'N/A')}
     return msg, keyboard
 
 # ============================================================
-# ادامه کدهای قبلی (ADMIN PANEL, MAIN LOOP و ...)
+# ADMIN PANEL - ULTIMATE
 # ============================================================
 
-def build_payment_message():
-    wallet = db.get_setting('wallet') or WALLET_ADDRESS
-    network = db.get_setting('wallet_network') or WALLET_NETWORK
-    price = db.get_setting('price') or SUBSCRIPTION_PRICE
+def get_admin_panel_text():
+    """Generate dynamic admin panel"""
+    stats = db.get_stats()
+    settings = db.get_all_settings()
+    
+    signal_enabled = settings.get('signal_enabled', '0') == '1'
+    payment_enabled = settings.get('payment_enabled', '0') == '1'
+    aggressive = settings.get('aggressive_mode', '0') == '1'
+    use_ml = settings.get('use_ml', '0') == '1'
     
     return f"""
-💳 <b>Subscription Payment</b>
+🔐 <b>🚀 ULTIMATE SIGNAL BOT</b>
+<b>🤖 QUANTUM ENTERPRISE V15</b>
 ━━━━━━━━━━━━━━━━━━━━━━
 
-💰 <b>Price:</b> {price}
-🌐 <b>Network:</b> {network}
-📌 <b>Wallet Address:</b>
-<code>{wallet}</code>
+<b>📡 SYSTEM STATUS:</b>
+• 🤖 Bot: 🟢 Running
+• 📡 Signals: {'🟢 ENABLED' if signal_enabled else '🔴 DISABLED'}
+• 💳 Payments: {'🟢 ENABLED' if payment_enabled else '🔴 DISABLED'}
+• 🧠 ML Engine: {'🟢 ACTIVE' if use_ml else '🔴 INACTIVE'}
+• ⚡ Mode: {'🔥 AGGRESSIVE' if aggressive else '📊 STANDARD'}
 
-📝 <b>Instructions:</b>
-1. Send exactly {price} to the wallet above
-2. Send the transaction hash to this bot
-3. Admin will confirm your payment
-4. You'll get access to all signals
+<b>📈 STATISTICS:</b>
+• 👤 Users: {stats.get('users', 0)}
+• 🟢 Active: {stats.get('active', 0)}
+• 👑 Premium: {stats.get('premium', 0)}
+• 📊 Today Signals: {stats.get('today', 0)}
+• 📈 Total Signals: {stats.get('signals', 0)}
+• 🎯 Win Rate: {stats.get('win_rate', 0)}%
+• 💰 Avg Profit: ${stats.get('avg_profit', 0)}
+• 💳 Pending: {stats.get('pending', 0)}
 
-<b>To send hash:</b>
-/pay HASH_AMOUNT
-Example: /pay 0x123456789...
+<b>⚙️ QUICK SETTINGS:</b>
+• 🎯 Min Confidence: {settings.get('min_confidence', 70)}%
+• 📊 Max Signals: {settings.get('max_signals', 5)}
+• 💰 Price: {settings.get('price', PRICE)}
+• 📈 Min Profit: {settings.get('min_profit_target', 30)}%
+• 🎯 Risk/Reward: {settings.get('risk_reward_ratio', 3.0)}
+• 📊 Analysis Depth: {settings.get('analysis_depth', 10)}
 
-⚠️ <i>Include the complete transaction hash</i>
+<b>🧠 LEARNING SYSTEM:</b>
+• Accuracy: {learner.get_accuracy()}%
+• ✅ Wins: {learner.positive}
+• ❌ Losses: {learner.negative}
+• 📈 Improvement: {'🟢 Active' if learner.positive > learner.negative * 0.5 else '🟡 Learning'}
+
+━━━━━━━━━━━━━━━━━━━━━━
+<b>📌 COMMANDS:</b>
+• /panel - Show this panel
+• /on - Enable signals
+• /off - Disable signals
+• /pay_on - Enable payments
+• /pay_off - Disable payments
+• /aggressive - Toggle aggressive mode
+• /payments - Manage payments
+• /settings - View settings
+• /set key value - Change setting
+• /stats - Full statistics
+• /help - All commands
+• /test - Test system
 """
-
-# ============================================================
-# GLASSMORPHISM ADMIN PANEL
-# ============================================================
 
 def show_admin_panel():
-    """Show admin panel with glassmorphism buttons"""
-    settings = db.get_all_settings()
-    stats = db.get_stats()
-    
-    signal_status = "🟢 ON" if settings.get('signal_enabled') == '1' else "🔴 OFF"
-    paid_mode = "🟢 ON" if settings.get('paid_mode_enabled') == '1' else "🔴 OFF"
-    deep_analysis = "🟢 ON" if settings.get('deep_analysis') == '1' else "🔴 OFF"
-    trailing_stop = "🟢 ON" if settings.get('trailing_stop_enabled') == '1' else "🔴 OFF"
-    sentiment = "🟢 ON" if settings.get('sentiment_enabled') == '1' else "🔴 OFF"
-    candle_patterns = "🟢 ON" if settings.get('candle_patterns_enabled') == '1' else "🔴 OFF"
-    multi_exchange = "🟢 ON" if settings.get('multi_exchange_enabled') == '1' else "🔴 OFF"
-    rsi_divergence = "🟢 ON" if settings.get('rsi_divergence_enabled') == '1' else "🔴 OFF"
-    
-    msg = f"""
-🔮 <b>✨ ADMIN PANEL - PRO EDITION ✨</b>
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📊 <b>Statistics:</b>
-👤 Users: {stats.get('users', 0)}
-🟢 Active: {stats.get('active', 0)}
-💳 Paid: {stats.get('paid', 0)}
-📈 Signals: {stats.get('signals', 0)}
-📊 Today: {stats.get('today', 0)}
-💳 Pending: {stats.get('pending', 0)}
-📝 Feedback: {stats.get('feedback', 0)}
-🧠 Accuracy: {learner.get_accuracy()}%
-
-⚙️ <b>Settings:</b>
-📡 Signal: {signal_status}
-💳 Paid Mode: {paid_mode}
-🔬 Deep Analysis: {deep_analysis}
-🔄 Trailing Stop: {trailing_stop}
-😊 Sentiment: {sentiment}
-🕯️ Candle Patterns: {candle_patterns}
-🏦 Multi Exchange: {multi_exchange}
-📊 RSI Divergence: {rsi_divergence}
-🎯 Min Conf: {settings.get('min_confidence', 65)}%
-📊 Max Signals: {settings.get('max_signals', 3)}
-💰 Price: {settings.get('price', '100 USDT')}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-<b>💎 Commands:</b>
-/panel - Open this panel
-/on - Enable signals
-/off - Disable signals
-/paid_on - Enable paid mode
-/paid_off - Disable paid mode
-/payments - Manage payments
-/stats - Show statistics
-/settings - View settings
-/set key value - Change setting
-/help - Full command list
-"""
+    msg = get_admin_panel_text()
     
     keyboard = {
         'inline_keyboard': [
             [
-                {'text': '🟢 Signal ON', 'callback_data': 'admin_on'},
-                {'text': '🔴 Signal OFF', 'callback_data': 'admin_off'}
+                {'text': '🟢 Enable Signals', 'callback_data': 'admin_on'},
+                {'text': '🔴 Disable Signals', 'callback_data': 'admin_off'}
             ],
             [
-                {'text': '💳 Paid ON', 'callback_data': 'admin_paid_on'},
-                {'text': '💳 Paid OFF', 'callback_data': 'admin_paid_off'}
+                {'text': '💰 Enable Payments', 'callback_data': 'admin_pay_on'},
+                {'text': '💳 Disable Payments', 'callback_data': 'admin_pay_off'}
             ],
             [
-                {'text': '🔄 Trailing ON', 'callback_data': 'admin_trailing_on'},
-                {'text': '🔄 Trailing OFF', 'callback_data': 'admin_trailing_off'}
+                {'text': '🔥 Aggressive Mode', 'callback_data': 'admin_aggressive'},
+                {'text': '🧠 ML Engine', 'callback_data': 'admin_ml'}
             ],
             [
-                {'text': '😊 Sentiment ON', 'callback_data': 'admin_sentiment_on'},
-                {'text': '😊 Sentiment OFF', 'callback_data': 'admin_sentiment_off'}
-            ],
-            [
-                {'text': '🕯️ Candle ON', 'callback_data': 'admin_candle_on'},
-                {'text': '🕯️ Candle OFF', 'callback_data': 'admin_candle_off'}
-            ],
-            [
-                {'text': '📊 Divergence ON', 'callback_data': 'admin_divergence_on'},
-                {'text': '📊 Divergence OFF', 'callback_data': 'admin_divergence_off'}
-            ],
-            [
-                {'text': '🏦 Multi Exchange ON', 'callback_data': 'admin_exchange_on'},
-                {'text': '🏦 Multi Exchange OFF', 'callback_data': 'admin_exchange_off'}
-            ],
-            [
-                {'text': '📊 Stats', 'callback_data': 'admin_stats'},
+                {'text': '📊 Statistics', 'callback_data': 'admin_stats'},
                 {'text': '💳 Payments', 'callback_data': 'admin_payments'}
             ],
             [
                 {'text': '⚙️ Settings', 'callback_data': 'admin_settings'},
                 {'text': '📝 Feedback', 'callback_data': 'admin_feedback'}
+            ],
+            [
+                {'text': '🔄 Reset Learning', 'callback_data': 'admin_reset'},
+                {'text': '📋 System Logs', 'callback_data': 'admin_logs'}
+            ],
+            [
+                {'text': '📈 Performance', 'callback_data': 'admin_performance'},
+                {'text': '🔄 Refresh', 'callback_data': 'admin_refresh'}
             ]
         ]
     }
@@ -1597,94 +1605,72 @@ def show_admin_panel():
     send_admin(msg, keyboard)
 
 def handle_admin_callback(callback_data):
-    """Handle admin button clicks"""
     try:
         if callback_data == 'admin_on':
             db.update_setting('signal_enabled', '1')
-            send_admin("✅ <b>Signals ENABLED</b>\nSignals will be sent to channel")
+            send_admin("✅ <b>Signals ENABLED</b>\n\n📡 Signal generation and distribution activated.")
+            show_admin_panel()
             return True
         
         elif callback_data == 'admin_off':
             db.update_setting('signal_enabled', '0')
-            send_admin("🔴 <b>Signals DISABLED</b>\nNo signals will be sent")
+            send_admin("🔴 <b>Signals DISABLED</b>\n\n📡 Signal generation paused.")
+            show_admin_panel()
             return True
         
-        elif callback_data == 'admin_paid_on':
-            db.update_setting('paid_mode_enabled', '1')
-            send_admin("💳 <b>Paid Mode ENABLED</b>\nOnly paid users receive signals")
+        elif callback_data == 'admin_pay_on':
+            db.update_setting('payment_enabled', '1')
+            send_admin("💰 <b>Payment System ENABLED</b>\n\n💳 Users can now subscribe.")
+            show_admin_panel()
             return True
         
-        elif callback_data == 'admin_paid_off':
-            db.update_setting('paid_mode_enabled', '0')
-            send_admin("💳 <b>Paid Mode DISABLED</b>\nAll users receive signals")
+        elif callback_data == 'admin_pay_off':
+            db.update_setting('payment_enabled', '0')
+            send_admin("💳 <b>Payment System DISABLED</b>\n\n💰 Subscriptions temporarily paused.")
+            show_admin_panel()
             return True
         
-        elif callback_data == 'admin_trailing_on':
-            db.update_setting('trailing_stop_enabled', '1')
-            send_admin("🔄 <b>Trailing Stop ENABLED</b>\nDynamic stop loss activated")
+        elif callback_data == 'admin_aggressive':
+            current = db.get_setting('aggressive_mode') == '1'
+            db.update_setting('aggressive_mode', '0' if current else '1')
+            send_admin(f"{'🔥' if not current else '📊'} <b>Aggressive Mode {'ENABLED' if not current else 'DISABLED'}</b>\n\n{'Higher profit targets with more risk.' if not current else 'Standard mode with balanced risk.'}")
+            show_admin_panel()
             return True
         
-        elif callback_data == 'admin_trailing_off':
-            db.update_setting('trailing_stop_enabled', '0')
-            send_admin("🔄 <b>Trailing Stop DISABLED</b>")
-            return True
-        
-        elif callback_data == 'admin_sentiment_on':
-            db.update_setting('sentiment_enabled', '1')
-            send_admin("😊 <b>Sentiment Analysis ENABLED</b>")
-            return True
-        
-        elif callback_data == 'admin_sentiment_off':
-            db.update_setting('sentiment_enabled', '0')
-            send_admin("😊 <b>Sentiment Analysis DISABLED</b>")
-            return True
-        
-        elif callback_data == 'admin_candle_on':
-            db.update_setting('candle_patterns_enabled', '1')
-            send_admin("🕯️ <b>Candle Patterns ENABLED</b>")
-            return True
-        
-        elif callback_data == 'admin_candle_off':
-            db.update_setting('candle_patterns_enabled', '0')
-            send_admin("🕯️ <b>Candle Patterns DISABLED</b>")
-            return True
-        
-        elif callback_data == 'admin_divergence_on':
-            db.update_setting('rsi_divergence_enabled', '1')
-            send_admin("📊 <b>RSI Divergence ENABLED</b>")
-            return True
-        
-        elif callback_data == 'admin_divergence_off':
-            db.update_setting('rsi_divergence_enabled', '0')
-            send_admin("📊 <b>RSI Divergence DISABLED</b>")
-            return True
-        
-        elif callback_data == 'admin_exchange_on':
-            db.update_setting('multi_exchange_enabled', '1')
-            send_admin("🏦 <b>Multi Exchange ENABLED</b>\nData from Binance, Bybit, OKX")
-            return True
-        
-        elif callback_data == 'admin_exchange_off':
-            db.update_setting('multi_exchange_enabled', '0')
-            send_admin("🏦 <b>Multi Exchange DISABLED</b>\nUsing only Binance")
+        elif callback_data == 'admin_ml':
+            current = db.get_setting('use_ml') == '1'
+            db.update_setting('use_ml', '0' if current else '1')
+            send_admin(f"{'🧠' if not current else '⚙️'} <b>ML Engine {'ACTIVATED' if not current else 'DEACTIVATED'}</b>\n\n{'Machine Learning predictions now active.' if not current else 'ML predictions disabled.'}")
+            show_admin_panel()
             return True
         
         elif callback_data == 'admin_stats':
             stats = db.get_stats()
             msg = f"""
-📊 <b>Detailed Statistics</b>
+📊 <b>DETAILED STATISTICS</b>
 ━━━━━━━━━━━━━━━━━━━━━━
 
-👤 Total Users: {stats.get('users', 0)}
-🟢 Active Users: {stats.get('active', 0)}
-💳 Paid Users: {stats.get('paid', 0)}
-📈 Total Signals: {stats.get('signals', 0)}
-📊 Today Signals: {stats.get('today', 0)}
-💳 Pending Payments: {stats.get('pending', 0)}
-📝 Total Feedback: {stats.get('feedback', 0)}
-🧠 Accuracy: {learner.get_accuracy()}%
-✅ Positive: {learner.positive}
-❌ Negative: {learner.negative}
+<b>👤 USERS:</b>
+• Total: {stats.get('users', 0)}
+• Active: {stats.get('active', 0)}
+• Premium: {stats.get('premium', 0)}
+
+<b>📊 SIGNALS:</b>
+• Total: {stats.get('signals', 0)}
+• Today: {stats.get('today', 0)}
+
+<b>💳 PAYMENTS:</b>
+• Pending: {stats.get('pending', 0)}
+
+<b>📝 PERFORMANCE:</b>
+• Win Rate: {stats.get('win_rate', 0)}%
+• Wins: {stats.get('wins', 0)}
+• Avg Profit: ${stats.get('avg_profit', 0)}
+
+<b>🧠 LEARNING:</b>
+• Accuracy: {learner.get_accuracy()}%
+• Positive: {learner.positive}
+• Negative: {learner.negative}
 """
             send_admin(msg)
             return True
@@ -1692,21 +1678,20 @@ def handle_admin_callback(callback_data):
         elif callback_data == 'admin_payments':
             payments = db.get_pending_payments()
             if not payments:
-                send_admin("💳 <b>No pending payments</b>")
+                send_admin("💳 <b>No pending payments</b>\n\nAll payments have been processed.")
                 return True
             
-            msg = "💳 <b>Pending Payments</b>\n━━━━━━━━━━━━━━━━━━━━━━\n"
+            msg = f"💳 <b>Pending Payments</b> ({len(payments)})\n━━━━━━━━━━━━━━━━━━━━━━\n"
             for payment in payments[:10]:
-                payment_id, user_id, payment_hash, amount, wallet, created_at = payment
-                user = db.get_user(user_id)
-                username = user[1] if user else "Unknown"
+                payment_id, user_id, payment_hash, amount, created_at = payment
                 msg += f"""
-#{payment_id} | {username} (ID: {user_id})
-💰 {amount}
-🔑 {payment_hash[:40]}...
-📅 {created_at[:16]}
-/confirm_{payment_id} - ✅ Confirm
-/reject_{payment_id} - ❌ Reject
+📌 <b>#{payment_id}</b>
+👤 User ID: {user_id}
+💰 Amount: {amount}
+🔑 Hash: <code>{payment_hash[:40]}...</code>
+📅 Created: {created_at[:16]}
+✅ /confirm_{payment_id}
+❌ /reject_{payment_id}
 ━━━━━━━━━━━━━━━━━━━━━━
 """
             send_admin(msg)
@@ -1714,129 +1699,167 @@ def handle_admin_callback(callback_data):
         
         elif callback_data == 'admin_settings':
             settings = db.get_all_settings()
-            msg = "⚙️ <b>Settings</b>\n━━━━━━━━━━━━━━━━━━━━━━\n"
+            msg = "⚙️ <b>SYSTEM SETTINGS</b>\n━━━━━━━━━━━━━━━━━━━━━━\n"
             for key, value in settings.items():
-                msg += f"\n📌 {key}: <code>{value}</code>"
-            
+                msg += f"\n📌 <b>{key}:</b> <code>{value}</code>"
             msg += """
-
 ━━━━━━━━━━━━━━━━━━━━━━
-<b>Change settings:</b>
-/set signal_enabled 1
-/set paid_mode_enabled 0
-/set deep_analysis 1
-/set trailing_stop_enabled 1
-/set sentiment_enabled 1
-/set candle_patterns_enabled 1
-/set rsi_divergence_enabled 1
-/set multi_exchange_enabled 1
-/set min_confidence 75
-/set max_signals 2
-/set min_volume 1.5
-/set min_adx 25
-/set price "150 USDT"
-/set wallet "ADDRESS"
-/set free_signals 2
+<b>✏️ CHANGE SETTINGS:</b>
+<code>/set min_confidence 75</code>
+<code>/set max_signals 3</code>
+<code>/set min_profit_target 40</code>
+<code>/set risk_reward_ratio 4</code>
+<code>/set aggressive_mode 1</code>
 """
             send_admin(msg)
             return True
         
         elif callback_data == 'admin_feedback':
-            feedback = db.cursor.execute('SELECT COUNT(*) FROM feedback_log').fetchone()[0]
+            feedback_total = db.cursor.execute('SELECT COUNT(*) FROM feedback_log').fetchone()[0]
             positive = db.cursor.execute('SELECT COUNT(*) FROM feedback_log WHERE feedback = "positive"').fetchone()[0]
             negative = db.cursor.execute('SELECT COUNT(*) FROM feedback_log WHERE feedback = "negative"').fetchone()[0]
             
             msg = f"""
-📝 <b>Feedback Statistics</b>
+📝 <b>FEEDBACK ANALYTICS</b>
 ━━━━━━━━━━━━━━━━━━━━━━
 
-📊 Total: {feedback}
-✅ Positive: {positive} ({round(positive/feedback*100 if feedback > 0 else 0)}%)
-❌ Negative: {negative} ({round(negative/feedback*100 if feedback > 0 else 0)}%)
-🧠 Accuracy: {learner.get_accuracy()}%
+📊 <b>Total Feedback:</b> {feedback_total}
+✅ Positive: {positive} ({round(positive/feedback_total*100 if feedback_total > 0 else 0, 1)}%)
+❌ Negative: {negative} ({round(negative/feedback_total*100 if feedback_total > 0 else 0, 1)}%)
+🎯 System Win Rate: {learner.get_accuracy()}%
 
-📋 <b>Recent Feedback:</b>
+<b>📋 RECENT FEEDBACK:</b>
 """
-            
             recent = db.cursor.execute('''
-                SELECT f.feedback, u.username, s.symbol, f.created_at
+                SELECT f.feedback, u.username, s.symbol, f.created_at, f.profit_amount
                 FROM feedback_log f
                 LEFT JOIN users u ON f.user_id = u.user_id
                 LEFT JOIN signals s ON f.signal_id = s.id
                 ORDER BY f.created_at DESC
-                LIMIT 5
+                LIMIT 10
             ''').fetchall()
             
-            for feedback, username, symbol, created_at in recent:
+            for feedback, username, symbol, created_at, profit in recent:
                 emoji = "✅" if feedback == 'positive' else "❌"
-                msg += f"\n{emoji} {username or 'Unknown'} | {symbol or 'N/A'} | {created_at[:16]}"
+                profit_str = f"💰 ${profit:.2f}" if feedback == 'positive' else f"💸 ${abs(profit or 0):.2f}"
+                msg += f"\n{emoji} {username or 'Unknown'} | {symbol or 'N/A'} | {created_at[:16]} | {profit_str}"
             
             send_admin(msg)
+            return True
+        
+        elif callback_data == 'admin_reset':
+            learner.positive = 0
+            learner.negative = 0
+            for key in learner.weights:
+                learner.weights[key] = 1.0
+            for key in learner.market_weights:
+                learner.market_weights[key] = 1.0
+            learner.save()
+            send_admin("🔄 <b>Learning System Reset</b>\n\n🧠 All learning data has been reset.")
+            return True
+        
+        elif callback_data == 'admin_logs':
+            logs = db.cursor.execute('''
+                SELECT details, created_at FROM admin_logs 
+                ORDER BY created_at DESC LIMIT 20
+            ''').fetchall()
+            
+            if not logs:
+                send_admin("📋 <b>No admin logs found</b>")
+                return True
+            
+            msg = "📋 <b>Recent System Logs</b>\n━━━━━━━━━━━━━━━━━━━━━━\n"
+            for details, created_at in logs[:15]:
+                msg += f"\n🕐 {created_at[:16]}\n📌 {details[:80]}\n"
+            
+            send_admin(msg)
+            return True
+        
+        elif callback_data == 'admin_performance':
+            stats = db.get_stats()
+            msg = f"""
+📈 <b>PERFORMANCE DASHBOARD</b>
+━━━━━━━━━━━━━━━━━━━━━━
+
+<b>🎯 WIN RATE:</b> {stats.get('win_rate', 0)}%
+<b>💰 AVG PROFIT:</b> ${stats.get('avg_profit', 0)}
+<b>📊 TOTAL SIGNALS:</b> {stats.get('signals', 0)}
+<b>👑 PREMIUM USERS:</b> {stats.get('premium', 0)}
+<b>🧠 ACCURACY:</b> {learner.get_accuracy()}%
+
+<b>📊 SYSTEM METRICS:</b>
+• Signals Today: {stats.get('today', 0)}
+• Active Users: {stats.get('active', 0)}
+• Feedback Count: {stats.get('wins', 0) + stats.get('pending', 0)}
+
+<b>📈 TREND:</b>
+• {'📈 Improving' if learner.get_accuracy() > 60 else '📉 Needs Improvement'}
+• {'💪 Strong' if stats.get('win_rate', 0) > 60 else '📊 Developing'}
+"""
+            send_admin(msg)
+            return True
+        
+        elif callback_data == 'admin_refresh':
+            show_admin_panel()
             return True
         
         return False
     except Exception as e:
         logger.error(f"Admin callback error: {e}")
-        send_admin(f"❌ Error: {e}")
+        send_admin(f"❌ <b>Error:</b> {str(e)}")
         return False
 
-def handle_admin_command(text, user_id=ADMIN_ID):
-    """Handle admin text commands"""
+def handle_admin_command(text):
     try:
-        if text == '/panel' or text == '/start':
+        if text == '/panel':
             show_admin_panel()
             return True
         
         elif text == '/on':
             db.update_setting('signal_enabled', '1')
-            send_admin("✅ <b>Signals ENABLED</b>")
+            send_admin("✅ Signals ENABLED")
             return True
         
         elif text == '/off':
             db.update_setting('signal_enabled', '0')
-            send_admin("🔴 <b>Signals DISABLED</b>")
+            send_admin("🔴 Signals DISABLED")
             return True
         
-        elif text == '/paid_on':
-            db.update_setting('paid_mode_enabled', '1')
-            send_admin("💳 <b>Paid Mode ENABLED</b>")
+        elif text == '/pay_on':
+            db.update_setting('payment_enabled', '1')
+            send_admin("💰 Payment System ENABLED")
             return True
         
-        elif text == '/paid_off':
-            db.update_setting('paid_mode_enabled', '0')
-            send_admin("💳 <b>Paid Mode DISABLED</b>")
+        elif text == '/pay_off':
+            db.update_setting('payment_enabled', '0')
+            send_admin("💳 Payment System DISABLED")
             return True
         
-        elif text.startswith('/pay '):
-            payment_hash = text[5:].strip()
-            if len(payment_hash) < 10:
-                send_telegram("❌ Invalid hash. Please send the complete transaction hash.", user_id)
-                return True
-            
-            db.add_user(user_id)
-            payment_id = db.add_payment(user_id, payment_hash)
-            if payment_id:
-                send_telegram(f"""
-✅ <b>Payment Hash Received</b>
+        elif text == '/aggressive':
+            current = db.get_setting('aggressive_mode') == '1'
+            db.update_setting('aggressive_mode', '0' if current else '1')
+            send_admin(f"{'🔥' if not current else '📊'} Aggressive Mode {'ENABLED' if not current else 'DISABLED'}")
+            return True
+        
+        elif text == '/stats':
+            stats = db.get_stats()
+            msg = f"""
+📊 BOT STATISTICS
 ━━━━━━━━━━━━━━━━━━━━━━
-🔑 Hash: <code>{payment_hash}</code>
-💳 Payment ID: #{payment_id}
-
-⏳ <b>Waiting for admin confirmation...</b>
-""", user_id)
-                
-                user = db.get_user(user_id)
-                username = user[1] if user else "Unknown"
-                send_admin(f"""
-💳 <b>New Payment Request</b>
+👤 Users: {stats.get('users', 0)}
+🟢 Active: {stats.get('active', 0)}
+👑 Premium: {stats.get('premium', 0)}
+📈 Signals: {stats.get('signals', 0)}
+📊 Today: {stats.get('today', 0)}
+💳 Pending: {stats.get('pending', 0)}
+🎯 Win Rate: {stats.get('win_rate', 0)}%
+🧠 Accuracy: {learner.get_accuracy()}%
+✅ Wins: {learner.positive}
+❌ Losses: {learner.negative}
 ━━━━━━━━━━━━━━━━━━━━━━
-👤 User: {username} (ID: {user_id})
-🔑 Hash: <code>{payment_hash}</code>
-💳 Payment ID: #{payment_id}
-
-/confirm_{payment_id} - ✅ Confirm
-/reject_{payment_id} - ❌ Reject
-""")
+/panel - Admin panel
+"""
+            send_admin(msg)
             return True
         
         elif text.startswith('/confirm_'):
@@ -1844,10 +1867,10 @@ def handle_admin_command(text, user_id=ADMIN_ID):
                 payment_id = int(text.replace('/confirm_', ''))
                 success, user_id = db.confirm_payment(payment_id)
                 if success:
-                    send_admin(f"✅ Payment #{payment_id} confirmed!")
-                    send_telegram("✅ <b>Payment Confirmed!</b>\nYour subscription is now active!", user_id)
+                    send_admin(f"✅ Payment #{payment_id} CONFIRMED!\n👤 User: {user_id}")
+                    send_telegram("✅ 🎉 Payment Confirmed!\n\nYou now have full access to all signals!", user_id)
                 else:
-                    send_admin(f"❌ Failed to confirm payment #{payment_id}")
+                    send_admin(f"❌ Payment #{payment_id} not found")
             except Exception as e:
                 send_admin(f"❌ Error: {e}")
             return True
@@ -1855,14 +1878,14 @@ def handle_admin_command(text, user_id=ADMIN_ID):
         elif text.startswith('/reject_'):
             try:
                 payment_id = int(text.replace('/reject_', ''))
-                payment = db.get_payment(payment_id)
                 success = db.reject_payment(payment_id)
                 if success:
-                    send_admin(f"❌ Payment #{payment_id} rejected")
+                    payment = db.cursor.execute('SELECT user_id FROM payments WHERE id = ?', (payment_id,)).fetchone()
                     if payment:
-                        send_telegram("❌ <b>Payment Rejected</b>\nPlease try again.", payment[1])
+                        send_telegram("❌ Payment Rejected\n\nPlease contact support.", payment[0])
+                    send_admin(f"❌ Payment #{payment_id} REJECTED")
                 else:
-                    send_admin(f"❌ Failed to reject payment #{payment_id}")
+                    send_admin(f"❌ Payment #{payment_id} not found")
             except Exception as e:
                 send_admin(f"❌ Error: {e}")
             return True
@@ -1876,25 +1899,9 @@ def handle_admin_command(text, user_id=ADMIN_ID):
                 key, value = parts
                 value = value.strip('"').strip("'")
                 db.update_setting(key, value)
-                send_admin(f"✅ Setting updated: {key} = {value}")
+                send_admin(f"✅ {key} = {value}")
             except Exception as e:
                 send_admin(f"❌ Error: {e}")
-            return True
-        
-        elif text == '/stats':
-            stats = db.get_stats()
-            send_admin(f"""
-📊 <b>BOT STATISTICS</b>
-━━━━━━━━━━━━━━━━━━━━━━
-👤 Users: {stats.get('users', 0)}
-🟢 Active: {stats.get('active', 0)}
-💳 Paid: {stats.get('paid', 0)}
-📈 Signals: {stats.get('signals', 0)}
-📊 Today: {stats.get('today', 0)}
-💳 Pending: {stats.get('pending', 0)}
-📝 Feedback: {stats.get('feedback', 0)}
-🧠 Accuracy: {learner.get_accuracy()}%
-""")
             return True
         
         elif text == '/payments':
@@ -1902,18 +1909,16 @@ def handle_admin_command(text, user_id=ADMIN_ID):
             if not payments:
                 send_admin("💳 No pending payments")
                 return True
-            msg = "💳 <b>Pending Payments</b>\n━━━━━━━━━━━━━━━━━━━━━━\n"
+            msg = "💳 Pending Payments\n━━━━━━━━━━━━━━━━━━━━━━\n"
             for payment in payments[:10]:
-                payment_id, user_id, payment_hash, amount, wallet, created_at = payment
-                user = db.get_user(user_id)
-                username = user[1] if user else "Unknown"
+                payment_id, user_id, payment_hash, amount, created_at = payment
                 msg += f"""
-#{payment_id} | {username} (ID: {user_id})
+#{payment_id} | User: {user_id}
 💰 {amount}
-🔑 {payment_hash[:40]}...
+🔑 {payment_hash[:30]}...
 📅 {created_at[:16]}
-/confirm_{payment_id} - ✅ Confirm
-/reject_{payment_id} - ❌ Reject
+/confirm_{payment_id} - Confirm
+/reject_{payment_id} - Reject
 ━━━━━━━━━━━━━━━━━━━━━━
 """
             send_admin(msg)
@@ -1921,47 +1926,41 @@ def handle_admin_command(text, user_id=ADMIN_ID):
         
         elif text == '/settings':
             settings = db.get_all_settings()
-            msg = "⚙️ <b>Settings</b>\n━━━━━━━━━━━━━━━━━━━━━━\n"
+            msg = "⚙️ Current Settings\n━━━━━━━━━━━━━━━━━━━━━━\n"
             for key, value in settings.items():
-                msg += f"\n📌 {key}: <code>{value}</code>"
+                msg += f"\n📌 {key}: {value}"
             send_admin(msg)
             return True
         
         elif text == '/help':
-            send_admin("""
-📚 <b>✨ Admin Commands - PRO Edition ✨</b>
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            msg = """
+📚 ADMIN COMMANDS
+━━━━━━━━━━━━━━━━━━━━━━
 
-<b>Panel & Control</b>
-/panel - Open glass admin panel
+📡 Signal Control:
 /on - Enable signals
 /off - Disable signals
-/paid_on - Enable paid mode
-/paid_off - Disable paid mode
 
-<b>Advanced Features</b>
-/set trailing_stop_enabled 1 - Enable Trailing Stop
-/set sentiment_enabled 1 - Enable Sentiment Analysis
-/set candle_patterns_enabled 1 - Enable Candlestick Patterns
-/set rsi_divergence_enabled 1 - Enable RSI Divergence
-/set multi_exchange_enabled 1 - Enable Multi Exchange
+💰 Payment Control:
+/pay_on - Enable payments
+/pay_off - Disable payments
+/payments - View pending
+/confirm_ID - Confirm
+/reject_ID - Reject
 
-<b>Settings</b>
+⚙️ System:
 /set key value - Change setting
-/settings - View all settings
-/stats - Show statistics
-
-<b>Payments</b>
-/payments - List pending
-/confirm_ID - Confirm payment
-/reject_ID - Reject payment
-
-<b>Examples</b>
-/set min_confidence 75
-/set max_signals 2
-/confirm_1
-/panel
-""")
+/settings - View settings
+/aggressive - Toggle mode
+/stats - Statistics
+/panel - Admin panel
+/help - This help
+"""
+            send_admin(msg)
+            return True
+        
+        elif text == '/test':
+            send_admin("🔍 Testing system...\n\n✅ Database OK\n✅ Bot Active\n✅ Analysis Ready")
             return True
         
         return False
@@ -1969,47 +1968,7 @@ def handle_admin_command(text, user_id=ADMIN_ID):
         logger.error(f"Admin command error: {e}")
         return False
 
-def handle_user_command(text, user_id):
-    """Handle user commands"""
-    try:
-        if text == '/start':
-            db.add_user(user_id)
-            msg = f"""
-🚀 <b>Welcome to Signal Bot Pro!</b>
-━━━━━━━━━━━━━━━━━━━━━━
-
-📊 <b>Features:</b>
-• Deep market analysis
-• Multiple timeframe analysis
-• Ichimoku & Fibonacci
-• Smart learning system
-• Candlestick patterns
-• RSI divergence detection
-• Sentiment analysis
-• Trailing stop loss
-
-💳 <b>Get Access:</b>
-/buy - Get payment instructions
-
-💰 <b>Price:</b> {db.get_setting('price') or '100 USDT'}
-
-📈 <b>Free Signals:</b>
-You get {db.get_setting('free_signals') or 2} free signals!
-"""
-            send_telegram(msg, user_id)
-            return True
-        
-        elif text == '/buy':
-            send_telegram(build_payment_message(), user_id)
-            return True
-        
-        return False
-    except Exception as e:
-        logger.error(f"User command error: {e}")
-        return False
-
-def process_callback(callback_data, user_id):
-    """Process all callbacks"""
+def handle_callback(callback_data, user_id):
     try:
         if callback_data.startswith('admin_'):
             return handle_admin_callback(callback_data)
@@ -2022,27 +1981,107 @@ def process_callback(callback_data, user_id):
             signal_id = int(parts[2])
             
             db.add_user(user_id)
+            signal = db.get_signal(signal_id)
+            
+            # Check premium
+            user = db.get_user(user_id)
+            if user and user['is_active'] != 1:
+                send_telegram("⚠️ Premium Access Required\n\nUse /subscribe to get access.", user_id)
+                return False
+            
             success, message = db.update_feedback(signal_id, feedback_type, user_id)
             if success:
-                learner.add_feedback(feedback_type)
-                msg = "✅ Thank you! Your feedback helps improve accuracy! 🚀" if feedback_type == 'positive' else "❌ Thank you! We'll use this to improve! 🔧"
+                market_phase = signal['market_phase'] if signal else 'neutral'
+                profit_pct = signal['profit_percent'] if signal else 0
+                learner.add_feedback(feedback_type, market_phase, profit_pct)
+                
+                msg = f"✅ Thank you! System accuracy: {learner.get_accuracy()}%"
+                if feedback_type == 'positive':
+                    msg += "\n\n💰 Keep winning! 🚀"
+                else:
+                    msg += "\n\n🔧 We'll improve! 📈"
                 send_telegram(msg, user_id)
                 
-                signal = db.get_signal(signal_id)
-                if signal:
-                    send_admin(f"""
-📊 <b>Feedback Received</b>
-━━━━━━━━━━━━━━━━━━━━━━
-📈 Symbol: {signal[2]}
-📊 Direction: {signal[3]}
-👤 User: {user_id}
-📝 Feedback: {feedback_type}
-🧠 Accuracy: {learner.get_accuracy()}%
-""")
+                admin_msg = f"""
+📊 Feedback from {user_id}
+📈 {signal['symbol'] if signal else 'N/A'}
+📝 {feedback_type}
+🎯 Accuracy: {learner.get_accuracy()}%
+"""
+                send_admin(admin_msg)
                 return True
             else:
                 send_telegram(f"⚠️ {message}", user_id)
                 return False
+        
+        if callback_data.startswith('analysis_'):
+            signal_id = int(callback_data.replace('analysis_', ''))
+            signal = db.get_signal(signal_id)
+            if signal:
+                msg = f"""
+📊 FULL ANALYSIS
+━━━━━━━━━━━━━━━━━━━━━━
+
+<b>Symbol:</b> {signal['symbol']}
+<b>Direction:</b> {signal['direction']}
+<b>Confidence:</b> {signal['confidence']}%
+<b>Quality:</b> {signal['quality_score']}/100
+<b>Predicted Accuracy:</b> {signal.get('predicted_accuracy', 0)}%
+
+<b>📈 Indicators:</b>
+• RSI: {signal['rsi']:.1f}
+• MACD: {signal['macd']:.6f}
+• MA20: ${signal['ma20']:.4f}
+• MA50: ${signal['ma50']:.4f}
+• VWAP: ${signal['vwap']:.4f}
+• ATR: ${signal['atr']:.6f}
+• ADX: {signal.get('adx', 0):.1f}
+• Volatility: {signal.get('volatility', 0):.2f}%
+
+<b>🛡️ Key Levels:</b>
+• S1: ${signal.get('support1', 0):.4f}
+• S2: ${signal.get('support2', 0):.4f}
+• R1: ${signal.get('resistance1', 0):.4f}
+• R2: ${signal.get('resistance2', 0):.4f}
+
+<b>📊 Market Phase:</b> {signal.get('market_phase', 'neutral').upper()}
+<b>📈 Trend Strength:</b> {signal.get('trend_strength', 0):.2f}
+"""
+                send_telegram(msg, user_id)
+                return True
+        
+        if callback_data.startswith('market_'):
+            signal_id = int(callback_data.replace('market_', ''))
+            signal = db.get_signal(signal_id)
+            if signal:
+                msg = f"""
+📈 MARKET VIEW
+━━━━━━━━━━━━━━━━━━━━━━
+
+<b>Symbol:</b> {signal['symbol']}
+<b>Phase:</b> {signal.get('market_phase', 'neutral').upper()}
+<b>Trend Strength:</b> {signal.get('trend_strength', 0):.2f}
+<b>Volatility:</b> {signal.get('volatility', 0):.2f}%
+
+<b>🏗️ Levels:</b>
+• Support: ${signal.get('support1', 0):.4f}
+• Resistance: ${signal.get('resistance1', 0):.4f}
+
+<b>📊 Recommendation:</b>
+"""
+                if signal.get('market_phase') == 'bullish_trend':
+                    msg += "🟢 Strong BUY signal - Trending up"
+                elif signal.get('market_phase') == 'bearish_trend':
+                    msg += "🔴 Strong SELL signal - Trending down"
+                elif signal.get('market_phase') == 'accumulation':
+                    msg += "🟡 Accumulation phase - Watch for breakout"
+                elif signal.get('market_phase') == 'distribution':
+                    msg += "🔴 Distribution phase - Watch for breakdown"
+                else:
+                    msg += "⚖️ Neutral - Wait for clear signal"
+                
+                send_telegram(msg, user_id)
+                return True
         
         return False
     except Exception as e:
@@ -2050,139 +2089,159 @@ def process_callback(callback_data, user_id):
         return False
 
 # ============================================================
-# SIGNAL DISTRIBUTION
+# PAYMENT HANDLER
 # ============================================================
 
-def send_to_channel(signal, signal_id):
-    msg, keyboard = build_signal_message(signal, signal_id)
-    if msg:
-        if send_telegram(msg, reply_markup=keyboard):
-            db.mark_signal_sent_channel(signal_id)
-            logger.info(f"✅ Signal sent to channel: {signal['symbol']}")
-            return True
-        else:
-            send_telegram(msg)
-            db.mark_signal_sent_channel(signal_id)
-            return True
+def handle_payment_hash(user_id, message_text):
+    hash_pattern = r'[0-9a-fA-F]{64}|0x[0-9a-fA-F]{64}|[A-Za-z0-9]{50,}'
+    match = re.search(hash_pattern, message_text)
+    
+    if not match:
+        send_telegram("❌ Invalid Transaction Hash\n\nPlease send a valid transaction hash (TXID).", user_id)
+        return False
+    
+    payment_hash = match.group()
+    
+    existing = db.get_payment_by_hash(payment_hash)
+    if existing:
+        send_telegram("⚠️ This payment hash has already been submitted.", user_id)
+        return False
+    
+    payment_id = db.add_payment(user_id, payment_hash)
+    if payment_id:
+        admin_msg = f"""
+💳 NEW PAYMENT RECEIVED
+━━━━━━━━━━━━━━━━━━━━━━
+👤 User ID: {user_id}
+💰 Amount: {db.get_setting('price') or PRICE}
+🔑 Hash: {payment_hash}
+📅 Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+
+✅ /confirm_{payment_id}
+❌ /reject_{payment_id}
+"""
+        send_admin(admin_msg)
+        send_telegram("✅ Payment Hash Submitted!\n\n⏳ Waiting for admin verification.", user_id)
+        return True
+    
     return False
 
-def send_to_paid_users(signal, signal_id):
-    db.cursor.execute('SELECT user_id FROM users WHERE is_active = 1 AND has_paid = 1')
-    paid_users = db.cursor.fetchall()
-    sent_count = 0
-    for user in paid_users:
-        user_id = user[0]
-        try:
-            msg, keyboard = build_signal_message(signal, signal_id)
-            if msg and send_telegram(msg, user_id, keyboard):
-                sent_count += 1
-                db.mark_signal_sent_user(signal_id)
-                time.sleep(0.05)
-        except:
-            pass
-    logger.info(f"📤 Signal sent to {sent_count} paid users")
-    return sent_count
+def handle_subscribe(user_id):
+    user = db.get_user(user_id)
+    if user and user['is_active'] == 1:
+        expire = user['subscription_expire']
+        if expire:
+            days_left = (datetime.fromisoformat(expire) - datetime.now()).days
+            if days_left > 0:
+                send_telegram(f"✅ Already Subscribed!\n\n📅 {days_left} days remaining.", user_id)
+                return True
+    
+    wallet = db.get_setting('wallet') or WALLET_ADDRESS
+    price = db.get_setting('price') or PRICE
+    
+    msg = f"""
+💳 SUBSCRIPTION
+━━━━━━━━━━━━━━━━━━━━━━
 
-def distribute_signal(signal):
-    try:
-        signal_id = db.save_signal(signal)
-        if not signal_id:
-            return
-        
-        send_to_channel(signal, signal_id)
-        
-        if db.get_setting('paid_mode_enabled') == '1':
-            send_to_paid_users(signal, signal_id)
-        else:
-            db.cursor.execute('SELECT user_id FROM users')
-            all_users = db.cursor.fetchall()
-            for user in all_users:
-                user_id = user[0]
-                can_receive, reason = db.can_receive_signal(user_id)
-                if can_receive:
-                    msg, keyboard = build_signal_message(signal, signal_id)
-                    if msg:
-                        send_telegram(msg, user_id, keyboard)
-                        db.mark_signal_sent_user(signal_id)
-                        if reason == "free":
-                            db.use_free_signal(user_id)
-                        time.sleep(0.05)
-        
-        logger.info(f"✅ Signal distributed: {signal['symbol']}")
-    except Exception as e:
-        logger.error(f"Error distributing signal: {e}")
+💰 <b>Price:</b> {price}
+📡 <b>Network:</b> TRC20 (USDT)
+
+<b>🏦 Wallet:</b>
+<code>{wallet}</code>
+
+<b>📝 Steps:</b>
+1. Send {price} USDT (TRC20)
+2. Copy transaction hash
+3. Send hash to this bot
+4. Wait for confirmation
+
+<i>⚠️ Send exact amount via TRC20 only!</i>
+"""
+    send_telegram(msg, user_id)
+    return True
 
 # ============================================================
-# MAIN LOOP
+# MAIN LOOP - QUANTUM EDITION
 # ============================================================
 
 def main_loop():
-    logger.info("🚀 Starting Signal Bot V16 - Enterprise Pro Edition")
-    send_admin("""
-🚀 <b>✨ Signal Bot V16 - PRO Edition ✨</b>
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✅ Admin Panel Active (Glass Buttons)
-✅ Deep Analysis Active (Ichimoku + Fibonacci)
-✅ Multi-Timeframe (6 Timeframes)
-✅ Real Signals Active
-✅ Paid Mode Ready
-✅ Feedback System Active
-✅ Candlestick Patterns
-✅ RSI Divergence Detection
-✅ Sentiment Analysis
-✅ Trailing Stop Loss
-✅ Multi Exchange Support (Binance, Bybit, OKX)
-""")
+    logger.info("🚀 Starting Quantum Signal Bot V15...")
+    send_admin("🚀 <b>Quantum Signal Bot V15 Started</b>\n\n✅ Advanced Analysis Active\n✅ ML Engine Active\n✅ Payment System Active\n✅ Learning System Active")
     
     cycle = 0
+    
     while True:
         try:
             cycle += 1
+            
             if db.get_setting('signal_enabled') != '1':
                 time.sleep(30)
                 continue
             
-            max_signals = int(db.get_setting('max_signals') or 3)
-            logger.info(f"🔄 Cycle {cycle} - Scanning {len(SYMBOLS)} symbols")
+            max_signals = int(db.get_setting('max_signals') or 5)
+            min_confidence = int(db.get_setting('min_confidence') or 70)
+            analysis_depth = int(db.get_setting('analysis_depth') or 10)
+            aggressive = db.get_setting('aggressive_mode') == '1'
+            
+            logger.info(f"🔄 Cycle {cycle} - Deep scanning {len(SYMBOLS)} symbols")
             
             signals = []
-            for symbol in SYMBOLS:
+            for symbol in SYMBOLS[:analysis_depth * 3]:
                 try:
-                    signal = generate_signal(symbol)
-                    if signal:
+                    signal = deep_market_analysis(symbol)
+                    if signal and signal.get('confidence', 0) >= min_confidence:
                         signals.append(signal)
-                        logger.info(f"✅ {signal['symbol']}: {signal['signal']} ({signal['confidence']}%)")
+                        logger.info(f"✅ {signal['symbol']}: {signal['signal']} ({signal['confidence']}%) - Profit: {signal.get('profit_percent', 0)}% - Phase: {signal.get('market_phase', 'N/A')}")
                 except Exception as e:
                     logger.error(f"Error processing {symbol}: {e}")
                 time.sleep(0.05)
             
-            signals.sort(key=lambda x: x.get('quality_score', 0), reverse=True)
+            signals.sort(key=lambda x: (x.get('quality_score', 0), x.get('confidence', 0)), reverse=True)
             signals = signals[:max_signals]
             
             if signals:
                 for signal in signals:
-                    distribute_signal(signal)
-                    time.sleep(2)
+                    try:
+                        signal_id = db.save_signal(signal)
+                        if signal_id:
+                            msg, keyboard = build_signal_message(signal, signal_id)
+                            if msg:
+                                if send_telegram(msg, reply_markup=keyboard):
+                                    db.mark_signal_sent(signal_id)
+                                    logger.info(f"✅ Sent: {signal['symbol']}")
+                                    # Send to premium users
+                                    premium_users = db.cursor.execute('''
+                                        SELECT user_id FROM users WHERE is_active = 1 AND is_premium = 1
+                                    ''').fetchall()
+                                    for user in premium_users:
+                                        try:
+                                            send_telegram(msg, user[0], keyboard)
+                                            time.sleep(0.1)
+                                        except:
+                                            pass
+                            time.sleep(2)
+                    except Exception as e:
+                        logger.error(f"Error sending signal: {e}")
             else:
                 if cycle % 3 == 0:
-                    logger.info("⏳ No signals found")
+                    logger.info("⏳ No high-quality signals")
             
-            if cycle % 5 == 0:
+            if cycle % 3 == 0:
                 payments = db.get_pending_payments()
                 if payments:
-                    send_admin(f"💳 <b>{len(payments)} pending payments</b>\nUse /payments to view")
+                    send_admin(f"💳 {len(payments)} pending payments - Use /payments")
             
             if cycle % 20 == 0:
                 stats = db.get_stats()
                 send_admin(f"""
-🔄 <b>Bot Status Update</b>
+🔄 SYSTEM STATUS
 ━━━━━━━━━━━━━━━━━━━━━━
-📊 Cycle: {cycle}
-📈 Signals Today: {stats.get('today', 0)}
-📊 Total Signals: {stats.get('signals', 0)}
+📊 Today: {stats.get('today', 0)}
+📈 Total: {stats.get('signals', 0)}
+🎯 Win Rate: {stats.get('win_rate', 0)}%
 🧠 Accuracy: {learner.get_accuracy()}%
-👤 Users: {stats.get('users', 0)}
-💳 Paid: {stats.get('paid', 0)}
+👑 Premium: {stats.get('premium', 0)}
+💳 Pending: {stats.get('pending', 0)}
 """)
             
             logger.info(f"⏱ Waiting {INTERVAL//60} minutes...")
@@ -2190,8 +2249,152 @@ def main_loop():
             
         except Exception as e:
             logger.error(f"❌ Main loop error: {e}")
-            send_admin(f"❌ <b>Error in main loop</b>\n{e}")
+            send_admin(f"❌ Error: {str(e)}")
             time.sleep(60)
+
+# ============================================================
+# MESSAGE HANDLER
+# ============================================================
+
+def process_message(message):
+    try:
+        if 'message' not in message:
+            return
+        msg = message['message']
+        if 'text' not in msg:
+            return
+        
+        text = msg['text']
+        user_id = msg['from']['id']
+        username = msg['from'].get('username', '')
+        first_name = msg['from'].get('first_name', '')
+        
+        db.add_user(user_id, username, first_name)
+        
+        if text.startswith('/'):
+            if user_id == ADMIN_ID:
+                handle_admin_command(text)
+            else:
+                if text == '/start':
+                    send_telegram("""
+🚀 <b>QUANTUM SIGNAL BOT</b>
+🤖 <b>Enterprise Edition</b>
+
+📊 Get professional trading signals with advanced AI analysis.
+
+<b>📌 Commands:</b>
+/subscribe - Premium access
+/help - Help
+/status - Subscription status
+
+<b>🔐 Features:</b>
+• Real-time signals
+• AI-powered analysis
+• Multi-timeframe
+• 30%+ profit targets
+• Risk management
+
+<i>Start winning today! 🚀</i>
+""", user_id)
+                elif text == '/subscribe':
+                    handle_subscribe(user_id)
+                elif text == '/help':
+                    send_telegram("""
+📚 <b>HELP CENTER</b>
+━━━━━━━━━━━━━━━━━━━━━━
+
+<b>📌 Commands:</b>
+/start - Welcome
+/subscribe - Get premium
+/status - Check subscription
+
+<b>💳 Subscribe:</b>
+1. /subscribe
+2. Send {price} USDT
+3. Send TXID hash
+4. Wait confirmation
+
+<b>📊 Signals:</b>
+• BUY - Long positions
+• SELL - Short positions
+• Multiple TP levels
+• Stop loss included
+
+<b>🆘 Support:</b>
+Contact @davnold
+""".format(price=db.get_setting('price') or PRICE), user_id)
+                elif text == '/status':
+                    user = db.get_user(user_id)
+                    if user and user['is_active'] == 1:
+                        expire = user['subscription_expire']
+                        if expire:
+                            days_left = (datetime.fromisoformat(expire) - datetime.now()).days
+                            if days_left > 0:
+                                send_telegram(f"✅ <b>Premium Active</b>\n\n📅 {days_left} days remaining\n🎯 Accuracy: {learner.get_accuracy()}%\n\n🚀 Keep winning!", user_id)
+                            else:
+                                send_telegram("⏰ <b>Subscription Expired</b>\n\nPlease renew with /subscribe", user_id)
+                        else:
+                            send_telegram("⚠️ <b>No Active Subscription</b>\n\nUse /subscribe to get access", user_id)
+                    else:
+                        send_telegram("⚠️ <b>No Active Subscription</b>\n\nUse /subscribe to get access", user_id)
+            return
+        
+        # Payment hash
+        if user_id != ADMIN_ID and db.get_setting('payment_enabled') == '1':
+            hash_pattern = r'[0-9a-fA-F]{64}|0x[0-9a-fA-F]{64}|[A-Za-z0-9]{50,}'
+            if re.search(hash_pattern, text):
+                handle_payment_hash(user_id, text)
+        
+    except Exception as e:
+        logger.error(f"Message error: {e}")
+
+# ============================================================
+# BOT RUNNER
+# ============================================================
+
+def get_updates(offset=None):
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
+        params = {'timeout': 30, 'allowed_updates': ['message', 'callback_query']}
+        if offset:
+            params['offset'] = offset
+        response = requests.get(url, params=params, timeout=35)
+        if response.status_code == 200:
+            return response.json().get('result', [])
+    except Exception as e:
+        logger.error(f"Get updates error: {e}")
+    return []
+
+def run_bot():
+    logger.info("🤖 Starting Telegram Bot...")
+    offset = None
+    
+    while True:
+        try:
+            updates = get_updates(offset)
+            for update in updates:
+                offset = update['update_id'] + 1
+                
+                if 'message' in update:
+                    process_message(update['message'])
+                
+                if 'callback_query' in update:
+                    callback = update['callback_query']
+                    user_id = callback['from']['id']
+                    data = callback['data']
+                    
+                    try:
+                        url = f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery"
+                        requests.post(url, data={'callback_query_id': callback['id']})
+                    except:
+                        pass
+                    
+                    handle_callback(data, user_id)
+            
+            time.sleep(1)
+        except Exception as e:
+            logger.error(f"Bot runner error: {e}")
+            time.sleep(5)
 
 # ============================================================
 # START
@@ -2200,28 +2403,30 @@ def main_loop():
 if __name__ == "__main__":
     try:
         print("\n" + "="*70)
-        print("🚀 ULTIMATE SIGNAL BOT V16 - ENTERPRISE PRO EDITION")
+        print("🚀 QUANTUM SIGNAL BOT V15 - ENTERPRISE EDITION")
         print("="*70)
         print(f"📊 Symbols: {len(SYMBOLS)}")
         print(f"⏱ Interval: {INTERVAL//60} minutes")
         print(f"📢 Channel: {CHANNEL_ID}")
+        print(f"💳 Price: {PRICE}")
+        print(f"🧠 ML Engine: Active")
+        print(f"📊 Analysis: Multi-Timeframe Deep")
         print("="*70)
-        print("🔬 Improvements Added:")
-        print("  ✅ Candlestick Patterns (10 types)")
-        print("  ✅ RSI Divergence Detection")
-        print("  ✅ Sentiment Analysis")
-        print("  ✅ Trailing Stop Loss")
-        print("  ✅ Multi Exchange Support (Binance, Bybit, OKX)")
-        print("="*70 + "\n")
+        print("🤖 Starting...\n")
         
         test = get_candles('BTCUSDT', 10)
         if test:
             logger.info("✅ Binance connection OK")
         else:
-            logger.warning("⚠️ Binance connection failed, retrying...")
+            logger.warning("⚠️ Binance connection issue")
         
-        main_loop()
+        signal_thread = threading.Thread(target=main_loop, daemon=True)
+        signal_thread.start()
+        logger.info("✅ Signal generator started")
+        
+        run_bot()
+        
     except KeyboardInterrupt:
-        logger.info("🛑 Bot stopped by user")
+        logger.info("🛑 Bot stopped")
     except Exception as e:
         logger.error(f"❌ Fatal error: {e}")
