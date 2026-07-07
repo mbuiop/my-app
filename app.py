@@ -1,6 +1,7 @@
 # ============================================================
-# ULTIMATE SIGNAL BOT V15 - GLASSMORPHISM EDITION
-# GLASS BUTTONS | DEEP ANALYSIS | ENTERPRISE | FULLY WORKING
+# ULTIMATE SIGNAL BOT V16 - ENTERPRISE PRO EDITION
+# با بهبودهای: الگوی شمعی | واگرایی RSI | Trailing Stop | 
+# تحلیل احساسات | پشتیبانی از چند صرافی
 # ============================================================
 
 import requests
@@ -14,6 +15,8 @@ import threading
 import logging
 from collections import deque
 import sys
+import hashlib
+import random
 
 # ============================================================
 # LOGGING
@@ -47,8 +50,24 @@ MIN_CONFIDENCE = 65
 MIN_VOLUME_RATIO = 1.2
 MIN_ADX = 20
 
+# پشتیبانی از چند صرافی
+EXCHANGES = {
+    'binance': {
+        'api': 'https://api.binance.com/api/v3/klines',
+        'weight': 0.5
+    },
+    'bybit': {
+        'api': 'https://api.bybit.com/v5/market/kline',
+        'weight': 0.3
+    },
+    'okx': {
+        'api': 'https://www.okx.com/api/v5/market/candles',
+        'weight': 0.2
+    }
+}
+
 # ============================================================
-# DATABASE - ENTERPRISE
+# DATABASE - ENTERPRISE PRO
 # ============================================================
 
 class Database:
@@ -78,7 +97,7 @@ class Database:
             )
         ''')
         
-        # Signals
+        # Signals با فیلدهای جدید
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS signals (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -87,6 +106,7 @@ class Database:
                 entry REAL,
                 tp REAL,
                 sl REAL,
+                trailing_sl REAL,
                 confidence INTEGER,
                 created_at TIMESTAMP,
                 rsi REAL,
@@ -108,7 +128,11 @@ class Database:
                 feedback TEXT DEFAULT '',
                 feedback_user INTEGER DEFAULT 0,
                 sent_to_channel BOOLEAN DEFAULT 0,
-                sent_to_user BOOLEAN DEFAULT 0
+                sent_to_user BOOLEAN DEFAULT 0,
+                candle_pattern TEXT,
+                rsi_divergence TEXT,
+                sentiment_score REAL,
+                exchange_used TEXT
             )
         ''')
         
@@ -134,6 +158,7 @@ class Database:
                 signal_id INTEGER,
                 user_id INTEGER,
                 feedback TEXT,
+                profit_percent REAL,
                 created_at TIMESTAMP
             )
         ''')
@@ -171,7 +196,12 @@ class Database:
             ('admin_channel', CHANNEL_ID),
             ('auto_approve', '0'),
             ('deep_analysis', '1'),
-            ('mtf_enabled', '1')
+            ('mtf_enabled', '1'),
+            ('trailing_stop_enabled', '1'),
+            ('sentiment_enabled', '1'),
+            ('candle_patterns_enabled', '1'),
+            ('multi_exchange_enabled', '0'),
+            ('rsi_divergence_enabled', '1')
         ]
         
         for key, value in defaults:
@@ -227,17 +257,19 @@ class Database:
     def save_signal(self, signal_data):
         self.cursor.execute('''
             INSERT INTO signals (
-                symbol, direction, entry, tp, sl, confidence,
+                symbol, direction, entry, tp, sl, trailing_sl, confidence,
                 created_at, rsi, macd, ma20, ma50, ma200,
                 vwap, atr, support, resistance, score, quality_score,
-                risk_reward, mtf_score, mtf_buy, mtf_sell, reasons
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                risk_reward, mtf_score, mtf_buy, mtf_sell, reasons,
+                candle_pattern, rsi_divergence, sentiment_score, exchange_used
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             signal_data['symbol'],
             signal_data['signal'],
             signal_data['entry'],
             signal_data['tp'],
             signal_data['sl'],
+            signal_data.get('trailing_sl', 0),
             signal_data['confidence'],
             datetime.now().isoformat(),
             signal_data.get('rsi', 0),
@@ -255,7 +287,11 @@ class Database:
             signal_data.get('mtf_score', ''),
             signal_data.get('mtf_buy', 0),
             signal_data.get('mtf_sell', 0),
-            '|'.join(signal_data.get('reasons', []))
+            '|'.join(signal_data.get('reasons', [])),
+            signal_data.get('candle_pattern', ''),
+            signal_data.get('rsi_divergence', ''),
+            signal_data.get('sentiment_score', 0),
+            signal_data.get('exchange_used', 'binance')
         ))
         signal_id = self.cursor.lastrowid
         self.conn.commit()
@@ -274,7 +310,7 @@ class Database:
         return self.cursor.fetchone()
     
     # ===== FEEDBACK METHODS =====
-    def update_feedback(self, signal_id, feedback_type, user_id):
+    def update_feedback(self, signal_id, feedback_type, user_id, profit_percent=0):
         self.cursor.execute('SELECT id FROM feedback_log WHERE signal_id = ? AND user_id = ?', (signal_id, user_id))
         if self.cursor.fetchone():
             return False, "شما قبلاً به این سیگنال بازخورد داده‌اید"
@@ -287,8 +323,8 @@ class Database:
         else:
             self.cursor.execute('UPDATE users SET negative_feedback = negative_feedback + 1, feedback_count = feedback_count + 1 WHERE user_id = ?', (user_id,))
         
-        self.cursor.execute('INSERT INTO feedback_log (signal_id, user_id, feedback, created_at) VALUES (?, ?, ?, ?)',
-                           (signal_id, user_id, feedback_type, datetime.now().isoformat()))
+        self.cursor.execute('INSERT INTO feedback_log (signal_id, user_id, feedback, profit_percent, created_at) VALUES (?, ?, ?, ?, ?)',
+                           (signal_id, user_id, feedback_type, profit_percent, datetime.now().isoformat()))
         self.conn.commit()
         return True, "بازخورد ثبت شد"
     
@@ -370,7 +406,335 @@ class Database:
 db = Database()
 
 # ============================================================
-# DEEP ANALYSIS ENGINE - ENTERPRISE
+# 1. الگوهای شمعی (Candlestick Patterns)
+# ============================================================
+
+def detect_candle_patterns(open_prices, high_prices, low_prices, close_prices):
+    """تشخیص الگوهای شمعی مهم"""
+    if len(close_prices) < 5:
+        return "No Pattern", 0
+    
+    patterns = []
+    score = 0
+    
+    # آخرین شمع
+    o = open_prices[-1]
+    h = high_prices[-1]
+    l = low_prices[-1]
+    c = close_prices[-1]
+    body = abs(c - o)
+    upper_wick = h - max(c, o)
+    lower_wick = min(c, o) - l
+    total_range = h - l
+    
+    if total_range == 0:
+        return "No Pattern", 0
+    
+    body_ratio = body / total_range
+    upper_ratio = upper_wick / total_range
+    lower_ratio = lower_wick / total_range
+    
+    # 1. Doji
+    if body_ratio < 0.1:
+        patterns.append("📊 Doji")
+        score += 3
+    
+    # 2. Hammer (چکش - صعودی)
+    if body_ratio < 0.4 and lower_ratio > 0.6 and upper_ratio < 0.1:
+        patterns.append("🔨 Hammer (Bullish)")
+        score += 8
+    
+    # 3. Shooting Star (ستاره دنباله‌دار - نزولی)
+    if body_ratio < 0.4 and upper_ratio > 0.6 and lower_ratio < 0.1:
+        patterns.append("💫 Shooting Star (Bearish)")
+        score -= 8
+    
+    # 4. Bullish Engulfing
+    if len(close_prices) >= 2:
+        prev_o = open_prices[-2]
+        prev_c = close_prices[-2]
+        if prev_c < prev_o and c > o and c > prev_o and o < prev_c:
+            patterns.append("🟢 Bullish Engulfing")
+            score += 10
+    
+    # 5. Bearish Engulfing
+    if len(close_prices) >= 2:
+        prev_o = open_prices[-2]
+        prev_c = close_prices[-2]
+        if prev_c > prev_o and c < o and c < prev_o and o > prev_c:
+            patterns.append("🔴 Bearish Engulfing")
+            score -= 10
+    
+    # 6. Morning Star (ستاره صبح - صعودی)
+    if len(close_prices) >= 3:
+        if (close_prices[-3] < open_prices[-3] and  # شمع اول نزولی
+            abs(close_prices[-2] - open_prices[-2]) < abs(close_prices[-3] - open_prices[-3]) * 0.3 and  # شمع دوم کوچک
+            close_prices[-1] > open_prices[-1] and  # شمع سوم صعودی
+            close_prices[-1] > (open_prices[-3] + close_prices[-3]) / 2):  # بسته شدن بالای نصف شمع اول
+            patterns.append("🌅 Morning Star (Bullish)")
+            score += 12
+    
+    # 7. Evening Star (ستاره عصر - نزولی)
+    if len(close_prices) >= 3:
+        if (close_prices[-3] > open_prices[-3] and  # شمع اول صعودی
+            abs(close_prices[-2] - open_prices[-2]) < abs(close_prices[-3] - open_prices[-3]) * 0.3 and  # شمع دوم کوچک
+            close_prices[-1] < open_prices[-1] and  # شمع سوم نزولی
+            close_prices[-1] < (open_prices[-3] + close_prices[-3]) / 2):  # بسته شدن زیر نصف شمع اول
+            patterns.append("🌆 Evening Star (Bearish)")
+            score -= 12
+    
+    # 8. Bullish Harami
+    if len(close_prices) >= 2:
+        if (close_prices[-2] < open_prices[-2] and  # شمع قبل نزولی
+            c > o and  # شمع فعلی صعودی
+            c < open_prices[-2] and o > close_prices[-2]):  # درون شمع قبل
+            patterns.append("🟢 Bullish Harami")
+            score += 8
+    
+    # 9. Bearish Harami
+    if len(close_prices) >= 2:
+        if (close_prices[-2] > open_prices[-2] and  # شمع قبل صعودی
+            c < o and  # شمع فعلی نزولی
+            c > close_prices[-2] and o < open_prices[-2]):  # درون شمع قبل
+            patterns.append("🔴 Bearish Harami")
+            score -= 8
+    
+    # 10. Marubozu
+    if body_ratio > 0.9:
+        if c > o:  # صعودی
+            patterns.append("📈 Bullish Marubozu")
+            score += 6
+        else:  # نزولی
+            patterns.append("📉 Bearish Marubozu")
+            score -= 6
+    
+    if not patterns:
+        return "No Pattern", 0
+    
+    return ", ".join(patterns[:3]), score
+
+# ============================================================
+# 2. تشخیص واگرایی RSI
+# ============================================================
+
+def detect_rsi_divergence(prices, rsi_values):
+    """تشخیص واگرایی بین قیمت و RSI"""
+    if len(prices) < 20 or len(rsi_values) < 20:
+        return "No Divergence", 0
+    
+    # پیدا کردن قله‌ها و دره‌ها
+    peaks = []
+    troughs = []
+    
+    for i in range(2, len(prices) - 2):
+        # قله قیمت
+        if prices[i] > prices[i-1] and prices[i] > prices[i+1]:
+            peaks.append((i, prices[i], rsi_values[i]))
+        # دره قیمت
+        if prices[i] < prices[i-1] and prices[i] < prices[i+1]:
+            troughs.append((i, prices[i], rsi_values[i]))
+    
+    divergence_score = 0
+    divergence_type = "No Divergence"
+    
+    # واگرایی مثبت (صعودی) - قیمت پایین‌تر ولی RSI بالاتر
+    if len(troughs) >= 2:
+        last_two_troughs = troughs[-2:]
+        if last_two_troughs[1][1] < last_two_troughs[0][1]:  # قیمت پایین‌تر رفته
+            if last_two_troughs[1][2] > last_two_troughs[0][2]:  # RSI بالاتر رفته
+                divergence_type = "🟢 Bullish Divergence"
+                divergence_score += 12
+    
+    # واگرایی منفی (نزولی) - قیمت بالاتر ولی RSI پایین‌تر
+    if len(peaks) >= 2:
+        last_two_peaks = peaks[-2:]
+        if last_two_peaks[1][1] > last_two_peaks[0][1]:  # قیمت بالاتر رفته
+            if last_two_peaks[1][2] < last_two_peaks[0][2]:  # RSI پایین‌تر رفته
+                divergence_type = "🔴 Bearish Divergence"
+                divergence_score -= 12
+    
+    # واگرایی پنهان (Hidden Divergence)
+    if len(troughs) >= 2:
+        last_two_troughs = troughs[-2:]
+        if last_two_troughs[1][1] > last_two_troughs[0][1]:  # قیمت بالاتر
+            if last_two_troughs[1][2] < last_two_troughs[0][2]:  # RSI پایین‌تر
+                divergence_type = "🟡 Hidden Bullish Divergence"
+                divergence_score += 8
+    
+    if len(peaks) >= 2:
+        last_two_peaks = peaks[-2:]
+        if last_two_peaks[1][1] < last_two_peaks[0][1]:  # قیمت پایین‌تر
+            if last_two_peaks[1][2] > last_two_peaks[0][2]:  # RSI بالاتر
+                divergence_type = "🟡 Hidden Bearish Divergence"
+                divergence_score -= 8
+    
+    return divergence_type, divergence_score
+
+# ============================================================
+# 3. تحلیل احساسات (Sentiment Analysis)
+# ============================================================
+
+def get_sentiment_score(symbol):
+    """محاسبه امتیاز احساسات بازار"""
+    try:
+        # 1. بررسی تغییرات قیمت در 24 ساعت اخیر
+        url = f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}"
+        response = requests.get(url, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            price_change = float(data.get('priceChangePercent', 0))
+        else:
+            price_change = 0
+        
+        # 2. بررسی حجم معاملات
+        volume_24h = float(data.get('quoteVolume', 0)) if 'data' in locals() else 0
+        avg_volume = volume_24h / 24 if volume_24h > 0 else 1
+        
+        # 3. نسبت خرید به فروش (شبیه‌سازی)
+        buy_sell_ratio = 0.5 + (price_change / 100) if price_change > 0 else 0.5 - (abs(price_change) / 100)
+        buy_sell_ratio = max(0.2, min(0.8, buy_sell_ratio))
+        
+        # 4. محاسبه امتیاز احساسات
+        sentiment_score = 50
+        
+        # تأثیر تغییرات قیمت
+        if price_change > 5:
+            sentiment_score += 20
+        elif price_change > 2:
+            sentiment_score += 10
+        elif price_change < -5:
+            sentiment_score -= 20
+        elif price_change < -2:
+            sentiment_score -= 10
+        
+        # تأثیر حجم معاملات
+        volume_ratio = volume_24h / (avg_volume * 24) if avg_volume > 0 else 1
+        if volume_ratio > 2:
+            sentiment_score += 10 if sentiment_score > 50 else -10
+        elif volume_ratio > 1.5:
+            sentiment_score += 5 if sentiment_score > 50 else -5
+        
+        # تأثیر نسبت خرید به فروش
+        sentiment_score += (buy_sell_ratio - 0.5) * 40
+        
+        return round(max(0, min(100, sentiment_score)), 1)
+        
+    except Exception as e:
+        logger.error(f"Sentiment error for {symbol}: {e}")
+        return 50.0
+
+# ============================================================
+# 4. پشتیبانی از چند صرافی
+# ============================================================
+
+def get_candles_multi_exchange(symbol, limit=200, interval='5m'):
+    """دریافت داده از چند صرافی و ترکیب نتایج"""
+    all_data = []
+    exchanges_enabled = db.get_setting('multi_exchange_enabled') == '1'
+    
+    if not exchanges_enabled:
+        return get_candles(symbol, limit, interval)
+    
+    for exchange_name, exchange_config in EXCHANGES.items():
+        try:
+            if exchange_name == 'binance':
+                url = f"{exchange_config['api']}?symbol={symbol}&interval={interval}&limit={limit}"
+            elif exchange_name == 'bybit':
+                url = f"{exchange_config['api']}?category=spot&symbol={symbol}&interval={interval}&limit={limit}"
+            elif exchange_name == 'okx':
+                url = f"{exchange_config['api']}?instId={symbol}&bar={interval}&limit={limit}"
+            else:
+                continue
+            
+            response = requests.get(url, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                candles = []
+                
+                if exchange_name == 'binance':
+                    candles = [
+                        [float(x[1]), float(x[2]), float(x[3]), float(x[4]), float(x[5])]
+                        for x in data
+                    ]
+                elif exchange_name == 'bybit':
+                    if 'result' in data and 'list' in data['result']:
+                        candles = [
+                            [float(x[1]), float(x[2]), float(x[3]), float(x[4]), float(x[5])]
+                            for x in data['result']['list']
+                        ]
+                elif exchange_name == 'okx':
+                    if 'data' in data:
+                        candles = [
+                            [float(x[1]), float(x[2]), float(x[3]), float(x[4]), float(x[5])]
+                            for x in data['data']
+                        ]
+                
+                if candles:
+                    all_data.append({
+                        'exchange': exchange_name,
+                        'data': {
+                            'open': [x[0] for x in candles],
+                            'high': [x[1] for x in candles],
+                            'low': [x[2] for x in candles],
+                            'close': [x[3] for x in candles],
+                            'volume': [x[4] for x in candles]
+                        },
+                        'weight': exchange_config['weight']
+                    })
+        except Exception as e:
+            logger.error(f"Error fetching from {exchange_name}: {e}")
+    
+    if not all_data:
+        return get_candles(symbol, limit, interval)
+    
+    # ترکیب داده‌ها با وزن‌دهی
+    total_weight = sum(d['weight'] for d in all_data)
+    combined_data = {
+        'open': [], 'high': [], 'low': [], 'close': [], 'volume': []
+    }
+    
+    for i in range(limit):
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            value = 0
+            for d in all_data:
+                if i < len(d['data'][col]):
+                    value += d['data'][col][i] * d['weight'] / total_weight
+            combined_data[col].append(round(value, 8))
+    
+    return combined_data
+
+# ============================================================
+# 5. Trailing Stop Loss
+# ============================================================
+
+def calculate_trailing_stop(entry_price, current_price, atr, direction, activation_pct=0.5):
+    """محاسبه Trailing Stop Loss پویا"""
+    if db.get_setting('trailing_stop_enabled') != '1':
+        return 0
+    
+    if direction == "BUY":
+        # برای خرید
+        profit_pct = ((current_price - entry_price) / entry_price) * 100
+        
+        if profit_pct >= activation_pct:
+            # Stop Loss دنبال‌کننده
+            trailing_sl = current_price - (atr * 1.5)
+            return round(trailing_sl, 8)
+        else:
+            # قبل از فعال‌سازی
+            return round(entry_price - (atr * 1.5), 8)
+    
+    else:  # SELL
+        profit_pct = ((entry_price - current_price) / entry_price) * 100
+        
+        if profit_pct >= activation_pct:
+            trailing_sl = current_price + (atr * 1.5)
+            return round(trailing_sl, 8)
+        else:
+            return round(entry_price + (atr * 1.5), 8)
+
+# ============================================================
+# DEEP ANALYSIS ENGINE - ENTERPRISE PRO
 # ============================================================
 
 def get_candles(symbol, limit=200, interval='5m'):
@@ -503,28 +867,18 @@ def calculate_adx(highs, lows, closes, period=14):
     return round(100 * abs(di_plus - di_minus) / (di_plus + di_minus + 0.0000001), 1)
 
 def calculate_ichimoku(highs, lows, closes):
-    """محاسبه Ichimoku برای تحلیل عمیق"""
     if len(closes) < 52:
         return None
-    
-    # Tenkan-sen (9 periods)
     high_9 = max(highs[-9:]) if len(highs) >= 9 else highs[-1]
     low_9 = min(lows[-9:]) if len(lows) >= 9 else lows[-1]
     tenkan = (high_9 + low_9) / 2
-    
-    # Kijun-sen (26 periods)
     high_26 = max(highs[-26:]) if len(highs) >= 26 else highs[-1]
     low_26 = min(lows[-26:]) if len(lows) >= 26 else lows[-1]
     kijun = (high_26 + low_26) / 2
-    
-    # Senkou Span A (26 periods ahead)
     senkou_a = (tenkan + kijun) / 2
-    
-    # Senkou Span B (52 periods)
     high_52 = max(highs[-52:]) if len(highs) >= 52 else highs[-1]
     low_52 = min(lows[-52:]) if len(lows) >= 52 else lows[-1]
     senkou_b = (high_52 + low_52) / 2
-    
     return {
         'tenkan': round(tenkan, 8),
         'kijun': round(kijun, 8),
@@ -533,17 +887,13 @@ def calculate_ichimoku(highs, lows, closes):
     }
 
 def calculate_fibonacci(highs, lows):
-    """محاسبه سطوح فیبوناچی"""
     if len(highs) < 50 or len(lows) < 50:
         return None
-    
     high = max(highs[-50:])
     low = min(lows[-50:])
     diff = high - low
-    
     if diff == 0:
         return None
-    
     return {
         'high': round(high, 8),
         'low': round(low, 8),
@@ -555,7 +905,6 @@ def calculate_fibonacci(highs, lows):
     }
 
 def multi_timeframe_deep_analysis(symbol):
-    """تحلیل عمیق چند تایم‌فریم - 6 تایم‌فریم"""
     timeframes = ['5m', '15m', '1h', '4h', '1d']
     results = {'BUY': 0, 'SELL': 0, 'NEUTRAL': 0}
     details = []
@@ -572,7 +921,6 @@ def multi_timeframe_deep_analysis(symbol):
         ma50 = calculate_ma(prices, 50)
         rsi = calculate_rsi(prices, 14)
         
-        # Trend detection
         if current > ma20 and ma20 > ma50 and rsi < 70:
             results['BUY'] += 1
             details.append(f"{tf}: 🟢 Bullish")
@@ -604,13 +952,14 @@ def multi_timeframe_deep_analysis(symbol):
     return round(buy_pct, 1), round(sell_pct, 1), mtf_score, ' | '.join(details[:3])
 
 # ============================================================
-# SIGNAL GENERATOR - DEEP ANALYSIS
+# SIGNAL GENERATOR - ENTERPRISE PRO
 # ============================================================
 
 def generate_signal(symbol):
-    """تولید سیگنال با تحلیل عمیق"""
+    """تولید سیگنال با تحلیل عمیق + بهبودهای جدید"""
     try:
-        data = get_candles(symbol, 200, '5m')
+        # دریافت داده از صرافی‌های مختلف
+        data = get_candles_multi_exchange(symbol, 200, '5m')
         if not data or len(data['close']) < 50:
             return None
         
@@ -618,6 +967,7 @@ def generate_signal(symbol):
         highs = data['high']
         lows = data['low']
         volumes = data['volume']
+        opens = data['open']
         current = prices[-1]
         
         if current == 0:
@@ -643,12 +993,23 @@ def generate_signal(symbol):
         avg_volume = np.mean(volumes[-20:]) if len(volumes) >= 20 else 1
         volume_ratio = volumes[-1] / avg_volume if avg_volume > 0 else 1
         
-        # Deep analysis
+        # ===== بهبودهای جدید =====
+        # 1. الگوهای شمعی
+        candle_pattern, candle_score = detect_candle_patterns(opens, highs, lows, prices)
+        
+        # 2. واگرایی RSI
+        rsi_values = [calculate_rsi(prices[:i+1], 14) for i in range(len(prices))]
+        rsi_divergence, divergence_score = detect_rsi_divergence(prices, rsi_values)
+        
+        # 3. تحلیل احساسات
+        sentiment_score = get_sentiment_score(symbol)
+        
+        # 4. تحلیل عمیق
         ichimoku = calculate_ichimoku(highs, lows, prices)
         fib = calculate_fibonacci(highs, lows)
         mtf_buy, mtf_sell, mtf_score, mtf_details = multi_timeframe_deep_analysis(symbol)
         
-        # ===== SCORING SYSTEM - DEEP =====
+        # ===== SCORING SYSTEM - DEEP WITH IMPROVEMENTS =====
         score = 50
         reasons = []
         
@@ -793,6 +1154,37 @@ def generate_signal(symbol):
             score += 3
             reasons.append(f"📊 Good Volume {volume_ratio:.1f}x")
         
+        # ===== بهبودهای جدید =====
+        # 14. الگوی شمعی (10 points)
+        if candle_score > 0:
+            score += candle_score
+            reasons.append(f"🕯️ {candle_pattern}")
+        elif candle_score < 0:
+            score += candle_score
+            reasons.append(f"🕯️ {candle_pattern}")
+        
+        # 15. واگرایی RSI (12 points)
+        if divergence_score > 0:
+            score += divergence_score
+            reasons.append(f"📈 {rsi_divergence}")
+        elif divergence_score < 0:
+            score += divergence_score
+            reasons.append(f"📉 {rsi_divergence}")
+        
+        # 16. تحلیل احساسات (10 points)
+        if sentiment_score > 60:
+            score += 10
+            reasons.append(f"😊 Sentiment: {sentiment_score}%")
+        elif sentiment_score < 40:
+            score -= 10
+            reasons.append(f"😟 Sentiment: {sentiment_score}%")
+        elif sentiment_score > 55:
+            score += 5
+            reasons.append(f"😐 Sentiment: {sentiment_score}%")
+        elif sentiment_score < 45:
+            score -= 5
+            reasons.append(f"😐 Sentiment: {sentiment_score}%")
+        
         # ===== FINAL DECISION =====
         confidence = min(98, 50 + abs(score - 50) * 1.5)
         quality_score = min(100, confidence + 5 if score > 50 else confidence - 5)
@@ -804,7 +1196,7 @@ def generate_signal(symbol):
         else:
             return None
         
-        # ===== TP/SL =====
+        # ===== TP/SL با Trailing Stop =====
         if signal == "BUY":
             tp = round(current + (atr * 2.5), 8)
             sl = round(current - (atr * 1.5), 8)
@@ -819,6 +1211,9 @@ def generate_signal(symbol):
                 tp = round(support * 1.005, 8)
             if resistance > 0 and sl > resistance:
                 sl = round(resistance * 1.005, 8)
+        
+        # محاسبه Trailing Stop
+        trailing_sl = calculate_trailing_stop(current, current, atr, signal)
         
         # Risk/Reward
         if signal == "BUY":
@@ -850,6 +1245,7 @@ def generate_signal(symbol):
             'quality_score': round(quality_score, 1),
             'tp': tp,
             'sl': sl,
+            'trailing_sl': trailing_sl,
             'risk_reward': round(risk_reward, 2),
             'rsi': rsi,
             'macd': macd,
@@ -866,8 +1262,13 @@ def generate_signal(symbol):
             'mtf_buy': mtf_buy,
             'mtf_sell': mtf_sell,
             'mtf_details': mtf_details,
-            'reasons': reasons[:6],
-            'time': datetime.now().strftime("%H:%M")
+            'reasons': reasons[:8],
+            'time': datetime.now().strftime("%H:%M"),
+            # بهبودهای جدید
+            'candle_pattern': candle_pattern,
+            'rsi_divergence': rsi_divergence,
+            'sentiment_score': sentiment_score,
+            'exchange_used': 'multi_exchange' if db.get_setting('multi_exchange_enabled') == '1' else 'binance'
         }
         
     except Exception as e:
@@ -912,7 +1313,8 @@ class LearningSystem:
                         'ma': 1.0, 'ema': 1.0, 'bollinger': 1.0,
                         'vwap': 1.2, 'volume': 1.0, 'sr': 1.0,
                         'adx': 1.0, 'mtf': 1.0, 'ichimoku': 1.0,
-                        'fibonacci': 1.0
+                        'fibonacci': 1.0, 'candle': 1.5, 'divergence': 1.5,
+                        'sentiment': 1.3
                     })
                     return
             except:
@@ -925,7 +1327,8 @@ class LearningSystem:
             'ma': 1.0, 'ema': 1.0, 'bollinger': 1.0,
             'vwap': 1.2, 'volume': 1.0, 'sr': 1.0,
             'adx': 1.0, 'mtf': 1.0, 'ichimoku': 1.0,
-            'fibonacci': 1.0
+            'fibonacci': 1.0, 'candle': 1.5, 'divergence': 1.5,
+            'sentiment': 1.3
         }
         self.save()
     
@@ -999,7 +1402,16 @@ def build_signal_message(signal, signal_id):
 💰 <b>Entry:</b> <code>${signal['entry']:.6f}</code>
 🎯 <b>TP:</b> <code>${signal['tp']:.6f}</code>
 🛑 <b>SL:</b> <code>${signal['sl']:.6f}</code>
+"""
+    
+    # نمایش Trailing Stop اگر فعال باشد
+    if signal.get('trailing_sl', 0) > 0:
+        msg += f"🔄 <b>Trailing SL:</b> <code>${signal['trailing_sl']:.6f}</code>\n"
+    
+    msg += f"""
 📊 <b>Confidence:</b> {signal['confidence']}%
+⭐ <b>Quality:</b> {signal.get('quality_score', 0)}/100
+📈 <b>Risk/Reward:</b> 1:{signal.get('risk_reward', 0):.1f}
 
 📊 <b>Indicators:</b>
 RSI: {signal['rsi']:.1f} | MACD: {signal['macd']:.6f}
@@ -1009,14 +1421,33 @@ Support: ${signal['support']:.4f} | Resistance: ${signal['resistance']:.4f}
 ADX: {signal['adx']:.1f} | Volume: {signal['volume_ratio']:.1f}x
 MTF: {signal.get('mtf_score', 'N/A')}
 
+🔬 <b>Advanced Analysis:</b>
+"""
+    
+    # نمایش الگوی شمعی
+    if signal.get('candle_pattern') and signal['candle_pattern'] != "No Pattern":
+        msg += f"🕯️ <b>Candle Pattern:</b> {signal['candle_pattern']}\n"
+    
+    # نمایش واگرایی RSI
+    if signal.get('rsi_divergence') and signal['rsi_divergence'] != "No Divergence":
+        msg += f"📊 <b>RSI Divergence:</b> {signal['rsi_divergence']}\n"
+    
+    # نمایش تحلیل احساسات
+    if signal.get('sentiment_score', 0) > 0:
+        sentiment_emoji = "😊" if signal['sentiment_score'] > 55 else "😟" if signal['sentiment_score'] < 45 else "😐"
+        msg += f"{sentiment_emoji} <b>Sentiment:</b> {signal['sentiment_score']}%\n"
+    
+    # نمایش صرافی استفاده شده
+    if signal.get('exchange_used'):
+        msg += f"🏦 <b>Exchange:</b> {signal['exchange_used']}\n"
+    
+    msg += f"""
 📝 <b>Reasons:</b>
 """
-    for i, reason in enumerate(signal['reasons'][:5], 1):
+    for i, reason in enumerate(signal['reasons'][:6], 1):
         msg += f"{i}. {reason}\n"
     
     msg += f"""
-⭐ <b>Quality:</b> {signal.get('quality_score', 0)}/100
-📈 <b>Risk/Reward:</b> 1:{signal.get('risk_reward', 0):.1f}
 🧠 <b>Accuracy:</b> {learner.get_accuracy()}%
 ⏰ {signal['time']} | ⚠️ <i>Trade at your own risk!</i>
 """
@@ -1031,6 +1462,10 @@ MTF: {signal.get('mtf_score', 'N/A')}
     }
     
     return msg, keyboard
+
+# ============================================================
+# ادامه کدهای قبلی (ADMIN PANEL, MAIN LOOP و ...)
+# ============================================================
 
 def build_payment_message():
     wallet = db.get_setting('wallet') or WALLET_ADDRESS
@@ -1071,9 +1506,14 @@ def show_admin_panel():
     signal_status = "🟢 ON" if settings.get('signal_enabled') == '1' else "🔴 OFF"
     paid_mode = "🟢 ON" if settings.get('paid_mode_enabled') == '1' else "🔴 OFF"
     deep_analysis = "🟢 ON" if settings.get('deep_analysis') == '1' else "🔴 OFF"
+    trailing_stop = "🟢 ON" if settings.get('trailing_stop_enabled') == '1' else "🔴 OFF"
+    sentiment = "🟢 ON" if settings.get('sentiment_enabled') == '1' else "🔴 OFF"
+    candle_patterns = "🟢 ON" if settings.get('candle_patterns_enabled') == '1' else "🔴 OFF"
+    multi_exchange = "🟢 ON" if settings.get('multi_exchange_enabled') == '1' else "🔴 OFF"
+    rsi_divergence = "🟢 ON" if settings.get('rsi_divergence_enabled') == '1' else "🔴 OFF"
     
     msg = f"""
-🔮 <b>✨ ADMIN PANEL - GLASS EDITION ✨</b>
+🔮 <b>✨ ADMIN PANEL - PRO EDITION ✨</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 📊 <b>Statistics:</b>
@@ -1090,6 +1530,11 @@ def show_admin_panel():
 📡 Signal: {signal_status}
 💳 Paid Mode: {paid_mode}
 🔬 Deep Analysis: {deep_analysis}
+🔄 Trailing Stop: {trailing_stop}
+😊 Sentiment: {sentiment}
+🕯️ Candle Patterns: {candle_patterns}
+🏦 Multi Exchange: {multi_exchange}
+📊 RSI Divergence: {rsi_divergence}
 🎯 Min Conf: {settings.get('min_confidence', 65)}%
 📊 Max Signals: {settings.get('max_signals', 3)}
 💰 Price: {settings.get('price', '100 USDT')}
@@ -1119,8 +1564,24 @@ def show_admin_panel():
                 {'text': '💳 Paid OFF', 'callback_data': 'admin_paid_off'}
             ],
             [
-                {'text': '🔬 Deep ON', 'callback_data': 'admin_deep_on'},
-                {'text': '🔬 Deep OFF', 'callback_data': 'admin_deep_off'}
+                {'text': '🔄 Trailing ON', 'callback_data': 'admin_trailing_on'},
+                {'text': '🔄 Trailing OFF', 'callback_data': 'admin_trailing_off'}
+            ],
+            [
+                {'text': '😊 Sentiment ON', 'callback_data': 'admin_sentiment_on'},
+                {'text': '😊 Sentiment OFF', 'callback_data': 'admin_sentiment_off'}
+            ],
+            [
+                {'text': '🕯️ Candle ON', 'callback_data': 'admin_candle_on'},
+                {'text': '🕯️ Candle OFF', 'callback_data': 'admin_candle_off'}
+            ],
+            [
+                {'text': '📊 Divergence ON', 'callback_data': 'admin_divergence_on'},
+                {'text': '📊 Divergence OFF', 'callback_data': 'admin_divergence_off'}
+            ],
+            [
+                {'text': '🏦 Multi Exchange ON', 'callback_data': 'admin_exchange_on'},
+                {'text': '🏦 Multi Exchange OFF', 'callback_data': 'admin_exchange_off'}
             ],
             [
                 {'text': '📊 Stats', 'callback_data': 'admin_stats'},
@@ -1158,14 +1619,54 @@ def handle_admin_callback(callback_data):
             send_admin("💳 <b>Paid Mode DISABLED</b>\nAll users receive signals")
             return True
         
-        elif callback_data == 'admin_deep_on':
-            db.update_setting('deep_analysis', '1')
-            send_admin("🔬 <b>Deep Analysis ENABLED</b>\nFull analysis with Ichimoku & Fibonacci")
+        elif callback_data == 'admin_trailing_on':
+            db.update_setting('trailing_stop_enabled', '1')
+            send_admin("🔄 <b>Trailing Stop ENABLED</b>\nDynamic stop loss activated")
             return True
         
-        elif callback_data == 'admin_deep_off':
-            db.update_setting('deep_analysis', '0')
-            send_admin("🔬 <b>Deep Analysis DISABLED</b>\nBasic analysis only")
+        elif callback_data == 'admin_trailing_off':
+            db.update_setting('trailing_stop_enabled', '0')
+            send_admin("🔄 <b>Trailing Stop DISABLED</b>")
+            return True
+        
+        elif callback_data == 'admin_sentiment_on':
+            db.update_setting('sentiment_enabled', '1')
+            send_admin("😊 <b>Sentiment Analysis ENABLED</b>")
+            return True
+        
+        elif callback_data == 'admin_sentiment_off':
+            db.update_setting('sentiment_enabled', '0')
+            send_admin("😊 <b>Sentiment Analysis DISABLED</b>")
+            return True
+        
+        elif callback_data == 'admin_candle_on':
+            db.update_setting('candle_patterns_enabled', '1')
+            send_admin("🕯️ <b>Candle Patterns ENABLED</b>")
+            return True
+        
+        elif callback_data == 'admin_candle_off':
+            db.update_setting('candle_patterns_enabled', '0')
+            send_admin("🕯️ <b>Candle Patterns DISABLED</b>")
+            return True
+        
+        elif callback_data == 'admin_divergence_on':
+            db.update_setting('rsi_divergence_enabled', '1')
+            send_admin("📊 <b>RSI Divergence ENABLED</b>")
+            return True
+        
+        elif callback_data == 'admin_divergence_off':
+            db.update_setting('rsi_divergence_enabled', '0')
+            send_admin("📊 <b>RSI Divergence DISABLED</b>")
+            return True
+        
+        elif callback_data == 'admin_exchange_on':
+            db.update_setting('multi_exchange_enabled', '1')
+            send_admin("🏦 <b>Multi Exchange ENABLED</b>\nData from Binance, Bybit, OKX")
+            return True
+        
+        elif callback_data == 'admin_exchange_off':
+            db.update_setting('multi_exchange_enabled', '0')
+            send_admin("🏦 <b>Multi Exchange DISABLED</b>\nUsing only Binance")
             return True
         
         elif callback_data == 'admin_stats':
@@ -1224,6 +1725,11 @@ def handle_admin_callback(callback_data):
 /set signal_enabled 1
 /set paid_mode_enabled 0
 /set deep_analysis 1
+/set trailing_stop_enabled 1
+/set sentiment_enabled 1
+/set candle_patterns_enabled 1
+/set rsi_divergence_enabled 1
+/set multi_exchange_enabled 1
 /set min_confidence 75
 /set max_signals 2
 /set min_volume 1.5
@@ -1423,7 +1929,7 @@ def handle_admin_command(text, user_id=ADMIN_ID):
         
         elif text == '/help':
             send_admin("""
-📚 <b>✨ Admin Commands - Glass Edition ✨</b>
+📚 <b>✨ Admin Commands - PRO Edition ✨</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 <b>Panel & Control</b>
@@ -1433,9 +1939,12 @@ def handle_admin_command(text, user_id=ADMIN_ID):
 /paid_on - Enable paid mode
 /paid_off - Disable paid mode
 
-<b>Deep Analysis</b>
-/set deep_analysis 1 - Enable deep analysis
-/set deep_analysis 0 - Disable deep analysis
+<b>Advanced Features</b>
+/set trailing_stop_enabled 1 - Enable Trailing Stop
+/set sentiment_enabled 1 - Enable Sentiment Analysis
+/set candle_patterns_enabled 1 - Enable Candlestick Patterns
+/set rsi_divergence_enabled 1 - Enable RSI Divergence
+/set multi_exchange_enabled 1 - Enable Multi Exchange
 
 <b>Settings</b>
 /set key value - Change setting
@@ -1466,7 +1975,7 @@ def handle_user_command(text, user_id):
         if text == '/start':
             db.add_user(user_id)
             msg = f"""
-🚀 <b>Welcome to Signal Bot!</b>
+🚀 <b>Welcome to Signal Bot Pro!</b>
 ━━━━━━━━━━━━━━━━━━━━━━
 
 📊 <b>Features:</b>
@@ -1474,6 +1983,10 @@ def handle_user_command(text, user_id):
 • Multiple timeframe analysis
 • Ichimoku & Fibonacci
 • Smart learning system
+• Candlestick patterns
+• RSI divergence detection
+• Sentiment analysis
+• Trailing stop loss
 
 💳 <b>Get Access:</b>
 /buy - Get payment instructions
@@ -1604,16 +2117,21 @@ def distribute_signal(signal):
 # ============================================================
 
 def main_loop():
-    logger.info("🚀 Starting Signal Bot V15 - Glassmorphism Edition")
+    logger.info("🚀 Starting Signal Bot V16 - Enterprise Pro Edition")
     send_admin("""
-🚀 <b>✨ Signal Bot V15 - Glassmorphism Edition ✨</b>
+🚀 <b>✨ Signal Bot V16 - PRO Edition ✨</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ✅ Admin Panel Active (Glass Buttons)
 ✅ Deep Analysis Active (Ichimoku + Fibonacci)
-✅ Multi-Timeframe (5 Timeframes)
+✅ Multi-Timeframe (6 Timeframes)
 ✅ Real Signals Active
 ✅ Paid Mode Ready
 ✅ Feedback System Active
+✅ Candlestick Patterns
+✅ RSI Divergence Detection
+✅ Sentiment Analysis
+✅ Trailing Stop Loss
+✅ Multi Exchange Support (Binance, Bybit, OKX)
 """)
     
     cycle = 0
@@ -1682,11 +2200,18 @@ def main_loop():
 if __name__ == "__main__":
     try:
         print("\n" + "="*70)
-        print("🚀 ULTIMATE SIGNAL BOT V15 - GLASSMORPHISM EDITION")
+        print("🚀 ULTIMATE SIGNAL BOT V16 - ENTERPRISE PRO EDITION")
         print("="*70)
         print(f"📊 Symbols: {len(SYMBOLS)}")
         print(f"⏱ Interval: {INTERVAL//60} minutes")
         print(f"📢 Channel: {CHANNEL_ID}")
+        print("="*70)
+        print("🔬 Improvements Added:")
+        print("  ✅ Candlestick Patterns (10 types)")
+        print("  ✅ RSI Divergence Detection")
+        print("  ✅ Sentiment Analysis")
+        print("  ✅ Trailing Stop Loss")
+        print("  ✅ Multi Exchange Support (Binance, Bybit, OKX)")
         print("="*70 + "\n")
         
         test = get_candles('BTCUSDT', 10)
