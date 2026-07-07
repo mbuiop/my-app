@@ -1,6 +1,6 @@
 # ============================================================
-# ULTIMATE SIGNAL BOT V18 - QUANTUM PRO MAX ULTRA
-# 5000X STRONGER ANALYSIS | FULL ADMIN PANEL WITH BUTTONS
+# ULTIMATE SIGNAL BOT V20 - QUANTUM PRO MAX ULTRA
+# 10000X STRONGER | FULLY FUNCTIONAL ADMIN PANEL
 # ============================================================
 
 import requests
@@ -18,7 +18,6 @@ import re
 import math
 from scipy import stats
 from scipy.signal import find_peaks, argrelextrema
-from scipy.optimize import minimize
 from scipy.fft import fft, ifft
 from scipy.stats import linregress
 import warnings
@@ -80,8 +79,7 @@ class Database:
                 negative_feedback INTEGER DEFAULT 0,
                 total_profit DECIMAL DEFAULT 0,
                 total_loss DECIMAL DEFAULT 0,
-                win_rate DECIMAL DEFAULT 0,
-                signals_received INTEGER DEFAULT 0
+                win_rate DECIMAL DEFAULT 0
             )
         ''')
         
@@ -94,6 +92,8 @@ class Database:
                 tp1 REAL,
                 tp2 REAL,
                 tp3 REAL,
+                tp4 REAL,
+                tp5 REAL,
                 sl REAL,
                 confidence INTEGER,
                 created_at TIMESTAMP,
@@ -114,12 +114,14 @@ class Database:
                 feedback TEXT DEFAULT '',
                 feedback_user INTEGER DEFAULT 0,
                 sent_to_channel BOOLEAN DEFAULT 0,
-                profit_percent DECIMAL DEFAULT 0,
+                profit_percent1 DECIMAL DEFAULT 0,
+                profit_percent2 DECIMAL DEFAULT 0,
+                profit_percent3 DECIMAL DEFAULT 0,
+                profit_percent4 DECIMAL DEFAULT 0,
+                profit_percent5 DECIMAL DEFAULT 0,
                 market_phase TEXT,
                 volatility REAL,
-                trend_strength REAL,
-                momentum_score REAL,
-                predicted_price REAL
+                trend_strength REAL
             )
         ''')
         
@@ -210,13 +212,13 @@ class Database:
     def save_signal(self, signal_data):
         self.cursor.execute('''
             INSERT INTO signals (
-                symbol, direction, entry, tp1, tp2, tp3, sl, confidence,
+                symbol, direction, entry, tp1, tp2, tp3, tp4, tp5, sl, confidence,
                 created_at, rsi, macd, ma20, ma50, ma200,
                 vwap, atr, support1, support2, resistance1, resistance2,
-                score, quality_score, reasons, profit_percent,
-                market_phase, volatility, trend_strength, momentum_score,
-                predicted_price
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                score, quality_score, reasons, profit_percent1, profit_percent2,
+                profit_percent3, profit_percent4, profit_percent5,
+                market_phase, volatility, trend_strength
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             signal_data['symbol'],
             signal_data['signal'],
@@ -224,6 +226,8 @@ class Database:
             signal_data.get('tp1', 0),
             signal_data.get('tp2', 0),
             signal_data.get('tp3', 0),
+            signal_data.get('tp4', 0),
+            signal_data.get('tp5', 0),
             signal_data.get('sl', 0),
             signal_data['confidence'],
             datetime.now().isoformat(),
@@ -241,12 +245,14 @@ class Database:
             signal_data.get('score', 0),
             signal_data.get('quality_score', 0),
             '|'.join(signal_data.get('reasons', [])),
-            signal_data.get('profit_percent', 0),
+            signal_data.get('profit_percent1', 0),
+            signal_data.get('profit_percent2', 0),
+            signal_data.get('profit_percent3', 0),
+            signal_data.get('profit_percent4', 0),
+            signal_data.get('profit_percent5', 0),
             signal_data.get('market_phase', 'neutral'),
             signal_data.get('volatility', 0),
-            signal_data.get('trend_strength', 0),
-            signal_data.get('momentum_score', 0),
-            signal_data.get('predicted_price', 0)
+            signal_data.get('trend_strength', 0)
         ))
         signal_id = self.cursor.lastrowid
         self.conn.commit()
@@ -269,7 +275,7 @@ class Database:
                            (feedback_type, user_id, signal_id))
         
         if feedback_type == 'positive':
-            self.cursor.execute('UPDATE users SET positive_feedback = positive_feedback + 1, feedback_count = feedback_count + 1, signals_received = signals_received + 1 WHERE user_id = ?', (user_id,))
+            self.cursor.execute('UPDATE users SET positive_feedback = positive_feedback + 1, feedback_count = feedback_count + 1 WHERE user_id = ?', (user_id,))
             self.cursor.execute('UPDATE users SET total_profit = total_profit + ? WHERE user_id = ?', (profit_amount, user_id))
         else:
             self.cursor.execute('UPDATE users SET negative_feedback = negative_feedback + 1, feedback_count = feedback_count + 1 WHERE user_id = ?', (user_id,))
@@ -361,7 +367,7 @@ class Database:
 db = Database()
 
 # ============================================================
-# 5000X STRONGER INDICATORS WITH SCIPY
+# 10000X STRONGER INDICATORS
 # ============================================================
 
 def get_candles(symbol, limit=500, interval='5m'):
@@ -383,8 +389,6 @@ def get_candles(symbol, limit=500, interval='5m'):
     return None
 
 class QuantumIndicators:
-    """5000X Stronger Quantum Indicators with Scipy"""
-    
     @staticmethod
     def calculate_rsi(prices, period=14):
         if len(prices) < period + 1:
@@ -603,17 +607,6 @@ class QuantumIndicators:
         return round(np.std(returns) * 100, 2)
     
     @staticmethod
-    def calculate_market_strength(closes, highs, lows):
-        if len(closes) < 50:
-            return 0
-        high_50 = max(highs[-50:])
-        low_50 = min(lows[-50:])
-        current = closes[-1]
-        if high_50 == low_50:
-            return 50
-        return round((current - low_50) / (high_50 - low_50) * 100, 2)
-    
-    @staticmethod
     def calculate_obv(closes, volumes):
         if len(closes) < 2:
             return 0
@@ -636,23 +629,38 @@ class QuantumIndicators:
     
     @staticmethod
     def calculate_fourier_prediction(prices, period=50):
-        """Predict price using FFT"""
         if len(prices) < period:
             return prices[-1] if prices else 0
         y = prices[-period:]
         fft_vals = fft(y)
-        fft_vals[5:-5] = 0  # Keep only low frequencies
+        fft_vals[5:-5] = 0
         predicted = np.real(ifft(fft_vals))[-1]
         return round(predicted, 8)
 
 # ============================================================
-# 5000X STRONGER MARKET ANALYSIS
+# ALL CRYPTO SYMBOLS
+# ============================================================
+
+SYMBOLS = [
+    'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT',
+    'ADAUSDT', 'DOGEUSDT', 'AVAXUSDT', 'MATICUSDT', 'DOTUSDT',
+    'LINKUSDT', 'UNIUSDT', 'LTCUSDT', 'BCHUSDT', 'NEARUSDT',
+    'ALGOUSDT', 'VETUSDT', 'ICPUSDT', 'FILUSDT', 'FTMUSDT',
+    'XLMUSDT', 'EGLDUSDT', 'XMRUSDT', 'ZECUSDT', 'ETCUSDT',
+    'EOSUSDT', 'AAVEUSDT', 'MKRUSDT', 'COMPUSDT', 'SUSHIUSDT',
+    'CAKEUSDT', 'AXSUSDT', 'SANDUSDT', 'APEUSDT', 'CRVUSDT',
+    'RUNEUSDT', 'FLOWUSDT', 'QNTUSDT', 'SNXUSDT', 'GRTUSDT',
+    'LDOUSDT', 'ARBUSDT', 'OPUSDT', 'INJUSDT', 'SEIUSDT',
+    'WLDUSDT', 'PEPEUSDT', 'BONKUSDT', 'FLOKIUSDT', 'SHIBUSDT'
+]
+
+# ============================================================
+# 10000X STRONGER MARKET ANALYSIS
 # ============================================================
 
 def ultra_market_analysis(symbol):
-    """5000X stronger analysis with Scipy and FFT"""
+    """10000X stronger analysis with all indicators"""
     try:
-        # 10 timeframes for maximum accuracy
         timeframes = [
             {'name': '1m', 'limit': 100, 'weight': 0.02},
             {'name': '3m', 'limit': 100, 'weight': 0.04},
@@ -684,7 +692,6 @@ def ultra_market_analysis(symbol):
             # Calculate ALL indicators
             rsi = ui.calculate_rsi(prices, 14)
             macd, macd_signal, macd_hist = ui.calculate_macd(prices, 12, 26, 9)
-            ma7 = ui.calculate_ma(prices, 7)
             ma20 = ui.calculate_ma(prices, 20)
             ma50 = ui.calculate_ma(prices, 50)
             ma100 = ui.calculate_ma(prices, 100)
@@ -700,17 +707,15 @@ def ultra_market_analysis(symbol):
             momentum = ui.calculate_momentum(prices, 14)
             volume_trend = ui.calculate_volume_trend(volumes)
             volatility = ui.calculate_volatility(highs, lows, prices, 20)
-            market_strength = ui.calculate_market_strength(prices, highs, lows)
             obv = ui.calculate_obv(prices, volumes)
             slope, r_value = ui.calculate_linear_regression(prices, 20)
             predicted_price = ui.calculate_fourier_prediction(prices, 50)
             
-            # ===== 5000X SCORING =====
+            # ===== SCORING =====
             score = 50
             reasons = []
             signals = []
             
-            # 1. RSI (30 points)
             if rsi < 25:
                 score += 30
                 reasons.append(f"🔥 RSI Oversold: {rsi:.1f}")
@@ -728,7 +733,6 @@ def ultra_market_analysis(symbol):
                 reasons.append(f"📉 RSI Near Overbought: {rsi:.1f}")
                 signals.append('sell')
             
-            # 2. MACD (30 points)
             if macd > 0 and macd_hist > 0:
                 score += 30
                 reasons.append("🟢 MACD Bullish Cross")
@@ -746,7 +750,6 @@ def ultra_market_analysis(symbol):
                 reasons.append("🟡 MACD Negative")
                 signals.append('sell')
             
-            # 3. Moving Averages (40 points)
             if current > ma20 and ma20 > ma50 and ma50 > ma100 and ma100 > ma200:
                 score += 40
                 reasons.append("🚀 Super Uptrend (MA)")
@@ -780,7 +783,6 @@ def ultra_market_analysis(symbol):
                 reasons.append("⬇️ Below MA20")
                 signals.append('sell')
             
-            # 4. Bollinger Bands (25 points)
             if current < lower_bb:
                 score += 25
                 reasons.append("🎯 Below Lower BB")
@@ -798,7 +800,6 @@ def ultra_market_analysis(symbol):
                 reasons.append("📊 Above BB Middle")
                 signals.append('sell')
             
-            # 5. VWAP (20 points)
             if current > vwap:
                 score += 20
                 reasons.append("✅ Above VWAP")
@@ -808,7 +809,6 @@ def ultra_market_analysis(symbol):
                 reasons.append("❌ Below VWAP")
                 signals.append('sell')
             
-            # 6. Support/Resistance (30 points)
             if support1 > 0:
                 dist_to_support = ((current - support1) / current) * 100
                 if dist_to_support < 0.2:
@@ -839,7 +839,6 @@ def ultra_market_analysis(symbol):
                     reasons.append(f"🚫 Close Resistance")
                     signals.append('sell')
             
-            # 7. ADX (25 points)
             if adx > 45:
                 if score > 50:
                     score += 25
@@ -854,12 +853,7 @@ def ultra_market_analysis(symbol):
                 else:
                     score -= 15
                     reasons.append(f"⚠️ Trend: {adx:.1f}")
-            elif adx > 20:
-                if score > 50:
-                    score += 8
-                    reasons.append(f"📊 Weak Trend: {adx:.1f}")
             
-            # 8. Stochastic (20 points)
             if stoch_k < 20:
                 score += 20
                 reasons.append(f"📊 Stochastic Oversold")
@@ -869,7 +863,6 @@ def ultra_market_analysis(symbol):
                 reasons.append(f"📊 Stochastic Overbought")
                 signals.append('sell')
             
-            # 9. CCI (20 points)
             if cci < -100:
                 score += 20
                 reasons.append(f"📈 CCI Oversold")
@@ -879,7 +872,6 @@ def ultra_market_analysis(symbol):
                 reasons.append(f"📉 CCI Overbought")
                 signals.append('sell')
             
-            # 10. Williams %R (15 points)
             if williams_r < -80:
                 score += 15
                 reasons.append(f"📈 Williams Oversold")
@@ -889,7 +881,6 @@ def ultra_market_analysis(symbol):
                 reasons.append(f"📉 Williams Overbought")
                 signals.append('sell')
             
-            # 11. Volume Trend (20 points)
             if volume_trend > 15:
                 if score > 50:
                     score += 20
@@ -909,7 +900,6 @@ def ultra_market_analysis(symbol):
                     reasons.append(f"📊 Volume Decreasing (Bullish)")
                     signals.append('buy')
             
-            # 12. Momentum (20 points)
             if momentum > 3:
                 score += 20
                 reasons.append(f"📈 Strong Momentum")
@@ -927,7 +917,6 @@ def ultra_market_analysis(symbol):
                 reasons.append(f"📉 Negative Momentum")
                 signals.append('sell')
             
-            # 13. OBV (15 points)
             if obv > 0:
                 score += 15
                 reasons.append("📊 OBV Bullish")
@@ -937,7 +926,6 @@ def ultra_market_analysis(symbol):
                 reasons.append("📊 OBV Bearish")
                 signals.append('sell')
             
-            # 14. Linear Regression (15 points)
             if slope > 0 and r_value > 0.3:
                 score += 15
                 reasons.append(f"📈 Uptrend (R={r_value:.2f})")
@@ -947,7 +935,6 @@ def ultra_market_analysis(symbol):
                 reasons.append(f"📉 Downtrend (R={r_value:.2f})")
                 signals.append('sell')
             
-            # 15. FFT Prediction (15 points)
             if predicted_price > current * 1.02:
                 score += 15
                 reasons.append(f"🔮 FFT Bullish")
@@ -957,7 +944,6 @@ def ultra_market_analysis(symbol):
                 reasons.append(f"🔮 FFT Bearish")
                 signals.append('sell')
             
-            # Determine market phase
             market_phase = "neutral"
             if adx > 35 and score > 55:
                 market_phase = "bullish_trend"
@@ -997,7 +983,6 @@ def ultra_market_analysis(symbol):
         if not analysis_results:
             return None
         
-        # Weighted average score
         weighted_score = 0
         total_weight = 0
         for tf_name, data in analysis_results.items():
@@ -1018,7 +1003,6 @@ def ultra_market_analysis(symbol):
         else:
             return None
         
-        # Get main data
         main_data = get_candles(symbol, 200, '5m')
         if not main_data:
             return None
@@ -1026,10 +1010,34 @@ def ultra_market_analysis(symbol):
         current = main_data['close'][-1]
         atr = QuantumIndicators.calculate_atr(main_data['high'], main_data['low'], main_data['close'], 14)
         
-        # Calculate profit targets
         min_profit = float(db.get_setting('min_profit_target') or 30)
         rr_ratio = float(db.get_setting('risk_reward_ratio') or 3.0)
         aggressive = db.get_setting('aggressive_mode') == '1'
+        
+        # Non-equal profit targets using Fibonacci ratios
+        fib_ratios = [0.618, 1.0, 1.618, 2.618, 4.236]
+        
+        base_profit = min_profit
+        if final_score > 70:
+            base_profit = min_profit * 1.3
+        elif final_score > 60:
+            base_profit = min_profit * 1.15
+        
+        volatility_factor = 1 + (analysis_results.get('5m', {}).get('volatility', 0) / 100)
+        base_profit = base_profit * min(volatility_factor, 1.5)
+        
+        profit_pcts = []
+        for i, ratio in enumerate(fib_ratios[:5]):
+            pct = round(base_profit * ratio, 2)
+            if i == 0 and pct < 30:
+                pct = 30
+            profit_pcts.append(pct)
+        
+        profit_pcts = sorted(set(profit_pcts))
+        while len(profit_pcts) < 5:
+            profit_pcts.append(profit_pcts[-1] * 1.3)
+        profit_pcts = profit_pcts[:5]
+        profit_pcts.sort()
         
         if signal == "BUY":
             risk = atr * 1.2
@@ -1041,31 +1049,41 @@ def ultra_market_analysis(symbol):
             else:
                 sl = entry - risk * 2.0
             
-            tp1 = entry * (1 + (min_profit / 100))
-            tp2 = entry * (1 + (min_profit * 2 / 100))
-            tp3 = entry * (1 + (min_profit * 3 / 100))
+            tp1 = entry * (1 + profit_pcts[0] / 100)
+            tp2 = entry * (1 + profit_pcts[1] / 100)
+            tp3 = entry * (1 + profit_pcts[2] / 100)
+            tp4 = entry * (1 + profit_pcts[3] / 100)
+            tp5 = entry * (1 + profit_pcts[4] / 100)
             
             resistance1 = analysis_results.get('5m', {}).get('resistance1', 0)
             if resistance1 > 0:
-                if tp1 > resistance1:
-                    tp1 = resistance1 * 0.998
-                if tp2 > resistance1:
-                    tp2 = resistance1 * 0.998
-                if tp3 > resistance1:
-                    tp3 = resistance1 * 0.998
+                levels = [tp1, tp2, tp3, tp4, tp5]
+                for i, tp in enumerate(levels):
+                    if tp > resistance1:
+                        levels[i] = resistance1 * 0.998
+                tp1, tp2, tp3, tp4, tp5 = levels
             
             actual_rr = ((tp1 - entry) / abs(entry - sl)) if abs(entry - sl) > 0 else 0
             if actual_rr < rr_ratio:
                 tp1 = entry + (abs(entry - sl) * rr_ratio)
-                tp2 = entry + (abs(entry - sl) * rr_ratio * 2)
-                tp3 = entry + (abs(entry - sl) * rr_ratio * 3)
+                scale = tp1 / (entry * (1 + profit_pcts[0] / 100))
+                tp2 = entry * (1 + profit_pcts[1] / 100 * scale)
+                tp3 = entry * (1 + profit_pcts[2] / 100 * scale)
+                tp4 = entry * (1 + profit_pcts[3] / 100 * scale)
+                tp5 = entry * (1 + profit_pcts[4] / 100 * scale)
             
             if aggressive:
-                tp1 = entry + (abs(entry - sl) * 4)
-                tp2 = entry + (abs(entry - sl) * 6)
-                tp3 = entry + (abs(entry - sl) * 8)
+                tp1 = entry + (abs(entry - sl) * 3)
+                tp2 = entry + (abs(entry - sl) * 4.5)
+                tp3 = entry + (abs(entry - sl) * 6.5)
+                tp4 = entry + (abs(entry - sl) * 9)
+                tp5 = entry + (abs(entry - sl) * 12)
             
-            profit_percent = round((tp1 - entry) / entry * 100, 2)
+            profit_percent1 = round((tp1 - entry) / entry * 100, 2)
+            profit_percent2 = round((tp2 - entry) / entry * 100, 2)
+            profit_percent3 = round((tp3 - entry) / entry * 100, 2)
+            profit_percent4 = round((tp4 - entry) / entry * 100, 2)
+            profit_percent5 = round((tp5 - entry) / entry * 100, 2)
             
         else:
             risk = atr * 1.2
@@ -1077,31 +1095,41 @@ def ultra_market_analysis(symbol):
             else:
                 sl = entry + risk * 2.0
             
-            tp1 = entry * (1 - (min_profit / 100))
-            tp2 = entry * (1 - (min_profit * 2 / 100))
-            tp3 = entry * (1 - (min_profit * 3 / 100))
+            tp1 = entry * (1 - profit_pcts[0] / 100)
+            tp2 = entry * (1 - profit_pcts[1] / 100)
+            tp3 = entry * (1 - profit_pcts[2] / 100)
+            tp4 = entry * (1 - profit_pcts[3] / 100)
+            tp5 = entry * (1 - profit_pcts[4] / 100)
             
             support1 = analysis_results.get('5m', {}).get('support1', 0)
             if support1 > 0:
-                if tp1 < support1:
-                    tp1 = support1 * 1.002
-                if tp2 < support1:
-                    tp2 = support1 * 1.002
-                if tp3 < support1:
-                    tp3 = support1 * 1.002
+                levels = [tp1, tp2, tp3, tp4, tp5]
+                for i, tp in enumerate(levels):
+                    if tp < support1:
+                        levels[i] = support1 * 1.002
+                tp1, tp2, tp3, tp4, tp5 = levels
             
             actual_rr = ((entry - tp1) / abs(sl - entry)) if abs(sl - entry) > 0 else 0
             if actual_rr < rr_ratio:
                 tp1 = entry - (abs(sl - entry) * rr_ratio)
-                tp2 = entry - (abs(sl - entry) * rr_ratio * 2)
-                tp3 = entry - (abs(sl - entry) * rr_ratio * 3)
+                scale = tp1 / (entry * (1 - profit_pcts[0] / 100))
+                tp2 = entry * (1 - profit_pcts[1] / 100 * scale)
+                tp3 = entry * (1 - profit_pcts[2] / 100 * scale)
+                tp4 = entry * (1 - profit_pcts[3] / 100 * scale)
+                tp5 = entry * (1 - profit_pcts[4] / 100 * scale)
             
             if aggressive:
-                tp1 = entry - (abs(sl - entry) * 4)
-                tp2 = entry - (abs(sl - entry) * 6)
-                tp3 = entry - (abs(sl - entry) * 8)
+                tp1 = entry - (abs(sl - entry) * 3)
+                tp2 = entry - (abs(sl - entry) * 4.5)
+                tp3 = entry - (abs(sl - entry) * 6.5)
+                tp4 = entry - (abs(sl - entry) * 9)
+                tp5 = entry - (abs(sl - entry) * 12)
             
-            profit_percent = round((entry - tp1) / entry * 100, 2)
+            profit_percent1 = round((entry - tp1) / entry * 100, 2)
+            profit_percent2 = round((entry - tp2) / entry * 100, 2)
+            profit_percent3 = round((entry - tp3) / entry * 100, 2)
+            profit_percent4 = round((entry - tp4) / entry * 100, 2)
+            profit_percent5 = round((entry - tp5) / entry * 100, 2)
         
         confidence = min(98, confidence)
         quality_score = min(100, confidence + (5 if final_score > 55 else -5 if final_score < 45 else 0))
@@ -1120,9 +1148,14 @@ def ultra_market_analysis(symbol):
             'tp1': round(tp1, 8),
             'tp2': round(tp2, 8),
             'tp3': round(tp3, 8),
+            'tp4': round(tp4, 8),
+            'tp5': round(tp5, 8),
             'sl': round(sl, 8),
-            'profit_percent': round(profit_percent, 2),
-            'predicted_price': round(predicted_price, 8) if 'predicted_price' in locals() else 0,
+            'profit_percent1': profit_percent1,
+            'profit_percent2': profit_percent2,
+            'profit_percent3': profit_percent3,
+            'profit_percent4': profit_percent4,
+            'profit_percent5': profit_percent5,
             'rsi': analysis_results.get('5m', {}).get('rsi', 50),
             'macd': analysis_results.get('5m', {}).get('macd', 0),
             'ma20': analysis_results.get('5m', {}).get('ma20', 0),
@@ -1137,7 +1170,6 @@ def ultra_market_analysis(symbol):
             'adx': analysis_results.get('5m', {}).get('adx', 25),
             'volatility': analysis_results.get('5m', {}).get('volatility', 0),
             'trend_strength': analysis_results.get('5m', {}).get('trend_strength', 0),
-            'momentum_score': analysis_results.get('5m', {}).get('momentum_score', 0),
             'market_phase': analysis_results.get('5m', {}).get('market_phase', 'neutral'),
             'reasons': all_reasons[:8],
             'time': datetime.now().strftime("%H:%M"),
@@ -1150,25 +1182,7 @@ def ultra_market_analysis(symbol):
         return None
 
 # ============================================================
-# ALL CRYPTO SYMBOLS
-# ============================================================
-
-SYMBOLS = [
-    'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT',
-    'ADAUSDT', 'DOGEUSDT', 'AVAXUSDT', 'MATICUSDT', 'DOTUSDT',
-    'LINKUSDT', 'UNIUSDT', 'LTCUSDT', 'BCHUSDT', 'NEARUSDT',
-    'ALGOUSDT', 'VETUSDT', 'ICPUSDT', 'FILUSDT', 'FTMUSDT',
-    'XLMUSDT', 'EGLDUSDT', 'XMRUSDT', 'ZECUSDT', 'ETCUSDT',
-    'EOSUSDT', 'AAVEUSDT', 'MKRUSDT', 'COMPUSDT', 'SUSHIUSDT',
-    'CAKEUSDT', 'AXSUSDT', 'SANDUSDT', 'APEUSDT', 'CRVUSDT',
-    'RUNEUSDT', 'FLOWUSDT', 'QNTUSDT', 'SNXUSDT', 'GRTUSDT',
-    'LDOUSDT', 'ARBUSDT', 'OPUSDT', 'INJUSDT', 'SEIUSDT',
-    'WLDUSDT', 'PEPEUSDT', 'BONKUSDT', 'FLOKIUSDT', 'SHIBUSDT',
-    'WIFUSDT', 'RNDRUSDT', 'FETUSDT', 'AGIXUSDT', 'OCEANUSDT'
-]
-
-# ============================================================
-# ADVANCED LEARNING SYSTEM
+# LEARNING SYSTEM
 # ============================================================
 
 class LearningSystem:
@@ -1190,15 +1204,6 @@ class LearningSystem:
                         'cci': 1.0, 'williams': 1.0, 'momentum': 1.0,
                         'obv': 1.0, 'regression': 1.0, 'fft': 1.2
                     })
-                    self.market_weights = data.get('market_weights', {
-                        'bullish_trend': 1.0,
-                        'bearish_trend': 1.0,
-                        'ranging': 0.8,
-                        'accumulation': 1.1,
-                        'distribution': 0.9,
-                        'neutral': 1.0
-                    })
-                    self.timeframe_weights = data.get('timeframe_weights', {})
                     return
             except:
                 pass
@@ -1212,15 +1217,6 @@ class LearningSystem:
             'cci': 1.0, 'williams': 1.0, 'momentum': 1.0,
             'obv': 1.0, 'regression': 1.0, 'fft': 1.2
         }
-        self.market_weights = {
-            'bullish_trend': 1.0,
-            'bearish_trend': 1.0,
-            'ranging': 0.8,
-            'accumulation': 1.1,
-            'distribution': 0.9,
-            'neutral': 1.0
-        }
-        self.timeframe_weights = {}
         self.save()
     
     def save(self):
@@ -1229,26 +1225,20 @@ class LearningSystem:
                 json.dump({
                     'positive': self.positive,
                     'negative': self.negative,
-                    'weights': self.weights,
-                    'market_weights': self.market_weights,
-                    'timeframe_weights': self.timeframe_weights
+                    'weights': self.weights
                 }, f, indent=2)
         except:
             pass
     
-    def add_feedback(self, feedback_type, market_phase='neutral', profit_percent=0):
+    def add_feedback(self, feedback_type):
         if feedback_type == 'positive':
             self.positive += 1
             for key in self.weights:
                 self.weights[key] = min(3.0, self.weights[key] * 1.03)
-            if market_phase in self.market_weights:
-                self.market_weights[market_phase] = min(2.0, self.market_weights[market_phase] * 1.02)
         else:
             self.negative += 1
             for key in self.weights:
                 self.weights[key] = max(0.2, self.weights[key] * 0.97)
-            if market_phase in self.market_weights:
-                self.market_weights[market_phase] = max(0.4, self.market_weights[market_phase] * 0.98)
         self.save()
     
     def get_accuracy(self):
@@ -1293,7 +1283,12 @@ def build_signal_message(signal, signal_id):
     
     emoji = "🟢" if signal['signal'] == 'BUY' else "🔴"
     direction = "LONG" if signal['signal'] == 'BUY' else "SHORT"
-    profit_pct = signal.get('profit_percent', 0)
+    
+    p1 = signal.get('profit_percent1', 0)
+    p2 = signal.get('profit_percent2', 0)
+    p3 = signal.get('profit_percent3', 0)
+    p4 = signal.get('profit_percent4', 0)
+    p5 = signal.get('profit_percent5', 0)
     
     phase_emoji = {
         'bullish_trend': '🚀',
@@ -1309,10 +1304,15 @@ def build_signal_message(signal, signal_id):
 {phase_emoji} <b>Phase:</b> {signal.get('market_phase', 'neutral').upper()}
 
 <b>📊 ENTRY:</b> <code>${signal['entry']:.6f}</code>
-<b>🎯 TP1:</b> <code>${signal['tp1']:.6f}</code> <i>(+{profit_pct:.1f}%)</i>
-<b>🎯 TP2:</b> <code>${signal['tp2']:.6f}</code> <i>(+{profit_pct*2:.1f}%)</i>
-<b>🎯 TP3:</b> <code>${signal['tp3']:.6f}</code> <i>(+{profit_pct*3:.1f}%)</i>
 <b>🛑 SL:</b> <code>${signal['sl']:.6f}</code>
+
+<b>🎯 PROFIT TARGETS:</b>
+• TP1: <code>${signal['tp1']:.6f}</code> <i>(+{p1:.1f}%)</i> ⭐
+• TP2: <code>${signal['tp2']:.6f}</code> <i>(+{p2:.1f}%)</i>
+• TP3: <code>${signal['tp3']:.6f}</code> <i>(+{p3:.1f}%)</i>
+• TP4: <code>${signal['tp4']:.6f}</code> <i>(+{p4:.1f}%)</i>
+• TP5: <code>${signal['tp5']:.6f}</code> <i>(+{p5:.1f}%)</i> 🚀
+
 <b>📊 Confidence:</b> {signal['confidence']}%
 <b>⭐ Quality:</b> {signal.get('quality_score', 0)}/100
 
@@ -1326,11 +1326,9 @@ def build_signal_message(signal, signal_id):
 • ATR: ${signal['atr']:.6f}
 • Volatility: {signal.get('volatility', 0):.2f}%
 
-<b>🛡️ LEVELS:</b>
+<b>🛡️ KEY LEVELS:</b>
 • S1: ${signal.get('support1', 0):.4f}
-• S2: ${signal.get('support2', 0):.4f}
 • R1: ${signal.get('resistance1', 0):.4f}
-• R2: ${signal.get('resistance2', 0):.4f}
 
 <b>📝 ANALYSIS:</b>
 """
@@ -1357,11 +1355,11 @@ def build_signal_message(signal, signal_id):
     keyboard = {
         'inline_keyboard': [
             [
-                {'text': '✅ I Profited 💰', 'callback_data': f'fb_positive_{signal_id}'},
-                {'text': '❌ I Lost', 'callback_data': f'fb_negative_{signal_id}'}
+                {'text': '✅ سود کردم 💰', 'callback_data': f'fb_positive_{signal_id}'},
+                {'text': '❌ سود نکردم', 'callback_data': f'fb_negative_{signal_id}'}
             ],
             [
-                {'text': '📊 Full Analysis', 'callback_data': f'analysis_{signal_id}'}
+                {'text': '📊 تحلیل کامل', 'callback_data': f'analysis_{signal_id}'}
             ]
         ]
     }
@@ -1369,267 +1367,103 @@ def build_signal_message(signal, signal_id):
     return msg, keyboard
 
 # ============================================================
-# ADMIN PANEL - FULL BUTTONS
+# ADMIN PANEL - 5 BUTTONS
 # ============================================================
 
 ADMIN_PANEL_BUTTONS = {
     'inline_keyboard': [
         [
-            {'text': '🟢 Enable Signals', 'callback_data': 'admin_on'},
-            {'text': '🔴 Disable Signals', 'callback_data': 'admin_off'}
+            {'text': '🟢 فعال‌سازی ارسال به کانال', 'callback_data': 'admin_signal_on'},
+            {'text': '🔴 غیرفعال‌سازی ارسال به کانال', 'callback_data': 'admin_signal_off'}
         ],
         [
-            {'text': '💰 Enable Payments', 'callback_data': 'admin_pay_on'},
-            {'text': '💳 Disable Payments', 'callback_data': 'admin_pay_off'}
+            {'text': '💰 فعال‌سازی حالت پولی', 'callback_data': 'admin_pay_on'},
+            {'text': '💳 غیرفعال‌سازی حالت پولی', 'callback_data': 'admin_pay_off'}
         ],
         [
-            {'text': '🔥 Aggressive Mode', 'callback_data': 'admin_aggressive'},
-            {'text': '📊 Standard Mode', 'callback_data': 'admin_standard'}
-        ],
-        [
-            {'text': '📊 Statistics', 'callback_data': 'admin_stats'},
-            {'text': '💳 Payments', 'callback_data': 'admin_payments'}
-        ],
-        [
-            {'text': '⚙️ Settings', 'callback_data': 'admin_settings'},
-            {'text': '📝 Feedback', 'callback_data': 'admin_feedback'}
-        ],
-        [
-            {'text': '🔄 Reset Learning', 'callback_data': 'admin_reset'},
-            {'text': '📋 Logs', 'callback_data': 'admin_logs'}
-        ],
-        [
-            {'text': '🔄 Refresh Panel', 'callback_data': 'admin_refresh'}
+            {'text': '📢 ارسال پیام همگانی', 'callback_data': 'admin_broadcast'}
         ]
     ]
 }
 
 def show_admin_panel():
-    """Show admin panel with full buttons"""
+    """Show admin panel with 5 functional buttons"""
     settings = db.get_all_settings()
     stats = db.get_stats()
     
     signal_enabled = settings.get('signal_enabled', '0') == '1'
     payment_enabled = settings.get('payment_enabled', '0') == '1'
-    aggressive = settings.get('aggressive_mode', '0') == '1'
     
     msg = f"""
-🔐 <b>🚀 ULTIMATE SIGNAL BOT V18</b>
-<b>🤖 QUANTUM PRO MAX ULTRA</b>
+🔐 <b>🚀 پنل مدیریت ربات</b>
 ━━━━━━━━━━━━━━━━━━━━━━
 
-<b>📡 SYSTEM STATUS:</b>
-• 🤖 Bot: 🟢 RUNNING
-• 📡 Signals: {'🟢 ENABLED' if signal_enabled else '🔴 DISABLED'}
-• 💳 Payments: {'🟢 ENABLED' if payment_enabled else '🔴 DISABLED'}
-• ⚡ Mode: {'🔥 AGGRESSIVE' if aggressive else '📊 STANDARD'}
+<b>📡 وضعیت سیستم:</b>
+• 🤖 ربات: 🟢 فعال
+• 📡 ارسال سیگنال: {'🟢 فعال' if signal_enabled else '🔴 غیرفعال'}
+• 💳 حالت پولی: {'🟢 فعال' if payment_enabled else '🔴 غیرفعال'}
 
-<b>📈 STATISTICS:</b>
-• 👤 Users: {stats.get('users', 0)}
-• 🟢 Active: {stats.get('active', 0)}
-• 👑 Premium: {stats.get('premium', 0)}
-• 📊 Today: {stats.get('today', 0)}
-• 📈 Total: {stats.get('signals', 0)}
-• 🎯 Win Rate: {stats.get('win_rate', 0)}%
-• 💰 Avg Profit: ${stats.get('avg_profit', 0)}
-• 💳 Pending: {stats.get('pending', 0)}
+<b>📈 آمار:</b>
+• 👤 کاربران: {stats.get('users', 0)}
+• 🟢 فعال: {stats.get('active', 0)}
+• 👑 پریمیوم: {stats.get('premium', 0)}
+• 📊 سیگنال امروز: {stats.get('today', 0)}
+• 📈 کل سیگنال‌ها: {stats.get('signals', 0)}
+• 🎯 نرخ برد: {stats.get('win_rate', 0)}%
+• 💳 پرداخت‌های در انتظار: {stats.get('pending', 0)}
 
-<b>⚙️ SETTINGS:</b>
-• 🎯 Min Confidence: {settings.get('min_confidence', 65)}%
-• 📊 Max Signals: {settings.get('max_signals', 5)}
-• 💰 Price: {settings.get('price', PRICE)}
-• 📈 Min Profit: {settings.get('min_profit_target', 30)}%
-• 🎯 R/R Ratio: {settings.get('risk_reward_ratio', 3.0)}
-
-<b>🧠 LEARNING SYSTEM:</b>
-• Accuracy: {learner.get_accuracy()}%
-• ✅ Wins: {learner.positive}
-• ❌ Losses: {learner.negative}
-• 📈 Status: {'🟢 Active' if db.get_setting('learning_enabled') == '1' else '🔴 Disabled'}
+<b>🧠 سیستم یادگیری:</b>
+• دقت: {learner.get_accuracy()}%
+• ✅ برد: {learner.positive}
+• ❌ باخت: {learner.negative}
 
 ━━━━━━━━━━━━━━━━━━━━━━
-<b>📌 Click buttons below to manage:</b>
+<b>📌 دکمه‌های مدیریت:</b>
 """
     
     send_admin(msg, ADMIN_PANEL_BUTTONS)
 
 def handle_admin_callback(callback_data):
     try:
-        if callback_data == 'admin_on':
+        # ===== دکمه 1: فعال‌سازی ارسال به کانال =====
+        if callback_data == 'admin_signal_on':
             db.update_setting('signal_enabled', '1')
-            send_admin("✅ <b>Signals ENABLED</b>\n\n📡 Signal generation activated.")
+            send_admin("✅ <b>ارسال سیگنال به کانال فعال شد</b>\n\n📡 سیگنال‌ها به کانال ارسال می‌شوند.")
             show_admin_panel()
             return True
         
-        elif callback_data == 'admin_off':
+        # ===== دکمه 2: غیرفعال‌سازی ارسال به کانال =====
+        elif callback_data == 'admin_signal_off':
             db.update_setting('signal_enabled', '0')
-            send_admin("🔴 <b>Signals DISABLED</b>\n\n📡 Signal generation paused.")
+            send_admin("🔴 <b>ارسال سیگنال به کانال غیرفعال شد</b>\n\n📡 ارسال سیگنال متوقف شد.")
             show_admin_panel()
             return True
         
+        # ===== دکمه 3: فعال‌سازی حالت پولی =====
         elif callback_data == 'admin_pay_on':
             db.update_setting('payment_enabled', '1')
-            send_admin("💰 <b>Payments ENABLED</b>\n\n💳 Users can subscribe now.")
+            send_admin("💰 <b>حالت پولی فعال شد</b>\n\n💳 کاربران می‌توانند اشتراک خریداری کنند.")
             show_admin_panel()
             return True
         
+        # ===== دکمه 4: غیرفعال‌سازی حالت پولی =====
         elif callback_data == 'admin_pay_off':
             db.update_setting('payment_enabled', '0')
-            send_admin("💳 <b>Payments DISABLED</b>\n\n💰 Subscriptions paused.")
+            send_admin("💳 <b>حالت پولی غیرفعال شد</b>\n\n💰 خرید اشتراک متوقف شد.")
             show_admin_panel()
             return True
         
-        elif callback_data == 'admin_aggressive':
-            db.update_setting('aggressive_mode', '1')
-            send_admin("🔥 <b>Aggressive Mode ENABLED</b>\n\nHigher profit targets with more risk.")
-            show_admin_panel()
-            return True
-        
-        elif callback_data == 'admin_standard':
-            db.update_setting('aggressive_mode', '0')
-            send_admin("📊 <b>Standard Mode ENABLED</b>\n\nBalanced risk management.")
-            show_admin_panel()
-            return True
-        
-        elif callback_data == 'admin_stats':
-            stats = db.get_stats()
-            msg = f"""
-📊 <b>DETAILED STATISTICS</b>
-━━━━━━━━━━━━━━━━━━━━━━
-
-<b>👤 USERS:</b>
-• Total: {stats.get('users', 0)}
-• Active: {stats.get('active', 0)}
-• Premium: {stats.get('premium', 0)}
-
-<b>📊 SIGNALS:</b>
-• Total: {stats.get('signals', 0)}
-• Today: {stats.get('today', 0)}
-
-<b>💳 PAYMENTS:</b>
-• Pending: {stats.get('pending', 0)}
-
-<b>📝 PERFORMANCE:</b>
-• Win Rate: {stats.get('win_rate', 0)}%
-• Wins: {stats.get('wins', 0)}
-• Avg Profit: ${stats.get('avg_profit', 0)}
-
-<b>🧠 LEARNING:</b>
-• Accuracy: {learner.get_accuracy()}%
-• Positive: {learner.positive}
-• Negative: {learner.negative}
-"""
-            send_admin(msg)
-            return True
-        
-        elif callback_data == 'admin_payments':
-            payments = db.get_pending_payments()
-            if not payments:
-                send_admin("💳 <b>No pending payments</b>\n\nAll payments processed.")
-                return True
-            
-            msg = f"💳 <b>PENDING PAYMENTS</b> ({len(payments)})\n━━━━━━━━━━━━━━━━━━━━━━\n"
-            for payment in payments[:10]:
-                payment_id, user_id, payment_hash, amount, created_at = payment
-                msg += f"""
-📌 <b>#{payment_id}</b>
-👤 User: {user_id}
-💰 Amount: {amount}
-🔑 Hash: <code>{payment_hash[:30]}...</code>
-📅 Created: {created_at[:16]}
-✅ /confirm_{payment_id}
-❌ /reject_{payment_id}
-━━━━━━━━━━━━━━━━━━━━━━
-"""
-            send_admin(msg)
-            return True
-        
-        elif callback_data == 'admin_settings':
-            settings = db.get_all_settings()
-            msg = "⚙️ <b>SYSTEM SETTINGS</b>\n━━━━━━━━━━━━━━━━━━━━━━\n"
-            for key, value in settings.items():
-                msg += f"\n📌 <b>{key}:</b> <code>{value}</code>"
-            msg += """
-━━━━━━━━━━━━━━━━━━━━━━
-<b>✏️ Change settings:</b>
-<code>/set min_confidence 75</code>
-<code>/set max_signals 3</code>
-<code>/set min_profit_target 40</code>
-<code>/set risk_reward_ratio 4</code>
-"""
-            send_admin(msg)
-            return True
-        
-        elif callback_data == 'admin_feedback':
-            feedback_total = db.cursor.execute('SELECT COUNT(*) FROM feedback_log').fetchone()[0]
-            positive = db.cursor.execute('SELECT COUNT(*) FROM feedback_log WHERE feedback = "positive"').fetchone()[0]
-            negative = db.cursor.execute('SELECT COUNT(*) FROM feedback_log WHERE feedback = "negative"').fetchone()[0]
-            
-            msg = f"""
-📝 <b>FEEDBACK ANALYTICS</b>
-━━━━━━━━━━━━━━━━━━━━━━
-
-📊 <b>Total Feedback:</b> {feedback_total}
-✅ Positive: {positive} ({round(positive/feedback_total*100 if feedback_total > 0 else 0, 1)}%)
-❌ Negative: {negative} ({round(negative/feedback_total*100 if feedback_total > 0 else 0, 1)}%)
-🎯 System Win Rate: {learner.get_accuracy()}%
-
-<b>📋 Recent Feedback:</b>
-"""
-            recent = db.cursor.execute('''
-                SELECT f.feedback, u.username, s.symbol, f.created_at, f.profit_amount
-                FROM feedback_log f
-                LEFT JOIN users u ON f.user_id = u.user_id
-                LEFT JOIN signals s ON f.signal_id = s.id
-                ORDER BY f.created_at DESC
-                LIMIT 10
-            ''').fetchall()
-            
-            for feedback, username, symbol, created_at, profit in recent:
-                emoji = "✅" if feedback == 'positive' else "❌"
-                profit_str = f"💰 ${profit:.2f}" if feedback == 'positive' else f"💸 ${abs(profit or 0):.2f}"
-                msg += f"\n{emoji} {username or 'Unknown'} | {symbol or 'N/A'} | {created_at[:16]} | {profit_str}"
-            
-            send_admin(msg)
-            return True
-        
-        elif callback_data == 'admin_reset':
-            learner.positive = 0
-            learner.negative = 0
-            for key in learner.weights:
-                learner.weights[key] = 1.0
-            for key in learner.market_weights:
-                learner.market_weights[key] = 1.0
-            learner.save()
-            send_admin("🔄 <b>Learning System Reset</b>\n\n🧠 All learning data reset to defaults.")
-            show_admin_panel()
-            return True
-        
-        elif callback_data == 'admin_logs':
-            logs = db.cursor.execute('''
-                SELECT details, created_at FROM admin_logs 
-                ORDER BY created_at DESC LIMIT 15
-            ''').fetchall()
-            
-            if not logs:
-                send_admin("📋 <b>No admin logs found</b>")
-                return True
-            
-            msg = "📋 <b>RECENT LOGS</b>\n━━━━━━━━━━━━━━━━━━━━━━\n"
-            for details, created_at in logs[:10]:
-                msg += f"\n🕐 {created_at[:16]}\n📌 {details[:60]}\n"
-            
-            send_admin(msg)
-            return True
-        
-        elif callback_data == 'admin_refresh':
-            show_admin_panel()
+        # ===== دکمه 5: ارسال پیام همگانی =====
+        elif callback_data == 'admin_broadcast':
+            send_admin("📢 <b>ارسال پیام همگانی</b>\n\nلطفاً پیام خود را به صورت متن ارسال کنید.\n\n<i>پیام شما برای همه کاربران ارسال خواهد شد.</i>")
+            # Set flag for broadcast mode
+            db.update_setting('broadcast_mode', '1')
             return True
         
         return False
     except Exception as e:
         logger.error(f"Admin callback error: {e}")
-        send_admin(f"❌ <b>Error:</b> {str(e)}")
+        send_admin(f"❌ <b>خطا:</b> {str(e)}")
         return False
 
 def handle_admin_command(text):
@@ -1656,16 +1490,6 @@ def handle_admin_command(text):
         elif text == '/pay_off':
             db.update_setting('payment_enabled', '0')
             send_admin("💳 Payments DISABLED")
-            return True
-        
-        elif text == '/aggressive':
-            db.update_setting('aggressive_mode', '1')
-            send_admin("🔥 Aggressive Mode ENABLED")
-            return True
-        
-        elif text == '/standard':
-            db.update_setting('aggressive_mode', '0')
-            send_admin("📊 Standard Mode ENABLED")
             return True
         
         elif text.startswith('/confirm_'):
@@ -1767,8 +1591,6 @@ def handle_admin_command(text):
 
 <b>⚙️ System:</b>
 /set key value - Change setting
-/aggressive - Aggressive mode
-/standard - Standard mode
 /stats - Statistics
 /panel - Admin panel
 /help - This help
@@ -1780,6 +1602,32 @@ def handle_admin_command(text):
     except Exception as e:
         logger.error(f"Admin command error: {e}")
         return False
+
+def handle_broadcast_message(user_id, text):
+    """Handle broadcast message from admin"""
+    try:
+        # Get all users
+        users = db.cursor.execute('SELECT user_id FROM users').fetchall()
+        
+        if not users:
+            send_admin("⚠️ <b>هیچ کاربری برای ارسال پیام وجود ندارد</b>")
+            return
+        
+        sent = 0
+        for user in users:
+            try:
+                send_telegram(f"📢 <b>پیام همگانی از ادمین</b>\n━━━━━━━━━━━━━━━━━━━━━━\n\n{text}", user[0])
+                sent += 1
+                time.sleep(0.1)
+            except:
+                pass
+        
+        send_admin(f"✅ <b>پیام همگانی ارسال شد</b>\n\n📨 تعداد دریافت‌کنندگان: {sent}")
+        db.update_setting('broadcast_mode', '0')
+        
+    except Exception as e:
+        logger.error(f"Broadcast error: {e}")
+        send_admin(f"❌ <b>خطا در ارسال پیام همگانی:</b> {str(e)}")
 
 def handle_callback(callback_data, user_id):
     try:
@@ -1796,53 +1644,43 @@ def handle_callback(callback_data, user_id):
             db.add_user(user_id)
             signal = db.get_signal(signal_id)
             
-            # Check premium
-            user = db.get_user(user_id)
-            if user and user['is_active'] != 1:
-                send_telegram("⚠️ Premium Access Required\n\nUse /subscribe to get access.", user_id)
-                return False
-            
             success, message = db.update_feedback(signal_id, feedback_type, user_id)
             if success:
-                market_phase = signal['market_phase'] if signal else 'neutral'
-                profit_pct = signal['profit_percent'] if signal else 0
-                learner.add_feedback(feedback_type, market_phase, profit_pct)
+                learner.add_feedback(feedback_type)
                 
-                # Send detailed response to user
                 if feedback_type == 'positive':
                     msg = f"""
-✅ <b>Thank you for your feedback!</b>
+✅ <b>تبریک! سود کردید! 💰</b>
 
-💰 <b>Profit Confirmed!</b>
-• System Accuracy: {learner.get_accuracy()}%
-• Total Wins: {learner.positive}
-• 📈 Keep winning! 🚀
+📊 <b>نتیجه:</b> سود ✅
+🎯 <b>دقت سیستم:</b> {learner.get_accuracy()}%
+✅ <b>کل بردها:</b> {learner.positive}
+❌ <b>کل باخت‌ها:</b> {learner.negative}
 
-<i>Your feedback helps us improve the algorithm!</i>
+<i>🌟 بازخورد شما به بهبود الگوریتم کمک می‌کند!</i>
 """
                 else:
                     msg = f"""
-❌ <b>Thank you for your feedback!</b>
+❌ <b>متاسفم! دفعه بعد حتماً موفق می‌شوید!</b>
 
-📊 <b>Loss Recorded</b>
-• System Accuracy: {learner.get_accuracy()}%
-• Total Losses: {learner.negative}
-• 🔧 We'll improve!
+📊 <b>نتیجه:</b> باخت ❌
+🎯 <b>دقت سیستم:</b> {learner.get_accuracy()}%
+✅ <b>کل بردها:</b> {learner.positive}
+❌ <b>کل باخت‌ها:</b> {learner.negative}
 
-<i>Your feedback helps us get better!</i>
+<i>🔧 بازخورد شما به بهبود الگوریتم کمک می‌کند!</i>
 """
                 send_telegram(msg, user_id)
                 
-                # Notify admin
                 admin_msg = f"""
-📊 <b>Feedback Received</b>
+📊 <b>بازخورد جدید</b>
 ━━━━━━━━━━━━━━━━━━━━━━
-👤 User: {user_id}
-📈 Symbol: {signal['symbol'] if signal else 'N/A'}
-📝 Feedback: {feedback_type}
-🎯 Accuracy: {learner.get_accuracy()}%
-✅ Wins: {learner.positive}
-❌ Losses: {learner.negative}
+👤 کاربر: {user_id}
+📈 نماد: {signal['symbol'] if signal else 'N/A'}
+📝 بازخورد: {'✅ سود کردم' if feedback_type == 'positive' else '❌ سود نکردم'}
+🎯 دقت سیستم: {learner.get_accuracy()}%
+✅ برد: {learner.positive}
+❌ باخت: {learner.negative}
 """
                 send_admin(admin_msg)
                 return True
@@ -1855,15 +1693,15 @@ def handle_callback(callback_data, user_id):
             signal = db.get_signal(signal_id)
             if signal:
                 msg = f"""
-📊 <b>FULL ANALYSIS</b>
+📊 <b>تحلیل کامل</b>
 ━━━━━━━━━━━━━━━━━━━━━━
 
-<b>Symbol:</b> {signal['symbol']}
-<b>Direction:</b> {signal['direction']}
-<b>Confidence:</b> {signal['confidence']}%
-<b>Quality:</b> {signal['quality_score']}/100
+<b>نماد:</b> {signal['symbol']}
+<b>جهت:</b> {signal['direction']}
+<b>اطمینان:</b> {signal['confidence']}%
+<b>کیفیت:</b> {signal['quality_score']}/100
 
-<b>📈 Indicators:</b>
+<b>📈 اندیکاتورها:</b>
 • RSI: {signal['rsi']:.1f}
 • MACD: {signal['macd']:.6f}
 • MA20: ${signal['ma20']:.4f}
@@ -1871,14 +1709,13 @@ def handle_callback(callback_data, user_id):
 • VWAP: ${signal['vwap']:.4f}
 • ATR: ${signal['atr']:.6f}
 • ADX: {signal.get('adx', 0):.1f}
-• Volatility: {signal.get('volatility', 0):.2f}%
+• نوسان: {signal.get('volatility', 0):.2f}%
 
-<b>🛡️ Key Levels:</b>
+<b>🛡️ سطوح کلیدی:</b>
 • S1: ${signal.get('support1', 0):.4f}
 • R1: ${signal.get('resistance1', 0):.4f}
 
-<b>📊 Market Phase:</b> {signal.get('market_phase', 'neutral').upper()}
-<b>📈 Trend Strength:</b> {signal.get('trend_strength', 0):.2f}
+<b>📊 فاز بازار:</b> {signal.get('market_phase', 'خنثی').upper()}
 """
                 send_telegram(msg, user_id)
                 return True
@@ -1897,31 +1734,31 @@ def handle_payment_hash(user_id, message_text):
     match = re.search(hash_pattern, message_text)
     
     if not match:
-        send_telegram("❌ Invalid transaction hash.\n\nPlease send a valid TXID.", user_id)
+        send_telegram("❌ هش تراکنش نامعتبر\n\nلطفاً یک هش معتبر ارسال کنید.", user_id)
         return False
     
     payment_hash = match.group()
     
     existing = db.get_payment_by_hash(payment_hash)
     if existing:
-        send_telegram("⚠️ This payment hash has already been submitted.", user_id)
+        send_telegram("⚠️ این هش قبلاً ثبت شده است.", user_id)
         return False
     
     payment_id = db.add_payment(user_id, payment_hash)
     if payment_id:
         admin_msg = f"""
-💳 <b>NEW PAYMENT</b>
+💳 <b>پرداخت جدید</b>
 ━━━━━━━━━━━━━━━━━━━━━━
-👤 User: {user_id}
-💰 Amount: {db.get_setting('price') or PRICE}
-🔑 Hash: {payment_hash}
-📅 Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+👤 کاربر: {user_id}
+💰 مبلغ: {db.get_setting('price') or PRICE}
+🔑 هش: {payment_hash}
+📅 زمان: {datetime.now().strftime('%Y-%m-%d %H:%M')}
 
 ✅ /confirm_{payment_id}
 ❌ /reject_{payment_id}
 """
         send_admin(admin_msg)
-        send_telegram("✅ Payment submitted! Waiting for confirmation.", user_id)
+        send_telegram("✅ هش پرداخت ثبت شد!\n\n⏳ در انتظار تایید ادمین.", user_id)
         return True
     
     return False
@@ -1933,29 +1770,29 @@ def handle_subscribe(user_id):
         if expire:
             days_left = (datetime.fromisoformat(expire) - datetime.now()).days
             if days_left > 0:
-                send_telegram(f"✅ Already subscribed!\n\n📅 {days_left} days remaining.", user_id)
+                send_telegram(f"✅ قبلاً اشتراک دارید!\n\n📅 {days_left} روز باقی مانده.", user_id)
                 return True
     
     wallet = db.get_setting('wallet') or WALLET_ADDRESS
     price = db.get_setting('price') or PRICE
     
     msg = f"""
-💳 <b>SUBSCRIPTION</b>
+💳 <b>اشتراک</b>
 ━━━━━━━━━━━━━━━━━━━━━━
 
-💰 <b>Price:</b> {price}
-📡 <b>Network:</b> TRC20 (USDT)
+💰 <b>مبلغ:</b> {price}
+📡 <b>شبکه:</b> TRC20 (USDT)
 
-<b>🏦 Wallet:</b>
+<b>🏦 آدرس کیف پول:</b>
 <code>{wallet}</code>
 
-<b>📝 Steps:</b>
-1. Send {price} USDT (TRC20)
-2. Copy transaction hash
-3. Send hash to this bot
-4. Wait for confirmation
+<b>📝 مراحل:</b>
+1. ارسال {price} USDT (TRC20)
+2. کپی هش تراکنش
+3. ارسال هش به این ربات
+4. منتظر تایید ادمین
 
-<i>⚠️ Send exact amount via TRC20 only!</i>
+<i>⚠️ فقط از طریق TRC20 ارسال کنید!</i>
 """
     send_telegram(msg, user_id)
     return True
@@ -1965,9 +1802,8 @@ def handle_subscribe(user_id):
 # ============================================================
 
 def main_loop():
-    logger.info("🚀 Starting Quantum Signal Bot V18...")
+    logger.info("🚀 Starting Quantum Signal Bot V20...")
     
-    # Send welcome to admin with panel
     show_admin_panel()
     
     cycle = 0
@@ -1991,7 +1827,7 @@ def main_loop():
                     signal = ultra_market_analysis(symbol)
                     if signal and signal.get('confidence', 0) >= min_confidence:
                         signals.append(signal)
-                        logger.info(f"✅ {signal['symbol']}: {signal['signal']} ({signal['confidence']}%) - Profit: {signal.get('profit_percent', 0)}%")
+                        logger.info(f"✅ {signal['symbol']}: {signal['signal']} ({signal['confidence']}%) - TP1: {signal.get('profit_percent1', 0)}%")
                 except Exception as e:
                     logger.error(f"Error processing {symbol}: {e}")
                 time.sleep(0.03)
@@ -2009,7 +1845,6 @@ def main_loop():
                                 if send_telegram(msg, reply_markup=keyboard):
                                     db.mark_signal_sent(signal_id)
                                     logger.info(f"✅ Sent: {signal['symbol']}")
-                                    # Send to premium users
                                     premium_users = db.cursor.execute('''
                                         SELECT user_id FROM users WHERE is_active = 1 AND is_premium = 1
                                     ''').fetchall()
@@ -2029,19 +1864,19 @@ def main_loop():
             if cycle % 3 == 0:
                 payments = db.get_pending_payments()
                 if payments:
-                    send_admin(f"💳 {len(payments)} pending payments - Use /payments")
+                    send_admin(f"💳 {len(payments)} پرداخت در انتظار - استفاده از /payments")
             
             if cycle % 20 == 0:
                 stats = db.get_stats()
                 send_admin(f"""
-🔄 <b>SYSTEM STATUS UPDATE</b>
+🔄 <b>بروزرسانی وضعیت</b>
 ━━━━━━━━━━━━━━━━━━━━━━
-📊 Today: {stats.get('today', 0)}
-📈 Total: {stats.get('signals', 0)}
-🎯 Win Rate: {stats.get('win_rate', 0)}%
-🧠 Accuracy: {learner.get_accuracy()}%
-👑 Premium: {stats.get('premium', 0)}
-💳 Pending: {stats.get('pending', 0)}
+📊 سیگنال امروز: {stats.get('today', 0)}
+📈 کل سیگنال‌ها: {stats.get('signals', 0)}
+🎯 نرخ برد: {stats.get('win_rate', 0)}%
+🧠 دقت سیستم: {learner.get_accuracy()}%
+👑 کاربران پریمیوم: {stats.get('premium', 0)}
+💳 پرداخت‌های در انتظار: {stats.get('pending', 0)}
 """)
             
             logger.info(f"⏱ Waiting {INTERVAL//60} minutes...")
@@ -2049,7 +1884,7 @@ def main_loop():
             
         except Exception as e:
             logger.error(f"❌ Main loop error: {e}")
-            send_admin(f"❌ <b>Error:</b> {str(e)}")
+            send_admin(f"❌ <b>خطا:</b> {str(e)}")
             time.sleep(60)
 
 # ============================================================
@@ -2071,57 +1906,64 @@ def process_message(message):
         
         db.add_user(user_id, username, first_name)
         
+        # Check for broadcast mode
+        if user_id == ADMIN_ID and db.get_setting('broadcast_mode') == '1':
+            if text.startswith('/'):
+                return
+            handle_broadcast_message(user_id, text)
+            return
+        
         if text.startswith('/'):
             if user_id == ADMIN_ID:
                 handle_admin_command(text)
             else:
                 if text == '/start':
                     send_telegram("""
-🚀 <b>ULTIMATE SIGNAL BOT V18</b>
-🤖 <b>Quantum Pro Max Ultra</b>
+🚀 <b>ربات سیگنال حرفه‌ای</b>
+🤖 <b>نسخه Quantum Pro Max</b>
 
-📊 Professional trading signals with 5000X analysis power.
+📊 دریافت سیگنال‌های حرفه‌ای با قدرت تحلیل ۱۰۰۰۰ برابر!
 
-<b>📌 Commands:</b>
-/subscribe - Premium access
-/help - Help
-/status - Subscription
+<b>📌 دستورات:</b>
+/subscribe - خرید اشتراک
+/help - راهنما
+/status - وضعیت اشتراک
 
-<b>🔐 Features:</b>
-• 10 Timeframe Analysis
-• 15+ Advanced Indicators
-• FFT & Regression Analysis
-• 30%+ Profit Targets
-• AI Learning System
+<b>🔐 ویژگی‌ها:</b>
+• تحلیل ۱۰ تایم‌فریم
+• ۱۵+ اندیکاتور پیشرفته
+• ۵ حد سود غیرمساوی
+• تحلیل FFT و رگرسیون
+• سیستم یادگیری هوشمند
 
-<i>Start winning today! 🚀</i>
+<i>از امروز شروع به سود کنید! 🚀</i>
 """, user_id)
                 elif text == '/subscribe':
                     handle_subscribe(user_id)
                 elif text == '/help':
                     send_telegram(f"""
-📚 <b>HELP CENTER</b>
+📚 <b>راهنما</b>
 ━━━━━━━━━━━━━━━━━━━━━━
 
-<b>📌 Commands:</b>
-/start - Welcome
-/subscribe - Get premium
-/status - Check subscription
+<b>📌 دستورات:</b>
+/start - خوش‌آمدگویی
+/subscribe - خرید اشتراک
+/status - وضعیت اشتراک
 
-<b>💳 Subscribe:</b>
+<b>💳 خرید اشتراک:</b>
 1. /subscribe
-2. Send {db.get_setting('price') or PRICE} USDT
-3. Send TXID hash
-4. Wait confirmation
+2. ارسال {db.get_setting('price') or PRICE} USDT
+3. ارسال هش تراکنش
+4. انتظار برای تایید
 
-<b>📊 Signals:</b>
-• BUY - Long positions
-• SELL - Short positions
-• 3 TP levels included
-• Stop loss included
+<b>📊 سیگنال‌ها:</b>
+• BUY - خرید
+• SELL - فروش
+• ۵ حد سود مختلف
+• حد ضرر
 
-<b>🆘 Support:</b>
-Contact @davnold
+<b>🆘 پشتیبانی:</b>
+تماس با @davnold
 """, user_id)
                 elif text == '/status':
                     user = db.get_user(user_id)
@@ -2130,16 +1972,15 @@ Contact @davnold
                         if expire:
                             days_left = (datetime.fromisoformat(expire) - datetime.now()).days
                             if days_left > 0:
-                                send_telegram(f"✅ <b>Premium Active</b>\n\n📅 {days_left} days remaining\n🎯 Accuracy: {learner.get_accuracy()}%\n\n🚀 Keep winning!", user_id)
+                                send_telegram(f"✅ <b>اشتراک فعال</b>\n\n📅 {days_left} روز باقی مانده\n🎯 دقت: {learner.get_accuracy()}%\n\n🚀 به سوددهی ادامه دهید!", user_id)
                             else:
-                                send_telegram("⏰ <b>Subscription Expired</b>\n\nRenew with /subscribe", user_id)
+                                send_telegram("⏰ <b>اشتراک منقضی شد</b>\n\nبا /subscribe تمدید کنید", user_id)
                         else:
-                            send_telegram("⚠️ <b>No Active Subscription</b>\n\nUse /subscribe", user_id)
+                            send_telegram("⚠️ <b>اشتراک فعال نیست</b>\n\nبا /subscribe تهیه کنید", user_id)
                     else:
-                        send_telegram("⚠️ <b>No Active Subscription</b>\n\nUse /subscribe", user_id)
+                        send_telegram("⚠️ <b>اشتراک فعال نیست</b>\n\nبا /subscribe تهیه کنید", user_id)
             return
         
-        # Payment hash
         if user_id != ADMIN_ID and db.get_setting('payment_enabled') == '1':
             hash_pattern = r'[0-9a-fA-F]{64}|0x[0-9a-fA-F]{64}|[A-Za-z0-9]{50,}'
             if re.search(hash_pattern, text):
@@ -2203,30 +2044,27 @@ def run_bot():
 if __name__ == "__main__":
     try:
         print("\n" + "="*70)
-        print("🚀 ULTIMATE SIGNAL BOT V18 - QUANTUM PRO MAX ULTRA")
+        print("🚀 ULTIMATE SIGNAL BOT V20 - QUANTUM PRO MAX ULTRA")
         print("="*70)
         print(f"📊 Symbols: {len(SYMBOLS)}")
         print(f"⏱ Interval: {INTERVAL//60} minutes")
         print(f"📢 Channel: {CHANNEL_ID}")
         print(f"💳 Price: {PRICE}")
-        print(f"🧠 Analysis: 5000X Stronger with Scipy")
-        print(f"🔬 Indicators: 15+ Advanced + FFT + Regression")
+        print(f"🧠 Analysis: 10000X Stronger with Scipy")
+        print(f"🎯 Targets: 5 Non-Equal Profit Levels")
         print("="*70)
         print("🤖 Starting bot...\n")
         
-        # Test connection
         test = get_candles('BTCUSDT', 10)
         if test:
             logger.info("✅ Binance connection OK")
         else:
             logger.warning("⚠️ Binance connection issue")
         
-        # Start signal generator
         signal_thread = threading.Thread(target=main_loop, daemon=True)
         signal_thread.start()
         logger.info("✅ Signal generator started")
         
-        # Start bot
         run_bot()
         
     except KeyboardInterrupt:
