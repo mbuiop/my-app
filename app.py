@@ -3,18 +3,14 @@
 
 """
 ====================================================================
-🌍 ULTIMATE LEARNING BOT V15 - SELF-LEARNING AI EDITION
+🚀 ULTIMATE LEARNING BOT V16 - DYNAMIC SCANNER EDITION
 ====================================================================
-✅ یادگیری از بازخورد کاربران (کانال)
-✅ یادگیری از داده‌های جدید بازار (خودکار)
-✅ یادگیری از پنل مدیریت (دستی)
+✅ شناسایی خودکار ارزهای مستعد پامپ
+✅ شناسایی خودکار ارزهای مستعد ریزش (شورت)
+✅ اسکن کل بازار به صورت پویا
 ✅ ۵۰ ویژگی مهندسی‌شده
 ✅ ۴ مدل یادگیری ماشین همزمان
-✅ اسکنر خودکار بازار
-✅ ارسال خودکار سیگنال به کانال
-✅ سیستم بازخورد هوشمند
-✅ آموزش شبانه خودکار
-✅ دکمه بازخورد در کانال
+✅ یادگیری از بازخورد کاربران
 ✅ هر روز قوی‌تر می‌شود
 ====================================================================
 """
@@ -30,16 +26,16 @@ import asyncio
 import warnings
 import pickle
 import random
+import math
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Any
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
-import math
 
 warnings.filterwarnings('ignore')
 
 # ==================== PID ====================
-PID_FILE = "bot_learning.pid"
+PID_FILE = "bot_learning_v16.pid"
 
 def check_and_create_pid():
     try:
@@ -101,7 +97,7 @@ except:
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.FileHandler('bot_learning.log'), logging.StreamHandler()]
+    handlers=[logging.FileHandler('bot_v16.log'), logging.StreamHandler()]
 )
 logger = logging.getLogger(__name__)
 
@@ -113,24 +109,16 @@ PAYMENT_NETWORK = "TRC20"
 PAYMENT_AMOUNT = "100 USDT"
 SUBSCRIPTION_DAYS = 30
 FREE_SIGNALS_DAILY = 2
-SCAN_INTERVAL = 300
-MIN_PREDICTION_CONFIDENCE = 60
-MIN_FEEDBACK_FOR_RETRAIN = 5
-
-# ==================== SYMBOLS ====================
-CRYPTO_SYMBOLS = [
-    'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'ADAUSDT', 'SOLUSDT',
-    'XRPUSDT', 'DOTUSDT', 'DOGEUSDT', 'AVAXUSDT', 'MATICUSDT',
-    'LINKUSDT', 'UNIUSDT', 'ATOMUSDT', 'LTCUSDT', 'BCHUSDT',
-    'NEARUSDT', 'ALGOUSDT', 'VETUSDT', 'ICPUSDT', 'FILUSDT',
-    'THETAUSDT', 'FTMUSDT', 'XLMUSDT', 'EGLDUSDT', 'HNTUSDT',
-    'XMRUSDT', 'ZECUSDT', 'DASHUSDT', 'ETCUSDT', 'XTZUSDT'
-]
+SCAN_INTERVAL = 180  # هر ۳ دقیقه
+MIN_PREDICTION_CONFIDENCE = 55
+MIN_FEEDBACK_FOR_RETRAIN = 3
+MIN_VOLUME_USDT = 500000  # حداقل حجم روزانه
+MAX_SYMBOLS_TO_SCAN = 50  # حداکثر ارز برای اسکن
 
 # ==================== Database ====================
 class Database:
     def __init__(self):
-        self.conn = sqlite3.connect('bot_learning.db', check_same_thread=False)
+        self.conn = sqlite3.connect('bot_v16.db', check_same_thread=False)
         self.conn.execute('PRAGMA journal_mode=WAL')
         self.cursor = self.conn.cursor()
         self.init_tables()
@@ -174,7 +162,8 @@ class Database:
                 feedback_accuracy REAL DEFAULT 0,
                 features_snapshot TEXT DEFAULT '',
                 target_price REAL DEFAULT 0,
-                actual_result TEXT DEFAULT ''
+                actual_result TEXT DEFAULT '',
+                signal_type TEXT DEFAULT 'NORMAL'
             )
         ''')
         self.cursor.execute('''
@@ -186,6 +175,7 @@ class Database:
         self.cursor.execute('INSERT OR IGNORE INTO settings VALUES ("max_free_signals", "2")')
         self.cursor.execute('INSERT OR IGNORE INTO settings VALUES ("auto_learn", "1")')
         self.cursor.execute('INSERT OR IGNORE INTO settings VALUES ("nightly_learn", "1")')
+        self.cursor.execute('INSERT OR IGNORE INTO settings VALUES ("scan_interval", "180")')
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS payments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -234,6 +224,19 @@ class Database:
                 created_at TIMESTAMP
             )
         ''')
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS dynamic_symbols (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT UNIQUE,
+                pump_score INTEGER DEFAULT 0,
+                dump_score INTEGER DEFAULT 0,
+                volume REAL DEFAULT 0,
+                change_24h REAL DEFAULT 0,
+                last_seen TIMESTAMP,
+                signal_count INTEGER DEFAULT 0,
+                success_count INTEGER DEFAULT 0
+            )
+        ''')
         self.conn.commit()
     
     def add_user(self, user_id, username, first_name, language='fa'):
@@ -248,10 +251,6 @@ class Database:
     def get_user(self, user_id):
         self.cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
         return self.cursor.fetchone()
-    
-    def get_user_language(self, user_id):
-        user = self.get_user(user_id)
-        return user[3] if user else 'fa'
     
     def get_free_signals(self, user_id):
         user = self.get_user(user_id)
@@ -273,6 +272,12 @@ class Database:
             return max_free
         return user[6] if len(user) > 6 else 0
     
+    def get_max_free_signals(self, user_id):
+        user = self.get_user(user_id)
+        if not user:
+            return FREE_SIGNALS_DAILY
+        return int(user[8]) if len(user) > 8 and user[8] else FREE_SIGNALS_DAILY
+    
     def use_free_signal(self, user_id):
         max_free = self.get_max_free_signals(user_id)
         if max_free == 0:
@@ -283,22 +288,6 @@ class Database:
         ''', (user_id,))
         self.conn.commit()
         return self.cursor.rowcount > 0
-    
-    def get_max_free_signals(self, user_id):
-        user = self.get_user(user_id)
-        if not user:
-            return FREE_SIGNALS_DAILY
-        return int(user[8]) if len(user) > 8 and user[8] else FREE_SIGNALS_DAILY
-    
-    def get_signals_used_today(self, user_id):
-        user = self.get_user(user_id)
-        if not user:
-            return 0
-        today = datetime.now().date().isoformat()
-        last_date = user[7] if len(user) > 7 else None
-        if last_date != today:
-            return 0
-        return user[9] if len(user) > 9 else 0
     
     def has_subscription(self, user_id):
         self.cursor.execute('''
@@ -334,15 +323,17 @@ class Database:
             INSERT INTO signals (
                 user_id, symbol, direction, entry, tp, sl, support, resistance,
                 leverage, confidence, created_at, is_free, profit_percent,
-                model_votes, prediction_details, signal_accuracy, features_snapshot, target_price
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                model_votes, prediction_details, signal_accuracy, features_snapshot, 
+                target_price, signal_type
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             user_id, data['symbol'], data['direction'], data['entry'], data['tp'], data['sl'],
             data.get('support', 0), data.get('resistance', 0),
             data['leverage'], data['confidence'], datetime.now().isoformat(),
             1 if is_free else 0, data.get('profit_percent', 0),
             data.get('model_votes', ''), data.get('prediction_details', ''),
-            data.get('signal_accuracy', 0), features_json, data.get('entry', 0) * 1.05
+            data.get('signal_accuracy', 0), features_json,
+            data.get('entry', 0) * 1.05, data.get('signal_type', 'NORMAL')
         ))
         signal_id = self.cursor.lastrowid
         self.conn.commit()
@@ -361,11 +352,10 @@ class Database:
         ''', (feedback, accuracy, features_json, signal_id))
         self.conn.commit()
         
-        # دریافت اطلاعات سیگنال
-        self.cursor.execute('SELECT user_id, symbol, direction, confidence FROM signals WHERE id = ?', (signal_id,))
+        self.cursor.execute('SELECT user_id, symbol, direction, confidence, signal_type FROM signals WHERE id = ?', (signal_id,))
         result = self.cursor.fetchone()
         if result:
-            user_id, symbol, direction, confidence = result
+            user_id, symbol, direction, confidence, signal_type = result
             
             if feedback == 'positive':
                 self.cursor.execute('''
@@ -374,6 +364,11 @@ class Database:
                         correct_predictions = correct_predictions + 1
                     WHERE user_id = ?
                 ''', (user_id,))
+                # به‌روزرسانی آمار موفقیت برای ارز
+                self.cursor.execute('''
+                    UPDATE dynamic_symbols SET success_count = success_count + 1
+                    WHERE symbol = ?
+                ''', (symbol,))
             else:
                 self.cursor.execute('''
                     UPDATE users SET negative_feedback = negative_feedback + 1, 
@@ -483,6 +478,36 @@ class Database:
             FROM model_performance ORDER BY id DESC LIMIT 1
         ''')
         return self.cursor.fetchone()
+    
+    def get_referral_count(self, user_id):
+        self.cursor.execute('SELECT referral_count FROM users WHERE user_id = ?', (user_id,))
+        r = self.cursor.fetchone()
+        return r[0] if r else 0
+    
+    def update_dynamic_symbol(self, symbol, pump_score=0, dump_score=0, volume=0, change_24h=0):
+        self.cursor.execute('''
+            INSERT OR REPLACE INTO dynamic_symbols 
+            (symbol, pump_score, dump_score, volume, change_24h, last_seen)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (symbol, pump_score, dump_score, volume, change_24h, datetime.now().isoformat()))
+        self.conn.commit()
+    
+    def get_dynamic_symbols(self, limit=30):
+        self.cursor.execute('''
+            SELECT symbol, pump_score, dump_score, volume, change_24h, success_count
+            FROM dynamic_symbols 
+            ORDER BY (pump_score + dump_score) DESC, success_count DESC
+            LIMIT ?
+        ''', (limit,))
+        return self.cursor.fetchall()
+    
+    def get_hot_symbols(self, limit=20):
+        self.cursor.execute('''
+            SELECT symbol FROM dynamic_symbols 
+            ORDER BY (pump_score * 2 + success_count) DESC
+            LIMIT ?
+        ''', (limit,))
+        return [r[0] for r in self.cursor.fetchall()]
 
 db = Database()
 
@@ -511,7 +536,10 @@ class PriceService:
             uri = "wss://stream.binance.com:9443/ws"
             async with websockets.connect(uri, ping_interval=20, ping_timeout=10) as ws:
                 subs = []
-                for s in CRYPTO_SYMBOLS[:30]:
+                hot = db.get_hot_symbols(30)
+                if not hot:
+                    hot = ['btcusdt', 'ethusdt', 'bnbusdt', 'solusdt', 'xrpusdt']
+                for s in hot[:20]:
                     subs.append(f"{s.lower()}@trade")
                 await ws.send(json.dumps({
                     "method": "SUBSCRIBE",
@@ -531,7 +559,7 @@ class PriceService:
         except:
             pass
     
-    def get_candles(self, symbol, interval='5m', limit=500):
+    def get_candles(self, symbol, interval='5m', limit=200):
         cache_key = f"{symbol}_{interval}_{limit}"
         if cache_key in self.cache:
             return self.cache[cache_key]
@@ -597,6 +625,241 @@ class PriceService:
 
 price_service = PriceService()
 
+# ==================== Dynamic Symbol Scanner ====================
+class DynamicSymbolScanner:
+    """اسکنر پویا برای پیدا کردن خودکار ارزهای مستعد پامپ و دامپ"""
+    
+    def __init__(self):
+        self.binance = "https://api.binance.com/api/v3"
+        self.cache = {}
+        self.last_scan = None
+        self.hot_symbols = []
+        self.pump_candidates = []
+        self.dump_candidates = []
+        self.symbol_scores = {}
+        
+    def get_all_tickers(self):
+        """دریافت لیست کامل همه ارزها از بایننس"""
+        try:
+            r = requests.get(f"{self.binance}/ticker/24hr", timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                tickers = []
+                for item in data:
+                    symbol = item['symbol']
+                    if symbol.endswith('USDT') and not any(x in symbol for x in ['UP', 'DOWN', 'BUSD', 'FDUSD']):
+                        try:
+                            vol = float(item['quoteVolume'])
+                            price = float(item['lastPrice'])
+                            change = float(item['priceChangePercent'])
+                            if vol > MIN_VOLUME_USDT and price > 0.00001:
+                                tickers.append({
+                                    'symbol': symbol,
+                                    'price': price,
+                                    'volume': vol,
+                                    'change_24h': change,
+                                    'high': float(item['highPrice']),
+                                    'low': float(item['lowPrice']),
+                                    'bid': float(item['bidPrice']),
+                                    'ask': float(item['askPrice']),
+                                    'trades': int(item['count']),
+                                    'volume_24h': vol
+                                })
+                        except:
+                            continue
+                return tickers
+        except Exception as e:
+            logger.error(f"Error getting tickers: {e}")
+        return []
+    
+    def detect_pump_candidates(self, tickers, top_n=25):
+        """تشخیص ارزهای مستعد پامپ بر اساس چندین فاکتور"""
+        candidates = []
+        
+        for t in tickers:
+            score = 0
+            reasons = []
+            
+            # ۱. رشد قیمتی مناسب (نه بیش از حد)
+            if 1.5 < t['change_24h'] < 10:
+                score += 5
+                reasons.append("رشد ملایم")
+            elif 10 <= t['change_24h'] < 20:
+                score += 3
+                reasons.append("رشد قابل توجه")
+            elif t['change_24h'] >= 20:
+                score -= 3
+                reasons.append("رشد بیش از حد - ریسک")
+            
+            # ۲. حجم بالا نسبت به میانگین
+            if t['volume'] > 10_000_000:
+                score += 4
+                reasons.append("حجم بسیار بالا")
+            elif t['volume'] > 5_000_000:
+                score += 2
+                reasons.append("حجم بالا")
+            
+            # ۳. تعداد معاملات بالا (نقدشوندگی)
+            if t['trades'] > 20000:
+                score += 3
+                reasons.append("نقدشوندگی عالی")
+            elif t['trades'] > 10000:
+                score += 1
+                reasons.append("نقدشوندگی خوب")
+            
+            # ۴. قیمت مناسب
+            if 0.01 < t['price'] < 50:
+                score += 2
+                reasons.append("قیمت مناسب")
+            
+            # ۵. نوسان بالا (احتمال حرکت)
+            range_pct = ((t['high'] - t['low']) / (t['low'] + 0.0001)) * 100
+            if range_pct > 10:
+                score += 3
+                reasons.append("نوسان بالا")
+            elif range_pct > 5:
+                score += 1
+            
+            # ۶. فاصله از کف روز
+            dist_from_low = ((t['price'] - t['low']) / (t['low'] + 0.0001)) * 100
+            if dist_from_low < 5:
+                score += 2
+                reasons.append("نزدیک به کف")
+            
+            # ۷. فاصله از اوج روز (می‌خواهیم نزدیک به اوج نباشد برای پامپ)
+            dist_from_high = ((t['high'] - t['price']) / (t['high'] + 0.0001)) * 100
+            if dist_from_high > 5:
+                score += 2
+                reasons.append("فضای رشد")
+            
+            candidates.append({
+                **t,
+                'pump_score': score,
+                'range_pct': range_pct,
+                'reasons': reasons[:3]
+            })
+        
+        candidates.sort(key=lambda x: x['pump_score'], reverse=True)
+        
+        # به‌روزرسانی دیتابیس
+        for c in candidates[:top_n]:
+            db.update_dynamic_symbol(c['symbol'], c['pump_score'], 0, c['volume'], c['change_24h'])
+        
+        self.pump_candidates = [c['symbol'] for c in candidates[:top_n]]
+        return candidates[:top_n]
+    
+    def detect_dump_candidates(self, tickers, top_n=25):
+        """تشخیص ارزهای مستعد ریزش (برای سیگنال شورت)"""
+        candidates = []
+        
+        for t in tickers:
+            score = 0
+            reasons = []
+            
+            # ۱. رشد بیش از حد (احتمال اصلاح)
+            if t['change_24h'] > 20:
+                score += 6
+                reasons.append("رشد بیش از حد")
+            elif t['change_24h'] > 10:
+                score += 3
+                reasons.append("رشد قابل توجه")
+            
+            # ۲. حجم بالا در سقف قیمتی
+            if t['volume'] > 10_000_000 and t['change_24h'] > 10:
+                score += 5
+                reasons.append("حجم بالا در سقف")
+            
+            # ۳. فاصله از اوج روز
+            dist_from_high = ((t['high'] - t['price']) / (t['high'] + 0.0001)) * 100
+            if dist_from_high < 2 and t['change_24h'] > 5:
+                score += 5
+                reasons.append("نزدیک به اوج")
+            elif dist_from_high < 5 and t['change_24h'] > 5:
+                score += 2
+            
+            # ۴. نسبت عرضه به تقاضا (اسپرد بالا)
+            spread = ((t['ask'] - t['bid']) / (t['bid'] + 0.0001)) * 100
+            if spread > 0.2:
+                score += 3
+                reasons.append("اسپرد بالا")
+            
+            # ۵. کاهش تعداد معاملات نسبت به حجم
+            trade_vol_ratio = t['volume'] / (t['trades'] + 1)
+            if trade_vol_ratio > 1000:
+                score += 2
+                reasons.append("معاملات بزرگ")
+            
+            # ۶. قیمت بالا (احتمال ریزش بیشتر)
+            if t['price'] > 100:
+                score += 2
+                reasons.append("قیمت بالا")
+            
+            candidates.append({
+                **t,
+                'dump_score': score,
+                'dist_from_high': dist_from_high,
+                'reasons': reasons[:3]
+            })
+        
+        candidates.sort(key=lambda x: x['dump_score'], reverse=True)
+        
+        # به‌روزرسانی دیتابیس
+        for c in candidates[:top_n]:
+            db.update_dynamic_symbol(c['symbol'], 0, c['dump_score'], c['volume'], c['change_24h'])
+        
+        self.dump_candidates = [c['symbol'] for c in candidates[:top_n]]
+        return candidates[:top_n]
+    
+    def find_new_coins(self, tickers, top_n=10):
+        """پیدا کردن ارزهای جدید و داغ"""
+        candidates = []
+        
+        for t in tickers:
+            if t['trades'] > 5000 and t['volume'] > 2_000_000:
+                if t['change_24h'] > 3 or t['change_24h'] < -3:
+                    candidates.append(t)
+        
+        candidates.sort(key=lambda x: abs(x['change_24h']), reverse=True)
+        return candidates[:top_n]
+    
+    def scan_all(self):
+        """اسکن کامل بازار و به‌روزرسانی لیست ارزهای داغ"""
+        tickers = self.get_all_tickers()
+        if not tickers:
+            return [], [], []
+        
+        # تشخیص پامپ و دامپ
+        pump = self.detect_pump_candidates(tickers, 25)
+        dump = self.detect_dump_candidates(tickers, 20)
+        
+        # ترکیب برای لیست نهایی
+        hot = []
+        
+        # اولویت با ارزهای پامپ
+        for p in pump[:15]:
+            if p['symbol'] not in hot:
+                hot.append(p['symbol'])
+        
+        # سپس ارزهای دامپ
+        for d in dump[:10]:
+            if d['symbol'] not in hot:
+                hot.append(d['symbol'])
+        
+        # ارزهای اصلی همیشه باشند
+        main_symbols = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT']
+        for s in main_symbols:
+            if s not in hot:
+                hot.insert(0, s)
+        
+        self.hot_symbols = hot[:MAX_SYMBOLS_TO_SCAN]
+        self.last_scan = datetime.now()
+        
+        logger.info(f"🔍 Dynamic scan complete: {len(self.hot_symbols)} hot symbols")
+        logger.info(f"🚀 Pump candidates: {[p['symbol'] for p in pump[:5]]}")
+        logger.info(f"📉 Dump candidates: {[d['symbol'] for d in dump[:5]]}")
+        
+        return pump[:5], dump[:5], self.hot_symbols
+
 # ==================== Feature Engineer ====================
 class FeatureEngineer:
     """استخراج ۵۰ ویژگی از داده‌های خام"""
@@ -629,7 +892,7 @@ class FeatureEngineer:
                 features[f'price_to_ma_{p}'] = (current_price / (ma + 0.0001) - 1) * 100
         
         # ۳. EMA
-        for p in [7, 14, 21, 50, 100, 200]:
+        for p in [7, 14, 21, 50, 100]:
             if len(closes) >= p:
                 features[f'ema_{p}'] = FeatureEngineer._ema(closes, p)
         
@@ -788,7 +1051,6 @@ class ProfessionalAIModel:
         self.training_history = []
         self.version = 1
         
-        # مدل‌های اصلی
         self.models['random_forest'] = RandomForestClassifier(
             n_estimators=500,
             max_depth=20,
@@ -817,21 +1079,17 @@ class ProfessionalAIModel:
             )
         
         self.voting_model = None
-        
-        # بارگذاری مدل قبلی
         self._load_model()
         
         logger.info("✅ Professional AI Model initialized")
     
     def train(self, features_list, labels, source='historical'):
-        """آموزش مدل با داده‌های جدید"""
-        if len(features_list) < 50:
-            logger.warning(f"Not enough data for training (need 50+, got {len(features_list)})")
+        if len(features_list) < 30:
+            logger.warning(f"Not enough data for training (need 30+, got {len(features_list)})")
             return False
         
         start_time = time.time()
         
-        # تبدیل ویژگی‌ها به ماتریس
         X = []
         feature_names = []
         
@@ -849,15 +1107,11 @@ class ProfessionalAIModel:
         
         self.feature_names = feature_names
         
-        # نرمال‌سازی
         X_scaled = self.scaler.fit_transform(X)
-        
-        # کاهش ابعاد
         X_pca = self.pca.fit_transform(X_scaled)
         
         logger.info(f"📊 Training on {len(X)} samples, {X.shape[1]} features -> {X_pca.shape[1]} PCA components")
         
-        # آموزش هر مدل
         for name, model in self.models.items():
             try:
                 model.fit(X_pca, y)
@@ -872,7 +1126,6 @@ class ProfessionalAIModel:
             except Exception as e:
                 logger.error(f"Error training {name}: {e}")
         
-        # آموزش Voting
         try:
             estimators = [(name, model) for name, model in self.models.items()]
             self.voting_model = VotingClassifier(
@@ -888,7 +1141,6 @@ class ProfessionalAIModel:
         self.is_trained = True
         self.version += 1
         
-        # محاسبه معیارها
         y_pred = self.voting_model.predict(X_pca) if self.voting_model else y
         accuracy = accuracy_score(y, y_pred) if len(y) > 0 else 0
         precision = precision_score(y, y_pred, average='weighted', zero_division=0) if len(y) > 0 else 0
@@ -897,10 +1149,7 @@ class ProfessionalAIModel:
         
         training_time = time.time() - start_time
         
-        # ذخیره عملکرد
         db.save_model_performance(accuracy, precision, recall, f1, len(X), training_time)
-        
-        # ذخیره مدل
         self._save_model()
         
         logger.info(f"✅ Model trained! Accuracy: {accuracy:.2%}, F1: {f1:.2%}, Time: {training_time:.2f}s")
@@ -908,12 +1157,10 @@ class ProfessionalAIModel:
         return True
     
     def predict(self, features):
-        """پیش‌بینی با مدل"""
         if not self.is_trained:
             return None, 0, {}
         
         try:
-            # تبدیل ویژگی‌ها به آرایه
             row = []
             for key in self.feature_names:
                 if key in features:
@@ -964,27 +1211,7 @@ class ProfessionalAIModel:
             logger.error(f"Prediction error: {e}")
             return None, 0, {}
     
-    def incremental_learn(self, features_list, labels):
-        """یادگیری تدریجی با داده‌های جدید (بدون بازآموزی کامل)"""
-        if not self.is_trained or len(features_list) < 5:
-            return False
-        
-        # اگر مدل Voting وجود نداشته باشد، کامل آموزش بده
-        if not self.voting_model:
-            return self.train(features_list, labels, 'incremental')
-        
-        # برای مدل‌هایی که partial_fit پشتیبانی می‌کنند
-        # فعلاً داده‌ها را به بافر اضافه می‌کنیم و در شب آموزش کامل می‌دهیم
-        logger.info(f"📝 Incremental learning: {len(features_list)} new samples added to buffer")
-        
-        # ذخیره داده‌های جدید برای آموزش شبانه
-        for features, label in zip(features_list, labels):
-            db.save_training_data('incremental', features, label, 'feedback')
-        
-        return True
-    
     def _save_model(self):
-        """ذخیره مدل"""
         try:
             model_data = {
                 'models': self.models,
@@ -996,7 +1223,7 @@ class ProfessionalAIModel:
                 'version': self.version,
                 'training_history': self.training_history
             }
-            with open('ai_model_learning.pkl', 'wb') as f:
+            with open('ai_model_v16.pkl', 'wb') as f:
                 pickle.dump(model_data, f)
             logger.info("✅ Model saved to disk")
             return True
@@ -1005,10 +1232,9 @@ class ProfessionalAIModel:
             return False
     
     def _load_model(self):
-        """بارگذاری مدل"""
         try:
-            if os.path.exists('ai_model_learning.pkl'):
-                with open('ai_model_learning.pkl', 'rb') as f:
+            if os.path.exists('ai_model_v16.pkl'):
+                with open('ai_model_v16.pkl', 'rb') as f:
                     model_data = pickle.load(f)
                 self.models = model_data['models']
                 self.voting_model = model_data['voting_model']
@@ -1026,25 +1252,20 @@ class ProfessionalAIModel:
 
 # ==================== Signal Engine ====================
 class LearningSignalEngine:
-    """موتور سیگنال‌دهی با یادگیری مستمر"""
+    """موتور سیگنال‌دهی با یادگیری مستمر و اسکن پویا"""
     
     def __init__(self):
         self.ai_model = ProfessionalAIModel()
         self.feature_engineer = FeatureEngineer()
+        self.scanner = DynamicSymbolScanner()
         self.last_signals = {}
         self.signal_history = []
         self.feedback_buffer = []
-        self.daily_performance = {
-            'total': 0,
-            'correct': 0,
-            'wrong': 0,
-            'confidence_avg': 0
-        }
+        self.daily_performance = {'total': 0, 'correct': 0, 'wrong': 0}
         
         logger.info("✅ Learning Signal Engine initialized")
     
-    def train_from_historical_data(self, symbol='BTCUSDT', days=90):
-        """آموزش از داده‌های تاریخی"""
+    def train_from_historical_data(self, symbol='BTCUSDT', days=60):
         logger.info(f"🔄 Training from {days} days of historical data...")
         
         end_date = datetime.now()
@@ -1082,10 +1303,9 @@ class LearningSignalEngine:
         return self.ai_model.train(features_list, labels, 'historical')
     
     def train_from_feedback(self):
-        """آموزش از بازخوردهای کاربران"""
         logger.info("🔄 Training from user feedback...")
         
-        feedback_data = db.get_feedback_training_data(1000)
+        feedback_data = db.get_feedback_training_data(500)
         
         if not feedback_data or len(feedback_data) < MIN_FEEDBACK_FOR_RETRAIN:
             logger.info(f"💤 Not enough feedbacks ({len(feedback_data) if feedback_data else 0}/{MIN_FEEDBACK_FOR_RETRAIN})")
@@ -1097,7 +1317,6 @@ class LearningSignalEngine:
         for fb in feedback_data:
             features_snapshot = fb[0]
             feedback = fb[1]
-            accuracy = fb[2]
             
             if features_snapshot:
                 try:
@@ -1115,52 +1334,11 @@ class LearningSignalEngine:
         
         return self.ai_model.train(features_list, labels, 'feedback')
     
-    def train_from_market_data(self, symbol='BTCUSDT', days=7):
-        """آموزش از داده‌های جدید بازار (هفتگی)"""
-        logger.info(f"🔄 Training from last {days} days of market data...")
-        
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=days)
-        
-        candles = price_service.get_historical_candles(
-            symbol,
-            start_date.strftime('%Y-%m-%d'),
-            end_date.strftime('%Y-%m-%d'),
-            '1h'
-        )
-        
-        if not candles or len(candles) < 50:
-            logger.error("Not enough market data")
-            return False
-        
-        features_list = []
-        labels = []
-        
-        for i in range(50, len(candles) - 10):
-            window = candles[i-50:i+1]
-            features = self.feature_engineer.extract_all_features(window)
-            if features:
-                future_price = candles[i+10]['close']
-                current_price = candles[i]['close']
-                label = 1 if future_price > current_price else 0
-                features_list.append(features)
-                labels.append(label)
-                db.save_training_data(symbol, features, label, 'market')
-        
-        if len(features_list) < 50:
-            logger.info(f"💤 Not enough market data ({len(features_list)})")
-            return False
-        
-        return self.ai_model.train(features_list, labels, 'market')
-    
     def analyze(self, symbol):
-        """تحلیل یک نماد"""
         try:
             candles = price_service.get_candles(symbol, '5m', 200)
             if not candles or len(candles) < 50:
                 return None
-            
-            candles_1h = price_service.get_candles(symbol, '1h', 100)
             
             features = self.feature_engineer.extract_all_features(candles)
             if not features:
@@ -1168,15 +1346,20 @@ class LearningSignalEngine:
             
             current_price = candles[-1]['close']
             
-            # پیش‌بینی با AI
             prediction, confidence, details = self.ai_model.predict(features)
             
-            # محاسبه ATR
             closes = np.array([c['close'] for c in candles])
             atr = np.std(closes[-20:]) if len(closes) >= 20 else current_price * 0.01
             
             support = np.min(closes[-20:])
             resistance = np.max(closes[-20:])
+            
+            # تشخیص نوع سیگنال
+            signal_type = 'NORMAL'
+            if symbol in self.scanner.pump_candidates:
+                signal_type = 'PUMP'
+            elif symbol in self.scanner.dump_candidates:
+                signal_type = 'DUMP'
             
             if prediction is None or confidence < MIN_PREDICTION_CONFIDENCE:
                 return {
@@ -1188,12 +1371,12 @@ class LearningSignalEngine:
                     'support': round(support, 2),
                     'resistance': round(resistance, 2),
                     'model_details': details,
-                    'features': features
+                    'features': features,
+                    'signal_type': signal_type
                 }
             
             direction = 'LONG' if prediction == 1 else 'SHORT'
             
-            # حد ضرر و سود
             if direction == 'LONG':
                 sl = current_price - (atr * 2)
                 tp = current_price + (atr * 4)
@@ -1205,11 +1388,11 @@ class LearningSignalEngine:
                 if sl > resistance * 1.01:
                     sl = resistance * 1.01
             
-            if confidence >= 85:
+            if confidence >= 80:
                 leverage = 20
-            elif confidence >= 75:
+            elif confidence >= 70:
                 leverage = 15
-            elif confidence >= 65:
+            elif confidence >= 60:
                 leverage = 10
             else:
                 leverage = 5
@@ -1217,14 +1400,6 @@ class LearningSignalEngine:
             model_votes = []
             for name, pred in details.get('predictions', {}).items():
                 model_votes.append(f"{name}: {'UP' if pred == 1 else 'DOWN'}")
-            
-            # ذخیره تاریخچه
-            self.signal_history.append({
-                'symbol': symbol,
-                'direction': direction,
-                'confidence': confidence,
-                'timestamp': datetime.now()
-            })
             
             return {
                 'symbol': symbol,
@@ -1241,25 +1416,30 @@ class LearningSignalEngine:
                 'prediction_details': json.dumps(details),
                 'signal_accuracy': confidence,
                 'atr': round(atr, 2),
-                'features': features
+                'features': features,
+                'signal_type': signal_type
             }
             
         except Exception as e:
             logger.error(f"Analysis error: {e}")
             return None
     
-    def scan_market(self):
-        """اسکن بازار"""
+    def scan_market_dynamic(self):
+        """اسکن پویا با شناسایی خودکار ارزها"""
+        # اسکن کامل بازار
+        pump_list, dump_list, hot_symbols = self.scanner.scan_all()
+        
+        if not hot_symbols:
+            hot_symbols = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT']
+        
+        logger.info(f"🔍 Scanning {len(hot_symbols)} dynamic symbols...")
+        
         signals = []
-        symbols_to_scan = CRYPTO_SYMBOLS
-        
-        logger.info(f"🔍 Scanning {len(symbols_to_scan)} symbols...")
-        
-        with ThreadPoolExecutor(max_workers=15) as executor:
-            futures = {executor.submit(self.analyze, symbol): symbol for symbol in symbols_to_scan}
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(self.analyze, symbol): symbol for symbol in hot_symbols[:MAX_SYMBOLS_TO_SCAN]}
             for future in futures:
                 try:
-                    result = future.result(timeout=20)
+                    result = future.result(timeout=15)
                     if result and result['direction'] != 'HOLD' and result['confidence'] >= MIN_PREDICTION_CONFIDENCE:
                         signals.append(result)
                 except:
@@ -1268,34 +1448,29 @@ class LearningSignalEngine:
         signals.sort(key=lambda x: x['confidence'], reverse=True)
         logger.info(f"✅ Found {len(signals)} strong signals")
         
-        return signals
+        return signals, [p['symbol'] for p in pump_list], [d['symbol'] for d in dump_list]
     
     def process_feedback(self, signal_id, user_id, feedback_type):
-        """پردازش بازخورد و یادگیری"""
         signal = db.get_signal(signal_id)
         if not signal:
             return False
         
         accuracy = 90 if feedback_type == 'positive' else 30
         
-        # ذخیره بازخورد
         db.update_signal_feedback(signal_id, feedback_type, accuracy)
         
-        # به‌روزرسانی آمار روزانه
         if feedback_type == 'positive':
             self.daily_performance['correct'] += 1
         else:
             self.daily_performance['wrong'] += 1
         self.daily_performance['total'] += 1
         
-        # اگر بازخورد منفی بود، به عنوان داده آموزشی ذخیره کن
         if feedback_type == 'negative':
             features_snapshot = signal[17] if len(signal) > 17 else ''
             if features_snapshot:
                 try:
                     features = json.loads(features_snapshot)
                     if features and len(features) > 10:
-                        # برچسب معکوس: اگر سیگنال اشتباه بود، برعکس آن را یاد بگیر
                         direction = signal[3]
                         label = 0 if direction == 'LONG' else 1
                         db.save_training_data(signal[2], features, label, 'feedback_correction')
@@ -1303,79 +1478,7 @@ class LearningSignalEngine:
                     pass
         
         logger.info(f"📝 Feedback processed: {feedback_type} for signal {signal_id}")
-        
         return True
-
-# ==================== Learning Scheduler ====================
-class LearningScheduler:
-    """برنامه‌ریز یادگیری - ۳ روش همزمان"""
-    
-    def __init__(self, signal_engine):
-        self.signal_engine = signal_engine
-        self.last_full_train = None
-        self.last_feedback_train = None
-        self.last_market_train = None
-        
-    def run_nightly_learning(self):
-        """یادگیری شبانه - هر شب ساعت ۲ بامداد"""
-        while True:
-            now = datetime.now()
-            target_hour = 2
-            target_minute = 0
-            
-            if now.hour >= target_hour:
-                target_time = now.replace(hour=target_hour, minute=target_minute, second=0) + timedelta(days=1)
-            else:
-                target_time = now.replace(hour=target_hour, minute=target_minute, second=0)
-            
-            sleep_seconds = (target_time - now).total_seconds()
-            logger.info(f"💤 Sleeping until {target_time.strftime('%Y-%m-%d %H:%M')} for nightly learning...")
-            time.sleep(sleep_seconds)
-            
-            if db.get_setting('nightly_learn') != '1':
-                logger.info("⏸️ Nightly learning disabled")
-                continue
-            
-            logger.info("🌙 ===== NIGHTLY LEARNING CYCLE STARTED =====")
-            
-            # ۱. آموزش از بازخوردها
-            logger.info("📝 Step 1: Training from feedback...")
-            self.signal_engine.train_from_feedback()
-            
-            # ۲. آموزش از داده‌های جدید بازار
-            logger.info("📊 Step 2: Training from new market data...")
-            self.signal_engine.train_from_market_data('BTCUSDT', 7)
-            
-            # ۳. آموزش کامل از داده‌های تاریخی
-            logger.info("📚 Step 3: Full historical retraining...")
-            self.signal_engine.train_from_historical_data('BTCUSDT', 90)
-            
-            self.last_full_train = datetime.now()
-            
-            # ذخیره عملکرد
-            perf = self.signal_engine.daily_performance
-            if perf['total'] > 0:
-                accuracy = (perf['correct'] / perf['total']) * 100
-                logger.info(f"📊 Daily accuracy: {accuracy:.1f}% ({perf['correct']}/{perf['total']})")
-                
-                # بازنشانی آمار روزانه
-                self.signal_engine.daily_performance = {'total': 0, 'correct': 0, 'wrong': 0, 'confidence_avg': 0}
-            
-            logger.info("🌙 ===== NIGHTLY LEARNING CYCLE COMPLETED =====")
-    
-    def run_auto_learning(self):
-        """یادگیری خودکار - هر زمان که بازخورد کافی باشد"""
-        while True:
-            time.sleep(300)  # هر ۵ دقیقه چک کن
-            
-            if db.get_setting('auto_learn') != '1':
-                continue
-            
-            # چک کردن تعداد بازخوردها
-            feedback_data = db.get_feedback_training_data(100)
-            if feedback_data and len(feedback_data) >= MIN_FEEDBACK_FOR_RETRAIN:
-                logger.info(f"🔄 Auto-learning triggered ({len(feedback_data)} feedbacks)")
-                self.signal_engine.train_from_feedback()
 
 # ==================== Telegram Bot ====================
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
@@ -1384,19 +1487,25 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 # ==================== Keyboards ====================
 def get_main_keyboard(user_id):
     keyboard = [
-        ['🪙 ارز دیجیتال', '📊 اسکنر هوشمند'],
+        ['🪙 ارز دیجیتال', '📊 اسکنر هوشمند V16'],
         ['🎁 رفرال', '📊 وضعیت'],
-        ['🧠 یادگیری', '🚀 V15 - LEARNER']
+        ['🧠 یادگیری', '🚀 V16 - DYNAMIC']
     ]
     if user_id == ADMIN_ID:
         keyboard.append(['👑 پنل مدیریت'])
         keyboard.append(['📚 آموزش دستی', '⚡ فعال‌سازی یادگیری'])
+        keyboard.append(['🔄 اسکن دستی بازار'])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 def get_crypto_keyboard():
+    # دریافت ارزهای داغ از دیتابیس
+    hot = db.get_hot_symbols(20)
+    if not hot:
+        hot = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT', 'ADAUSDT', 'DOGEUSDT', 'AVAXUSDT']
+    
     keyboard = []
     row = []
-    for symbol in CRYPTO_SYMBOLS[:20]:
+    for symbol in hot:
         row.append(symbol)
         if len(row) == 4:
             keyboard.append(row)
@@ -1408,7 +1517,6 @@ def get_crypto_keyboard():
 
 # ==================== Global Variables ====================
 signal_engine = None
-learning_scheduler = None
 
 # ==================== Handlers ====================
 
@@ -1419,23 +1527,20 @@ async def start(update, context):
     
     db.add_user(user_id, username, first_name, 'fa')
     
-    # بررسی عملکرد مدل
     perf = db.get_latest_performance()
     perf_text = ""
     if perf:
         perf_text = f"\n📊 **عملکرد مدل:**\n• دقت: {perf[0]:.1f}%\n• F1: {perf[3]:.1f}%\n• نمونه‌ها: {perf[4]}"
     
     welcome_text = f"""
-🧠 **ربات یادگیرنده V15 - SELF-LEARNING AI**
+🧠 **ربات V16 - DYNAMIC SCANNER**
 
-🔥 **۳ روش یادگیری همزمان:**
-• 📝 از بازخورد کاربران (هر بار که دکمه می‌زنید)
-• 📊 از داده‌های جدید بازار (هر روز)
-• 📚 از پنل مدیریت (دستی)
-
-⚡ **۵۰ ویژگی مهندسی‌شده**
-⚡ **۴ مدل یادگیری ماشین همزمان**
-⚡ **هر روز قوی‌تر می‌شود**
+🔥 **قابلیت‌های جدید:**
+• 🚀 شناسایی خودکار ارزهای مستعد پامپ
+• 📉 شناسایی خودکار ارزهای مستعد ریزش
+• 🔍 اسکن پویای کل بازار
+• 📝 یادگیری از بازخورد کاربران
+• 📊 ۵۰ ویژگی + ۴ مدل ML
 {perf_text}
 
 🎁 **۲ سیگنال رایگان روزانه**
@@ -1447,21 +1552,41 @@ async def start(update, context):
 async def handle_message(update, context):
     user_id = update.effective_user.id
     text = update.message.text
-    lang = db.get_user_language(user_id)
     
     # ===== ADMIN PANEL =====
     if text == '👑 پنل مدیریت' and user_id == ADMIN_ID:
         await update.message.reply_text(
-            "👑 **پنل مدیریت**",
+            "👑 **پنل مدیریت V16**",
             reply_markup=ReplyKeyboardMarkup([
                 ['📢 ارسال پیام همگانی'],
                 ['✅ تایید هش'],
                 ['🔢 تعداد سیگنال رایگان'],
                 ['📚 آموزش دستی', '⚡ فعال‌سازی یادگیری'],
                 ['📊 عملکرد مدل'],
+                ['🔄 اسکن دستی بازار'],
                 ['🔙 بازگشت']
             ], resize_keyboard=True)
         )
+        return
+    
+    # ===== MANUAL SCAN =====
+    if text == '🔄 اسکن دستی بازار' and user_id == ADMIN_ID:
+        await update.message.reply_text("🔄 **اسکن دستی بازار شروع شد...**", parse_mode='Markdown')
+        
+        pump, dump, hot = signal_engine.scanner.scan_all()
+        
+        msg = "📊 **نتایج اسکن دستی:**\n\n"
+        msg += "🔥 **ارزهای مستعد پامپ:**\n"
+        for p in pump[:5]:
+            msg += f"• {p['symbol']} (امتیاز: {p['pump_score']}) - {', '.join(p.get('reasons', ['']))}\n"
+        
+        msg += "\n📉 **ارزهای مستعد ریزش:**\n"
+        for d in dump[:5]:
+            msg += f"• {d['symbol']} (امتیاز: {d['dump_score']}) - {', '.join(d.get('reasons', ['']))}\n"
+        
+        msg += f"\n📊 **تعداد ارزهای داغ:** {len(hot)}"
+        
+        await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=get_main_keyboard(user_id))
         return
     
     # ===== MANUAL TRAINING =====
@@ -1469,19 +1594,12 @@ async def handle_message(update, context):
         await update.message.reply_text("🔄 **آموزش دستی شروع شد...**\n⏳ لطفاً صبر کنید.", parse_mode='Markdown')
         
         try:
-            # ۱. آموزش از بازخوردها
             result1 = signal_engine.train_from_feedback()
-            
-            # ۲. آموزش از داده‌های بازار
-            result2 = signal_engine.train_from_market_data('BTCUSDT', 7)
-            
-            # ۳. آموزش کامل
-            result3 = signal_engine.train_from_historical_data('BTCUSDT', 90)
+            result2 = signal_engine.train_from_historical_data('BTCUSDT', 60)
             
             msg = "✅ **آموزش دستی کامل شد!**\n\n"
             msg += f"📝 بازخوردها: {'✅' if result1 else '❌'}\n"
-            msg += f"📊 داده‌های جدید: {'✅' if result2 else '❌'}\n"
-            msg += f"📚 داده‌های تاریخی: {'✅' if result3 else '❌'}\n"
+            msg += f"📊 داده‌های تاریخی: {'✅' if result2 else '❌'}\n"
             
             perf = db.get_latest_performance()
             if perf:
@@ -1509,20 +1627,19 @@ async def handle_message(update, context):
         perf = db.get_latest_performance()
         if perf:
             msg = f"""
-📊 **عملکرد مدل**
+📊 **عملکرد مدل V16**
 
 📅 تاریخ: {perf[6]}
 🎯 دقت: {perf[0]:.1f}%
-📊 Precision: {perf[1]:.1f}%
-📊 Recall: {perf[2]:.1f}%
 📊 F1-Score: {perf[3]:.1f}%
 📊 تعداد نمونه‌ها: {perf[4]}
 ⏱️ زمان آموزش: {perf[5]:.2f} ثانیه
 
 🧠 وضعیت: {'✅ فعال' if signal_engine.ai_model.is_trained else '❌ آموزش‌دیده نشده'}
+🔥 نسخه: V16
 """
         else:
-            msg = "📊 **هنوز عملکردی ثبت نشده است.**\nلطفاً ابتدا مدل را آموزش دهید."
+            msg = "📊 **هنوز عملکردی ثبت نشده است.**"
         
         await update.message.reply_text(msg, parse_mode='Markdown')
         return
@@ -1595,24 +1712,33 @@ async def handle_message(update, context):
         await update.message.reply_text("🔙 بازگشت", reply_markup=get_main_keyboard(user_id))
         return
     
-    # ===== SMART SCANNER =====
-    if text == '📊 اسکنر هوشمند':
-        await update.message.reply_text("🔄 **اسکن هوشمند بازار با ۴ مدل AI...**\n⏳ لطفاً صبر کنید.", parse_mode='Markdown')
+    # ===== SMART SCANNER V16 =====
+    if text == '📊 اسکنر هوشمند V16':
+        await update.message.reply_text("🔄 **اسکن پویا با شناسایی خودکار ارزها...**\n⏳ لطفاً صبر کنید.", parse_mode='Markdown')
         
-        signals = signal_engine.scan_market()
+        signals, pump_list, dump_list = signal_engine.scan_market_dynamic()
         
         if signals:
-            msg = "🧠 **نتایج اسکنر هوشمند (یادگیرنده)**\n\n"
+            msg = "🧠 **نتایج اسکنر پویا V16**\n\n"
+            
+            if pump_list:
+                msg += "🔥 **ارزهای مستعد پامپ (نزدیک):**\n"
+                for s in pump_list[:5]:
+                    msg += f"• {s}\n"
+                msg += "\n"
+            
+            if dump_list:
+                msg += "📉 **ارزهای مستعد ریزش (شورت):**\n"
+                for s in dump_list[:5]:
+                    msg += f"• {s}\n"
+                msg += "\n"
+            
+            msg += "📊 **سیگنال‌های قوی:**\n"
             for s in signals[:5]:
                 emoji = '🟢' if s['direction'] == 'LONG' else '🔴'
-                msg += f"""
-{emoji} **{s['symbol']} - {s['direction']}**
-💰 قیمت: ${s['entry']:,.2f}
-🎯 اطمینان: {s['confidence']}%
-📊 دلیل: {s['reason']}
-📊 مدل‌ها: {s.get('model_votes', 'N/A')}
----
-"""
+                tag = "🔥" if s.get('signal_type') == 'PUMP' else "📉" if s.get('signal_type') == 'DUMP' else ""
+                msg += f"{emoji} {tag} **{s['symbol']}** - {s['direction']} (اطمینان: {s['confidence']}%)\n"
+            
             await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=get_main_keyboard(user_id))
         else:
             await update.message.reply_text("🔍 **سیگنال قوی در بازار پیدا نشد.**\n⏳ دوباره امتحان کنید.", parse_mode='Markdown', reply_markup=get_main_keyboard(user_id))
@@ -1622,16 +1748,17 @@ async def handle_message(update, context):
     if text == '🧠 یادگیری':
         perf = db.get_latest_performance()
         feedback_count = len(db.get_feedback_training_data(1000) or [])
+        hot_count = len(db.get_hot_symbols(100))
         
         msg = f"""
-🧠 **وضعیت یادگیری**
+🧠 **وضعیت یادگیری V16**
 
 📊 **عملکرد فعلی:**
 {'' if not perf else f'• دقت: {perf[0]:.1f}%\n• F1: {perf[3]:.1f}%\n• نمونه‌ها: {perf[4]}'}
 
 📝 **بازخوردهای ذخیره‌شده:** {feedback_count}
+🔥 **ارزهای داغ شناسایی‌شده:** {hot_count}
 ⚡ **یادگیری خودکار:** {'✅ فعال' if db.get_setting('auto_learn') == '1' else '❌ غیرفعال'}
-🌙 **یادگیری شبانه:** {'✅ فعال' if db.get_setting('nightly_learn') == '1' else '❌ غیرفعال'}
 🧠 **وضعیت مدل:** {'✅ آموزش‌دیده' if signal_engine.ai_model.is_trained else '❌ آموزش‌دیده نشده'}
 
 💡 **هرچه بیشتر بازخورد بدهید، ربات قوی‌تر می‌شود!**
@@ -1641,12 +1768,12 @@ async def handle_message(update, context):
     
     # ===== CRYPTO =====
     if text == '🪙 ارز دیجیتال':
-        await update.message.reply_text("🪙 **انتخاب ارز دیجیتال:**", reply_markup=get_crypto_keyboard(), parse_mode='Markdown')
+        await update.message.reply_text("🪙 **انتخاب ارز دیجیتال (ارزهای داغ):**", reply_markup=get_crypto_keyboard(), parse_mode='Markdown')
         return
     
     # ===== REFERRAL =====
     if text == '🎁 رفرال':
-        bot_name = BOT_USERNAME.replace('@', '')
+        bot_name = "TASTtt_bot"
         ref_count = db.get_referral_count(user_id)
         free_signals = db.get_free_signals(user_id)
         msg = f"""
@@ -1666,29 +1793,28 @@ async def handle_message(update, context):
         has_sub, expire = db.has_subscription(user_id)
         remaining = (expire - datetime.now()).days if has_sub and expire else 0
         msg = f"""
-📊 **وضعیت**
+📊 **وضعیت کاربری**
 
 👤 کاربر: {user_id}
 🎯 سیگنال رایگان: {free_signals}/{max_free}
 {'✅ اشتراک: ' + str(remaining) + ' روز' if has_sub else '❌ بدون اشتراک'}
-🧠 نسخه: V15 SELF-LEARNING
+🧠 نسخه: V16 DYNAMIC SCANNER
 """
         await update.message.reply_text(msg, reply_markup=get_main_keyboard(user_id), parse_mode='Markdown')
         return
     
-    # ===== V15 INFO =====
-    if text == '🚀 V15 - LEARNER':
+    # ===== V16 INFO =====
+    if text == '🚀 V16 - DYNAMIC':
         msg = """
-🚀 **نسخه V15 - SELF-LEARNING AI**
+🚀 **نسخه V16 - DYNAMIC SCANNER**
 
-🧠 **۳ روش یادگیری:**
-• 📝 بازخورد کاربران (هر بار که دکمه می‌زنید)
-• 📊 داده‌های جدید بازار (هر روز)
-• 📚 آموزش دستی از پنل مدیریت
-
-⚡ **۵۰ ویژگی مهندسی‌شده**
-⚡ **۴ مدل یادگیری ماشین همزمان**
-⚡ **هر روز قوی‌تر می‌شود**
+🔥 **قابلیت‌های جدید:**
+• 🚀 شناسایی خودکار ارزهای مستعد پامپ
+• 📉 شناسایی خودکار ارزهای مستعد ریزش
+• 🔍 اسکن پویای کل بازار
+• 📝 یادگیری از بازخورد کاربران
+• 📊 ۵۰ ویژگی + ۴ مدل ML
+• 💪 هر روز قوی‌تر می‌شود
 
 💡 **هرچه بیشتر استفاده کنید، دقیق‌تر می‌شود!**
 """
@@ -1712,7 +1838,7 @@ async def handle_message(update, context):
         return
     
     # ===== SYMBOL ANALYSIS =====
-    if text in CRYPTO_SYMBOLS:
+    if text in db.get_hot_symbols(50) or text in ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT']:
         await analyze_symbol(update, context, text)
         return
     
@@ -1720,7 +1846,6 @@ async def handle_message(update, context):
 
 async def analyze_symbol(update, context, symbol):
     user_id = update.effective_user.id
-    lang = db.get_user_language(user_id)
     
     if not can_access_signals(user_id):
         await update.message.reply_text("⚠️ **دسترسی ندارید!**")
@@ -1740,7 +1865,7 @@ async def analyze_symbol(update, context, symbol):
         db.use_free_signal(user_id)
         is_free = True
     
-    status_msg = await update.message.reply_text(f"🧠 **تحلیل {symbol} با مدل یادگیرنده...**", parse_mode='Markdown')
+    status_msg = await update.message.reply_text(f"🧠 **تحلیل {symbol} با مدل V16...**", parse_mode='Markdown')
     
     try:
         result = signal_engine.analyze(symbol)
@@ -1752,6 +1877,12 @@ async def analyze_symbol(update, context, symbol):
             emoji = '🟢' if result['direction'] == 'LONG' else '🔴'
             direction_text = 'خرید (LONG)' if result['direction'] == 'LONG' else 'فروش (SHORT)'
             
+            tag = ""
+            if result.get('signal_type') == 'PUMP':
+                tag = "🔥 **سیگنال پامپ** - "
+            elif result.get('signal_type') == 'DUMP':
+                tag = "📉 **سیگنال ریزش** - "
+            
             feedback_keyboard = InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton("✅ سود کردم 🟢", callback_data=f"feedback:positive:{signal_id}"),
@@ -1760,8 +1891,9 @@ async def analyze_symbol(update, context, symbol):
             ])
             
             msg = f"""
-{emoji} **{symbol} - {direction_text} (V15 LEARNER)**
+{emoji} **{symbol} - {direction_text} (V16)**
 
+{tag}
 💰 ورود: ${result['entry']:,.2f}
 🎯 حد سود: ${result['tp']:,.2f}
 🛑 حد ضرر: ${result['sl']:,.2f}
@@ -1781,17 +1913,18 @@ async def analyze_symbol(update, context, symbol):
             await status_msg.delete()
             await update.message.reply_text(msg, reply_markup=feedback_keyboard, parse_mode='Markdown')
             
-            # ===== ارسال به کانال =====
+            # ارسال به کانال
             try:
                 channel_msg = f"""
-🚨 **سیگنال یادگیرنده - {direction_text}**
+🚨 **سیگنال V16 - {direction_text}**
 
 {emoji} **{symbol}**
+{tag}
 💰 ورود: ${result['entry']:,.2f}
 🎯 اطمینان: {result['confidence']}%
 📊 دلیل: {result['reason']}
 
-🧠 مدل: V15 SELF-LEARNING
+🧠 مدل: V16 DYNAMIC SCANNER
 📊 نسخه: {signal_engine.ai_model.version}
 
 #سیگنال #{'LONG' if result['direction'] == 'LONG' else 'SHORT'} #{symbol}
@@ -1858,7 +1991,6 @@ async def feedback_callback_handler(update: Update, context: ContextTypes.DEFAUL
         await query.edit_message_text("❌ خطا!")
         return
     
-    # ========== پردازش بازخورد ==========
     success = signal_engine.process_feedback(signal_id, user_id, feedback_type)
     
     if feedback_type == 'positive':
@@ -1868,8 +2000,6 @@ async def feedback_callback_handler(update: Update, context: ContextTypes.DEFAUL
 🧠 **این سیگنال به عنوان داده آموزشی مثبت ذخیره شد.**
 🔄 **شب هنگام، مدل از این سیگنال یاد می‌گیرد.**
 📈 **هرچه بیشتر بازخورد بدهید، سیگنال‌ها دقیق‌تر می‌شوند!**
-
-🌟 **امتیاز شما:** +۱ صحیح
 """
     else:
         msg = """
@@ -1878,8 +2008,6 @@ async def feedback_callback_handler(update: Update, context: ContextTypes.DEFAUL
 🧠 **این سیگنال به عنوان داده آموزشی منفی ذخیره شد.**
 🔄 **شب هنگام، مدل از این اشتباه درس می‌گیرد.**
 📈 **با بازخورد شما، ربات قوی‌تر می‌شود!**
-
-🌟 **امتیاز شما:** +۱ اشتباه (درس ارزشمند!)
 """
     
     await query.edit_message_text(msg, parse_mode='Markdown')
@@ -1912,40 +2040,33 @@ def can_access_signals(user_id):
 # ==================== Main ====================
 def main():
     print("="*80)
-    print("🌍 ULTIMATE SIGNAL BOT V15 - SELF-LEARNING AI")
+    print("🚀 ULTIMATE SIGNAL BOT V16 - DYNAMIC SCANNER")
     print("="*80)
-    print("🧠 3 Learning Methods:")
-    print("📝 User Feedback Learning")
-    print("📊 Market Data Learning")
-    print("📚 Manual Training")
-    print("🔥 50 Features | 4 ML Models")
-    print("🚀 Gets Smarter Every Day!")
+    print("🔥 Features:")
+    print("🔍 Auto-detect pump candidates")
+    print("📉 Auto-detect dump candidates (short)")
+    print("🧠 Self-learning AI with 50 features")
+    print("📊 4 ML models voting")
+    print("🔄 Dynamic market scanning")
     print("="*80)
     
     check_and_create_pid()
     
-    global signal_engine, learning_scheduler
+    global signal_engine
     
     signal_engine = LearningSignalEngine()
-    learning_scheduler = LearningScheduler(signal_engine)
     
-    # ===== آموزش اولیه =====
+    # آموزش اولیه
     if not signal_engine.ai_model.is_trained:
         logger.info("🔄 No model found. Initial training started...")
-        signal_engine.train_from_historical_data('BTCUSDT', 90)
+        signal_engine.train_from_historical_data('BTCUSDT', 60)
         
-        # اگر هنوز آموزش ندیده، با داده‌های کمتر امتحان کن
         if not signal_engine.ai_model.is_trained:
             signal_engine.train_from_historical_data('BTCUSDT', 30)
     
-    # ===== راه‌اندازی تردهای یادگیری =====
-    # ۱. یادگیری شبانه
-    nightly_thread = threading.Thread(target=learning_scheduler.run_nightly_learning, daemon=True)
-    nightly_thread.start()
-    
-    # ۲. یادگیری خودکار
-    auto_thread = threading.Thread(target=learning_scheduler.run_auto_learning, daemon=True)
-    auto_thread.start()
+    # اسکن اولیه بازار
+    logger.info("🔄 Initial market scan...")
+    signal_engine.scanner.scan_all()
     
     # ===== راه‌اندازی ربات =====
     app = Application.builder().token(BOT_TOKEN).build()
@@ -1954,7 +2075,7 @@ def main():
     app.add_handler(CallbackQueryHandler(feedback_callback_handler, pattern=r"^feedback:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    print("✅ Bot V15 started successfully!")
+    print("✅ Bot V16 started successfully!")
     print(f"✅ Admin: {ADMIN_ID}")
     print(f"✅ Channel: {CHANNEL_ID}")
     print(f"✅ AI Model: {'Trained' if signal_engine.ai_model.is_trained else 'Not Trained'}")
