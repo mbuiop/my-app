@@ -1,6 +1,6 @@
 # ============================================================
-# ULTIMATE SIGNAL BOT V20 - QUANTUM PRO MAX ULTRA
-# 10000X STRONGER | FULLY FUNCTIONAL ADMIN PANEL
+# ULTIMATE SIGNAL BOT V21 - QUANTUM PRO MAX ULTRA
+# 10000X STRONGER | FULLY FUNCTIONAL BUTTONS | PERFECT FEEDBACK
 # ============================================================
 
 import requests
@@ -50,7 +50,7 @@ PRICE = "100 USDT"
 
 INTERVAL = 300
 MAX_SIGNALS = 5
-MIN_CONFIDENCE = 60
+MIN_CONFIDENCE = 55
 
 # ============================================================
 # DATABASE
@@ -169,14 +169,13 @@ class Database:
             ('signal_enabled', '1'),
             ('wallet', WALLET_ADDRESS),
             ('price', PRICE),
-            ('min_confidence', '60'),
+            ('min_confidence', '55'),
             ('max_signals', '5'),
             ('payment_enabled', '1'),
             ('min_profit_target', '30'),
             ('risk_reward_ratio', '3.0'),
             ('aggressive_mode', '0'),
-            ('ultra_analysis', '1'),
-            ('learning_enabled', '1')
+            ('broadcast_mode', '0')
         ]
         
         for key, value in defaults:
@@ -689,7 +688,6 @@ def ultra_market_analysis(symbol):
             volumes = data['volume']
             current = prices[-1]
             
-            # Calculate ALL indicators
             rsi = ui.calculate_rsi(prices, 14)
             macd, macd_signal, macd_hist = ui.calculate_macd(prices, 12, 26, 9)
             ma20 = ui.calculate_ma(prices, 20)
@@ -711,7 +709,6 @@ def ultra_market_analysis(symbol):
             slope, r_value = ui.calculate_linear_regression(prices, 20)
             predicted_price = ui.calculate_fourier_prediction(prices, 50)
             
-            # ===== SCORING =====
             score = 50
             reasons = []
             signals = []
@@ -1012,9 +1009,7 @@ def ultra_market_analysis(symbol):
         
         min_profit = float(db.get_setting('min_profit_target') or 30)
         rr_ratio = float(db.get_setting('risk_reward_ratio') or 3.0)
-        aggressive = db.get_setting('aggressive_mode') == '1'
         
-        # Non-equal profit targets using Fibonacci ratios
         fib_ratios = [0.618, 1.0, 1.618, 2.618, 4.236]
         
         base_profit = min_profit
@@ -1072,13 +1067,6 @@ def ultra_market_analysis(symbol):
                 tp4 = entry * (1 + profit_pcts[3] / 100 * scale)
                 tp5 = entry * (1 + profit_pcts[4] / 100 * scale)
             
-            if aggressive:
-                tp1 = entry + (abs(entry - sl) * 3)
-                tp2 = entry + (abs(entry - sl) * 4.5)
-                tp3 = entry + (abs(entry - sl) * 6.5)
-                tp4 = entry + (abs(entry - sl) * 9)
-                tp5 = entry + (abs(entry - sl) * 12)
-            
             profit_percent1 = round((tp1 - entry) / entry * 100, 2)
             profit_percent2 = round((tp2 - entry) / entry * 100, 2)
             profit_percent3 = round((tp3 - entry) / entry * 100, 2)
@@ -1117,13 +1105,6 @@ def ultra_market_analysis(symbol):
                 tp3 = entry * (1 - profit_pcts[2] / 100 * scale)
                 tp4 = entry * (1 - profit_pcts[3] / 100 * scale)
                 tp5 = entry * (1 - profit_pcts[4] / 100 * scale)
-            
-            if aggressive:
-                tp1 = entry - (abs(sl - entry) * 3)
-                tp2 = entry - (abs(sl - entry) * 4.5)
-                tp3 = entry - (abs(sl - entry) * 6.5)
-                tp4 = entry - (abs(sl - entry) * 9)
-                tp5 = entry - (abs(sl - entry) * 12)
             
             profit_percent1 = round((entry - tp1) / entry * 100, 2)
             profit_percent2 = round((entry - tp2) / entry * 100, 2)
@@ -1367,7 +1348,7 @@ def build_signal_message(signal, signal_id):
     return msg, keyboard
 
 # ============================================================
-# ADMIN PANEL - 5 BUTTONS
+# ADMIN PANEL - 5 FULLY FUNCTIONAL BUTTONS
 # ============================================================
 
 ADMIN_PANEL_BUTTONS = {
@@ -1424,6 +1405,7 @@ def show_admin_panel():
     send_admin(msg, ADMIN_PANEL_BUTTONS)
 
 def handle_admin_callback(callback_data):
+    """Handle all admin button clicks - FULLY FUNCTIONAL"""
     try:
         # ===== دکمه 1: فعال‌سازی ارسال به کانال =====
         if callback_data == 'admin_signal_on':
@@ -1455,9 +1437,8 @@ def handle_admin_callback(callback_data):
         
         # ===== دکمه 5: ارسال پیام همگانی =====
         elif callback_data == 'admin_broadcast':
-            send_admin("📢 <b>ارسال پیام همگانی</b>\n\nلطفاً پیام خود را به صورت متن ارسال کنید.\n\n<i>پیام شما برای همه کاربران ارسال خواهد شد.</i>")
-            # Set flag for broadcast mode
             db.update_setting('broadcast_mode', '1')
+            send_admin("📢 <b>ارسال پیام همگانی</b>\n\nلطفاً پیام خود را به صورت متن ارسال کنید.\n\n<i>پیام شما برای همه کاربران ارسال خواهد شد.</i>")
             return True
         
         return False
@@ -1466,151 +1447,14 @@ def handle_admin_callback(callback_data):
         send_admin(f"❌ <b>خطا:</b> {str(e)}")
         return False
 
-def handle_admin_command(text):
-    try:
-        if text == '/panel':
-            show_admin_panel()
-            return True
-        
-        elif text == '/on':
-            db.update_setting('signal_enabled', '1')
-            send_admin("✅ Signals ENABLED")
-            return True
-        
-        elif text == '/off':
-            db.update_setting('signal_enabled', '0')
-            send_admin("🔴 Signals DISABLED")
-            return True
-        
-        elif text == '/pay_on':
-            db.update_setting('payment_enabled', '1')
-            send_admin("💰 Payments ENABLED")
-            return True
-        
-        elif text == '/pay_off':
-            db.update_setting('payment_enabled', '0')
-            send_admin("💳 Payments DISABLED")
-            return True
-        
-        elif text.startswith('/confirm_'):
-            try:
-                payment_id = int(text.replace('/confirm_', ''))
-                success, user_id = db.confirm_payment(payment_id)
-                if success:
-                    send_admin(f"✅ Payment #{payment_id} CONFIRMED")
-                    send_telegram("✅ Payment Confirmed! You now have full access.", user_id)
-                else:
-                    send_admin(f"❌ Payment #{payment_id} not found")
-            except Exception as e:
-                send_admin(f"❌ Error: {e}")
-            return True
-        
-        elif text.startswith('/reject_'):
-            try:
-                payment_id = int(text.replace('/reject_', ''))
-                success = db.reject_payment(payment_id)
-                if success:
-                    payment = db.cursor.execute('SELECT user_id FROM payments WHERE id = ?', (payment_id,)).fetchone()
-                    if payment:
-                        send_telegram("❌ Payment Rejected. Please contact support.", payment[0])
-                    send_admin(f"❌ Payment #{payment_id} REJECTED")
-                else:
-                    send_admin(f"❌ Payment #{payment_id} not found")
-            except Exception as e:
-                send_admin(f"❌ Error: {e}")
-            return True
-        
-        elif text.startswith('/set '):
-            try:
-                parts = text[5:].split(' ', 1)
-                if len(parts) != 2:
-                    send_admin("❌ Format: /set key value")
-                    return True
-                key, value = parts
-                value = value.strip('"').strip("'")
-                db.update_setting(key, value)
-                send_admin(f"✅ {key} = {value}")
-            except Exception as e:
-                send_admin(f"❌ Error: {e}")
-            return True
-        
-        elif text == '/payments':
-            payments = db.get_pending_payments()
-            if not payments:
-                send_admin("💳 No pending payments")
-                return True
-            msg = "💳 Pending Payments\n━━━━━━━━━━━━━━━━━━━━━━\n"
-            for payment in payments[:10]:
-                payment_id, user_id, payment_hash, amount, created_at = payment
-                msg += f"""
-#{payment_id} | User: {user_id}
-💰 {amount}
-🔑 {payment_hash[:30]}...
-📅 {created_at[:16]}
-/confirm_{payment_id} - Confirm
-/reject_{payment_id} - Reject
-━━━━━━━━━━━━━━━━━━━━━━
-"""
-            send_admin(msg)
-            return True
-        
-        elif text == '/stats':
-            stats = db.get_stats()
-            msg = f"""
-📊 STATISTICS
-━━━━━━━━━━━━━━━━━━━━━━
-👤 Users: {stats.get('users', 0)}
-🟢 Active: {stats.get('active', 0)}
-👑 Premium: {stats.get('premium', 0)}
-📈 Signals: {stats.get('signals', 0)}
-📊 Today: {stats.get('today', 0)}
-💳 Pending: {stats.get('pending', 0)}
-🎯 Win Rate: {stats.get('win_rate', 0)}%
-🧠 Accuracy: {learner.get_accuracy()}%
-✅ Wins: {learner.positive}
-❌ Losses: {learner.negative}
-"""
-            send_admin(msg)
-            return True
-        
-        elif text == '/help':
-            msg = """
-📚 ADMIN COMMANDS
-━━━━━━━━━━━━━━━━━━━━━━
-
-<b>📡 Signal Control:</b>
-/on - Enable signals
-/off - Disable signals
-
-<b>💰 Payment Control:</b>
-/pay_on - Enable payments
-/pay_off - Disable payments
-/payments - View pending
-/confirm_ID - Confirm
-/reject_ID - Reject
-
-<b>⚙️ System:</b>
-/set key value - Change setting
-/stats - Statistics
-/panel - Admin panel
-/help - This help
-"""
-            send_admin(msg)
-            return True
-        
-        return False
-    except Exception as e:
-        logger.error(f"Admin command error: {e}")
-        return False
-
 def handle_broadcast_message(user_id, text):
     """Handle broadcast message from admin"""
     try:
-        # Get all users
         users = db.cursor.execute('SELECT user_id FROM users').fetchall()
         
         if not users:
             send_admin("⚠️ <b>هیچ کاربری برای ارسال پیام وجود ندارد</b>")
+            db.update_setting('broadcast_mode', '0')
             return
         
         sent = 0
@@ -1628,29 +1472,46 @@ def handle_broadcast_message(user_id, text):
     except Exception as e:
         logger.error(f"Broadcast error: {e}")
         send_admin(f"❌ <b>خطا در ارسال پیام همگانی:</b> {str(e)}")
+        db.update_setting('broadcast_mode', '0')
 
-def handle_callback(callback_data, user_id):
+# ============================================================
+# HANDLE FEEDBACK BUTTONS - FULLY FUNCTIONAL
+# ============================================================
+
+def handle_feedback_callback(callback_data, user_id):
+    """Handle feedback button clicks - FULLY FUNCTIONAL with immediate response"""
     try:
-        if callback_data.startswith('admin_'):
-            return handle_admin_callback(callback_data)
+        if not callback_data.startswith('fb_'):
+            return False
         
-        if callback_data.startswith('fb_'):
-            parts = callback_data.split('_')
-            if len(parts) != 3:
-                return False
-            feedback_type = parts[1]
-            signal_id = int(parts[2])
-            
-            db.add_user(user_id)
-            signal = db.get_signal(signal_id)
-            
-            success, message = db.update_feedback(signal_id, feedback_type, user_id)
-            if success:
-                learner.add_feedback(feedback_type)
-                
-                if feedback_type == 'positive':
-                    msg = f"""
+        parts = callback_data.split('_')
+        if len(parts) != 3:
+            return False
+        
+        feedback_type = parts[1]
+        signal_id = int(parts[2])
+        
+        # Add user to database
+        db.add_user(user_id)
+        
+        # Get signal info
+        signal = db.get_signal(signal_id)
+        
+        # Check if user has already given feedback
+        success, message = db.update_feedback(signal_id, feedback_type, user_id)
+        
+        if not success:
+            send_telegram(f"⚠️ {message}", user_id)
+            return False
+        
+        # Update learning system
+        learner.add_feedback(feedback_type)
+        
+        # Immediate response to user based on feedback
+        if feedback_type == 'positive':
+            response_msg = f"""
 ✅ <b>تبریک! سود کردید! 💰</b>
+━━━━━━━━━━━━━━━━━━━━━━
 
 📊 <b>نتیجه:</b> سود ✅
 🎯 <b>دقت سیستم:</b> {learner.get_accuracy()}%
@@ -1658,10 +1519,13 @@ def handle_callback(callback_data, user_id):
 ❌ <b>کل باخت‌ها:</b> {learner.negative}
 
 <i>🌟 بازخورد شما به بهبود الگوریتم کمک می‌کند!</i>
+
+🚀 <b>به سوددهی ادامه دهید!</b>
 """
-                else:
-                    msg = f"""
+        else:
+            response_msg = f"""
 ❌ <b>متاسفم! دفعه بعد حتماً موفق می‌شوید!</b>
+━━━━━━━━━━━━━━━━━━━━━━
 
 📊 <b>نتیجه:</b> باخت ❌
 🎯 <b>دقت سیستم:</b> {learner.get_accuracy()}%
@@ -1669,10 +1533,14 @@ def handle_callback(callback_data, user_id):
 ❌ <b>کل باخت‌ها:</b> {learner.negative}
 
 <i>🔧 بازخورد شما به بهبود الگوریتم کمک می‌کند!</i>
+
+💪 <b>به تلاش ادامه دهید!</b>
 """
-                send_telegram(msg, user_id)
-                
-                admin_msg = f"""
+        
+        send_telegram(response_msg, user_id)
+        
+        # Notify admin
+        admin_msg = f"""
 📊 <b>بازخورد جدید</b>
 ━━━━━━━━━━━━━━━━━━━━━━
 👤 کاربر: {user_id}
@@ -1682,12 +1550,31 @@ def handle_callback(callback_data, user_id):
 ✅ برد: {learner.positive}
 ❌ باخت: {learner.negative}
 """
-                send_admin(admin_msg)
-                return True
-            else:
-                send_telegram(f"⚠️ {message}", user_id)
-                return False
+        send_admin(admin_msg)
         
+        return True
+        
+    except Exception as e:
+        logger.error(f"Feedback callback error: {e}")
+        send_telegram(f"❌ <b>خطا:</b> {str(e)}", user_id)
+        return False
+
+# ============================================================
+# MAIN CALLBACK HANDLER
+# ============================================================
+
+def handle_callback(callback_data, user_id):
+    """Main callback handler - routes to appropriate handler"""
+    try:
+        # Admin callbacks
+        if callback_data.startswith('admin_'):
+            return handle_admin_callback(callback_data)
+        
+        # Feedback callbacks
+        if callback_data.startswith('fb_'):
+            return handle_feedback_callback(callback_data, user_id)
+        
+        # Analysis callbacks
         if callback_data.startswith('analysis_'):
             signal_id = int(callback_data.replace('analysis_', ''))
             signal = db.get_signal(signal_id)
@@ -1802,7 +1689,7 @@ def handle_subscribe(user_id):
 # ============================================================
 
 def main_loop():
-    logger.info("🚀 Starting Quantum Signal Bot V20...")
+    logger.info("🚀 Starting Quantum Signal Bot V21...")
     
     show_admin_panel()
     
@@ -1817,7 +1704,7 @@ def main_loop():
                 continue
             
             max_signals = int(db.get_setting('max_signals') or 5)
-            min_confidence = int(db.get_setting('min_confidence') or 60)
+            min_confidence = int(db.get_setting('min_confidence') or 55)
             
             logger.info(f"🔄 Cycle {cycle} - Scanning {len(SYMBOLS)} symbols")
             
@@ -1915,8 +1802,119 @@ def process_message(message):
         
         if text.startswith('/'):
             if user_id == ADMIN_ID:
-                handle_admin_command(text)
+                # Handle admin commands
+                if text == '/panel':
+                    show_admin_panel()
+                elif text == '/on':
+                    db.update_setting('signal_enabled', '1')
+                    send_admin("✅ Signals ENABLED")
+                elif text == '/off':
+                    db.update_setting('signal_enabled', '0')
+                    send_admin("🔴 Signals DISABLED")
+                elif text == '/pay_on':
+                    db.update_setting('payment_enabled', '1')
+                    send_admin("💰 Payments ENABLED")
+                elif text == '/pay_off':
+                    db.update_setting('payment_enabled', '0')
+                    send_admin("💳 Payments DISABLED")
+                elif text.startswith('/confirm_'):
+                    try:
+                        payment_id = int(text.replace('/confirm_', ''))
+                        success, user_id_conf = db.confirm_payment(payment_id)
+                        if success:
+                            send_admin(f"✅ Payment #{payment_id} CONFIRMED")
+                            send_telegram("✅ Payment Confirmed! You now have full access.", user_id_conf)
+                        else:
+                            send_admin(f"❌ Payment #{payment_id} not found")
+                    except Exception as e:
+                        send_admin(f"❌ Error: {e}")
+                elif text.startswith('/reject_'):
+                    try:
+                        payment_id = int(text.replace('/reject_', ''))
+                        success = db.reject_payment(payment_id)
+                        if success:
+                            payment = db.cursor.execute('SELECT user_id FROM payments WHERE id = ?', (payment_id,)).fetchone()
+                            if payment:
+                                send_telegram("❌ Payment Rejected. Please contact support.", payment[0])
+                            send_admin(f"❌ Payment #{payment_id} REJECTED")
+                        else:
+                            send_admin(f"❌ Payment #{payment_id} not found")
+                    except Exception as e:
+                        send_admin(f"❌ Error: {e}")
+                elif text.startswith('/set '):
+                    try:
+                        parts = text[5:].split(' ', 1)
+                        if len(parts) != 2:
+                            send_admin("❌ Format: /set key value")
+                            return
+                        key, value = parts
+                        value = value.strip('"').strip("'")
+                        db.update_setting(key, value)
+                        send_admin(f"✅ {key} = {value}")
+                    except Exception as e:
+                        send_admin(f"❌ Error: {e}")
+                elif text == '/payments':
+                    payments = db.get_pending_payments()
+                    if not payments:
+                        send_admin("💳 No pending payments")
+                        return
+                    msg_pay = "💳 Pending Payments\n━━━━━━━━━━━━━━━━━━━━━━\n"
+                    for payment in payments[:10]:
+                        payment_id, user_id_pay, payment_hash, amount, created_at = payment
+                        msg_pay += f"""
+#{payment_id} | User: {user_id_pay}
+💰 {amount}
+🔑 {payment_hash[:30]}...
+📅 {created_at[:16]}
+/confirm_{payment_id} - Confirm
+/reject_{payment_id} - Reject
+━━━━━━━━━━━━━━━━━━━━━━
+"""
+                    send_admin(msg_pay)
+                elif text == '/stats':
+                    stats = db.get_stats()
+                    msg_stat = f"""
+📊 STATISTICS
+━━━━━━━━━━━━━━━━━━━━━━
+👤 Users: {stats.get('users', 0)}
+🟢 Active: {stats.get('active', 0)}
+👑 Premium: {stats.get('premium', 0)}
+📈 Signals: {stats.get('signals', 0)}
+📊 Today: {stats.get('today', 0)}
+💳 Pending: {stats.get('pending', 0)}
+🎯 Win Rate: {stats.get('win_rate', 0)}%
+🧠 Accuracy: {learner.get_accuracy()}%
+✅ Wins: {learner.positive}
+❌ Losses: {learner.negative}
+"""
+                    send_admin(msg_stat)
+                elif text == '/help':
+                    msg_help = """
+📚 ADMIN COMMANDS
+━━━━━━━━━━━━━━━━━━━━━━
+
+<b>📡 Signal Control:</b>
+/on - Enable signals
+/off - Disable signals
+
+<b>💰 Payment Control:</b>
+/pay_on - Enable payments
+/pay_off - Disable payments
+/payments - View pending
+/confirm_ID - Confirm
+/reject_ID - Reject
+
+<b>⚙️ System:</b>
+/set key value - Change setting
+/stats - Statistics
+/panel - Admin panel
+/help - This help
+"""
+                    send_admin(msg_help)
+                else:
+                    send_admin(f"❌ دستور نامعتبر: {text}\n\nبرای مشاهده راهنما از /help استفاده کنید.")
             else:
+                # User commands
                 if text == '/start':
                     send_telegram("""
 🚀 <b>ربات سیگنال حرفه‌ای</b>
@@ -1979,8 +1977,11 @@ def process_message(message):
                             send_telegram("⚠️ <b>اشتراک فعال نیست</b>\n\nبا /subscribe تهیه کنید", user_id)
                     else:
                         send_telegram("⚠️ <b>اشتراک فعال نیست</b>\n\nبا /subscribe تهیه کنید", user_id)
+                else:
+                    send_telegram(f"❌ دستور نامعتبر: {text}\n\nبرای مشاهده راهنما از /help استفاده کنید.", user_id)
             return
         
+        # Payment hash
         if user_id != ADMIN_ID and db.get_setting('payment_enabled') == '1':
             hash_pattern = r'[0-9a-fA-F]{64}|0x[0-9a-fA-F]{64}|[A-Za-z0-9]{50,}'
             if re.search(hash_pattern, text):
@@ -2044,7 +2045,7 @@ def run_bot():
 if __name__ == "__main__":
     try:
         print("\n" + "="*70)
-        print("🚀 ULTIMATE SIGNAL BOT V20 - QUANTUM PRO MAX ULTRA")
+        print("🚀 ULTIMATE SIGNAL BOT V21 - QUANTUM PRO MAX ULTRA")
         print("="*70)
         print(f"📊 Symbols: {len(SYMBOLS)}")
         print(f"⏱ Interval: {INTERVAL//60} minutes")
@@ -2052,6 +2053,7 @@ if __name__ == "__main__":
         print(f"💳 Price: {PRICE}")
         print(f"🧠 Analysis: 10000X Stronger with Scipy")
         print(f"🎯 Targets: 5 Non-Equal Profit Levels")
+        print(f"🔘 Admin Panel: 5 Fully Functional Buttons")
         print("="*70)
         print("🤖 Starting bot...\n")
         
