@@ -1,6 +1,6 @@
 # ============================================================
-# ULTIMATE SIGNAL BOT V9 - FULL SYMBOLS
-# ALL CRYPTO SYMBOLS + DEEP ANALYSIS + REAL DATA
+# ULTIMATE SIGNAL BOT V10 - FULLY FIXED
+# NO DATABASE ERRORS + WORKING TELEGRAM
 # ============================================================
 
 import requests
@@ -28,18 +28,15 @@ PRICE = "100 USDT"
 
 INTERVAL = 180  # 3 minutes
 MIN_CONFIDENCE = 60
-MAX_SIGNALS = 3  # Send 3 signals per cycle
+MAX_SIGNALS = 3
 
 # ============================================================
-# ALL CRYPTO SYMBOLS (FULL LIST)
+# ALL SYMBOLS (200+)
 # ============================================================
 
 ALL_SYMBOLS = [
-    # TOP 10
     'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT',
     'ADAUSDT', 'DOGEUSDT', 'AVAXUSDT', 'MATICUSDT', 'DOTUSDT',
-    
-    # Layer 1
     'LINKUSDT', 'UNIUSDT', 'ATOMUSDT', 'LTCUSDT', 'BCHUSDT',
     'NEARUSDT', 'ALGOUSDT', 'VETUSDT', 'ICPUSDT', 'FILUSDT',
     'FTMUSDT', 'XLMUSDT', 'EGLDUSDT', 'HNTUSDT', 'XMRUSDT',
@@ -49,8 +46,6 @@ ALL_SYMBOLS = [
     'RUNEUSDT', 'FLOWUSDT', 'QNTUSDT', 'SNXUSDT', 'GRTUSDT',
     'LDOUSDT', 'ARBUSDT', 'OPUSDT', 'INJUSDT', 'SEIUSDT',
     'WLDUSDT', 'PEPEUSDT', 'BONKUSDT', 'FLOKIUSDT', 'SHIBUSDT',
-    
-    # More Altcoins
     'WIFUSDT', 'RNDRUSDT', 'FETUSDT', 'AGIXUSDT', 'OCEANUSDT',
     'AKTUSDT', 'NOSUSDT', 'CUDOSUSDT', 'PHBUSDT', 'AIOZUSDT',
     'ENSUSDT', 'MASKUSDT', 'LPTUSDT', 'GALAUSDT', 'MANAUSDT',
@@ -82,7 +77,7 @@ ALL_SYMBOLS = [
 ]
 
 # ============================================================
-# DATABASE
+# DATABASE - FIXED (NO is_free COLUMN)
 # ============================================================
 
 class Database:
@@ -92,6 +87,7 @@ class Database:
         self.create_tables()
     
     def create_tables(self):
+        # Users table
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -107,6 +103,7 @@ class Database:
             )
         ''')
         
+        # Signals table - FIXED: removed is_free column
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS signals (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -130,6 +127,7 @@ class Database:
             )
         ''')
         
+        # Payments table
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS payments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -142,6 +140,7 @@ class Database:
             )
         ''')
         
+        # Settings table
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
@@ -149,6 +148,16 @@ class Database:
             )
         ''')
         
+        # Check if is_free column exists and remove it
+        self.cursor.execute("PRAGMA table_info(signals)")
+        columns = [col[1] for col in self.cursor.fetchall()]
+        if 'is_free' in columns:
+            try:
+                self.cursor.execute('ALTER TABLE signals DROP COLUMN is_free')
+            except:
+                pass
+        
+        # Default settings
         self.cursor.execute('INSERT OR IGNORE INTO settings VALUES ("signal_enabled", "1")')
         self.cursor.execute('INSERT OR IGNORE INTO settings VALUES ("payment_enabled", "1")')
         self.cursor.execute('INSERT OR IGNORE INTO settings VALUES ("wallet", ?)', (WALLET_ADDRESS,))
@@ -168,34 +177,48 @@ class Database:
         self.cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
         return self.cursor.fetchone()
     
-    def get_free_signals(self, user_id):
-        user = self.get_user(user_id)
-        if not user:
-            return 2
-        return user[4] if len(user) > 4 else 2
-    
-    def use_free_signal(self, user_id):
+    def save_signal(self, user_id, signal_data):
         self.cursor.execute('''
-            UPDATE users SET free_signals = free_signals - 1
-            WHERE user_id = ? AND free_signals > 0
-        ''', (user_id,))
+            INSERT INTO signals (
+                user_id, symbol, direction, entry, tp, sl, confidence,
+                created_at, rsi, macd, ma20, ma50, vwap, score, reasons
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            user_id, signal_data['symbol'], signal_data['signal'],
+            signal_data['price'], signal_data['tp'], signal_data['sl'],
+            signal_data['confidence'], datetime.now().isoformat(),
+            signal_data.get('rsi', 0), signal_data.get('macd', 0),
+            signal_data.get('ma20', 0), signal_data.get('ma50', 0),
+            signal_data.get('vwap', 0), signal_data.get('score', 0),
+            '|'.join(signal_data.get('reasons', []))
+        ))
+        signal_id = self.cursor.lastrowid
         self.conn.commit()
-        return self.cursor.rowcount > 0
+        return signal_id
     
-    def has_subscription(self, user_id):
+    def update_feedback(self, signal_id, feedback_type):
         self.cursor.execute('''
-            SELECT subscription_expire FROM users 
-            WHERE user_id = ? AND subscription_expire IS NOT NULL
-        ''', (user_id,))
+            UPDATE signals SET feedback = ? WHERE id = ?
+        ''', (feedback_type, signal_id))
+        self.conn.commit()
+        
+        self.cursor.execute('SELECT user_id FROM signals WHERE id = ?', (signal_id,))
         r = self.cursor.fetchone()
-        if r and r[0]:
-            try:
-                expire = datetime.fromisoformat(r[0])
-                if expire > datetime.now():
-                    return True, expire
-            except:
-                pass
-        return False, None
+        if r:
+            user_id = r[0]
+            if feedback_type == 'positive':
+                self.cursor.execute('''
+                    UPDATE users SET positive_feedback = positive_feedback + 1,
+                    feedback_count = feedback_count + 1 WHERE user_id = ?
+                ''', (user_id,))
+            else:
+                self.cursor.execute('''
+                    UPDATE users SET negative_feedback = negative_feedback + 1,
+                    feedback_count = feedback_count + 1 WHERE user_id = ?
+                ''', (user_id,))
+            self.conn.commit()
+            return user_id
+        return None
     
     def add_payment(self, user_id, payment_hash):
         self.cursor.execute('''
@@ -245,49 +268,6 @@ class Database:
         self.cursor.execute('SELECT id, user_id, payment_hash, status FROM payments WHERE id = ?', (payment_id,))
         return self.cursor.fetchone()
     
-    def save_signal(self, user_id, signal_data, is_free=False):
-        self.cursor.execute('''
-            INSERT INTO signals (
-                user_id, symbol, direction, entry, tp, sl, confidence,
-                created_at, is_free, rsi, macd, ma20, ma50, vwap, score, reasons
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            user_id, signal_data['symbol'], signal_data['signal'],
-            signal_data['price'], signal_data['tp'], signal_data['sl'],
-            signal_data['confidence'], datetime.now().isoformat(),
-            1 if is_free else 0,
-            signal_data.get('rsi', 0), signal_data.get('macd', 0),
-            signal_data.get('ma20', 0), signal_data.get('ma50', 0),
-            signal_data.get('vwap', 0), signal_data.get('score', 0),
-            '|'.join(signal_data.get('reasons', []))
-        ))
-        signal_id = self.cursor.lastrowid
-        self.conn.commit()
-        return signal_id
-    
-    def update_feedback(self, signal_id, feedback_type):
-        self.cursor.execute('''
-            UPDATE signals SET feedback = ? WHERE id = ?
-        ''', (feedback_type, signal_id))
-        
-        self.cursor.execute('SELECT user_id FROM signals WHERE id = ?', (signal_id,))
-        r = self.cursor.fetchone()
-        if r:
-            user_id = r[0]
-            if feedback_type == 'positive':
-                self.cursor.execute('''
-                    UPDATE users SET positive_feedback = positive_feedback + 1,
-                    feedback_count = feedback_count + 1 WHERE user_id = ?
-                ''', (user_id,))
-            else:
-                self.cursor.execute('''
-                    UPDATE users SET negative_feedback = negative_feedback + 1,
-                    feedback_count = feedback_count + 1 WHERE user_id = ?
-                ''', (user_id,))
-        
-        self.conn.commit()
-        return r[0] if r else None
-    
     def get_setting(self, key):
         self.cursor.execute('SELECT value FROM settings WHERE key = ?', (key,))
         r = self.cursor.fetchone()
@@ -300,10 +280,6 @@ class Database:
     def get_all_users(self):
         self.cursor.execute('SELECT user_id FROM users')
         return self.cursor.fetchall()
-    
-    def get_total_signals(self):
-        self.cursor.execute('SELECT COUNT(*) FROM signals')
-        return self.cursor.fetchone()[0]
 
 db = Database()
 
@@ -762,10 +738,11 @@ class LearningSystem:
 learner = LearningSystem()
 
 # ============================================================
-# TELEGRAM FUNCTIONS
+# TELEGRAM FUNCTIONS - FULLY WORKING
 # ============================================================
 
 def send_telegram(message, chat_id=None, reply_markup=None):
+    """Send message to Telegram with full error handling"""
     if not message:
         return False
     
@@ -784,16 +761,75 @@ def send_telegram(message, chat_id=None, reply_markup=None):
         if reply_markup:
             data['reply_markup'] = json.dumps(reply_markup)
         
+        print(f"📤 Sending to {chat_id}...")
         r = requests.post(url, data=data, timeout=15)
-        return r.status_code == 200
-    except:
+        
+        if r.status_code == 200:
+            print("✅ Telegram send successful")
+            return True
+        else:
+            print(f"❌ Telegram error: {r.text}")
+            return False
+            
+    except requests.exceptions.Timeout:
+        print("❌ Timeout: Telegram connection timeout")
+        return False
+    except requests.exceptions.ConnectionError:
+        print("❌ Connection Error: Cannot connect to Telegram")
+        print("💡 Check VPN/Internet")
+        return False
+    except Exception as e:
+        print(f"❌ Error sending to Telegram: {e}")
         return False
 
 def send_admin(message):
+    """Send message to admin"""
     return send_telegram(message, ADMIN_ID)
 
+def test_telegram():
+    """Test if bot can send messages"""
+    print("\n" + "="*50)
+    print("🔍 TESTING TELEGRAM CONNECTION")
+    print("="*50)
+    
+    # Test 1: Check bot token
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/getMe"
+        r = requests.get(url, timeout=10)
+        if r.status_code == 200 and r.json().get('ok'):
+            print(f"✅ Bot token valid: @{r.json()['result']['username']}")
+        else:
+            print("❌ Invalid bot token!")
+            return False
+    except:
+        print("❌ Cannot connect to Telegram API!")
+        return False
+    
+    # Test 2: Send test message to channel
+    test_msg = f"""
+🔍 <b>TEST MESSAGE</b>
+✅ Bot is working!
+⏰ Time: {datetime.now().strftime('%H:%M:%S')}
+📡 Connection successful!
+    """
+    
+    print(f"📤 Sending test to {CHANNEL_ID}...")
+    result = send_telegram(test_msg)
+    
+    if result:
+        print("✅ Test message sent successfully!")
+        return True
+    else:
+        print("❌ Failed to send test message!")
+        print("\n💡 SOLUTIONS:")
+        print("1. Make sure BOT_TOKEN is correct")
+        print("2. Add bot to channel as ADMIN")
+        print("3. Enable 'Post Messages' permission")
+        print("4. Check VPN/Internet")
+        return False
+
 def build_signal_message(signal, signal_id):
-    """Build COMPACT signal message"""
+    """Build COMPACT signal message with feedback buttons"""
     if not signal or signal['signal'] == 'HOLD':
         return None, None
     
@@ -856,30 +892,36 @@ def handle_feedback(callback_data):
             learner.add_feedback(feedback_type)
             
             if feedback_type == 'positive':
-                msg = "✅ Thank you! Your feedback helps improve accuracy!"
+                msg = "✅ Thank you! Your feedback helps improve!"
             else:
-                msg = "❌ Thank you for feedback! We'll improve!"
+                msg = "❌ Thank you! We'll improve the algorithm!"
             
             send_telegram(msg, user_id)
             return True
         
         return False
-    except:
+    except Exception as e:
+        print(f"Feedback error: {e}")
         return False
 
 # ============================================================
-# MAIN LOOP
+# MAIN LOOP - FIXED
 # ============================================================
 
 def signal_loop():
     print("\n" + "="*60)
-    print("🚀 ULTIMATE SIGNAL BOT V9")
+    print("🚀 ULTIMATE SIGNAL BOT V10 - FIXED")
     print(f"📊 Total Symbols: {len(ALL_SYMBOLS)}")
     print(f"📢 Channel: {CHANNEL_ID}")
     print(f"⏱ Interval: {INTERVAL//60} minutes")
     print("="*60)
     
-    send_telegram(f"🚀 Signal Bot V9 started!\n📊 Analyzing {len(ALL_SYMBOLS)} symbols")
+    # Test Telegram first
+    if not test_telegram():
+        print("\n❌ Telegram connection failed! Fix the issues above.")
+        return
+    
+    send_telegram(f"🚀 Signal Bot V10 started!\n📊 Analyzing {len(ALL_SYMBOLS)} symbols")
     
     cycle = 0
     
@@ -914,11 +956,16 @@ def signal_loop():
             
             if signals:
                 for signal in signals:
-                    signal_id = db.save_signal(0, signal, True)
+                    signal_id = db.save_signal(0, signal)
                     msg, keyboard = build_signal_message(signal, signal_id)
                     if msg:
                         if send_telegram(msg, reply_markup=keyboard):
                             print(f"✅ Sent: {signal['symbol']}")
+                        else:
+                            print(f"❌ Failed to send: {signal['symbol']}")
+                            # Try to send without keyboard
+                            if send_telegram(msg):
+                                print(f"✅ Sent without keyboard: {signal['symbol']}")
                         time.sleep(1)
             else:
                 if cycle % 2 == 0:
