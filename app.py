@@ -1,6 +1,7 @@
 # ============================================================
 # ULTIMATE SIGNAL BOT V21 - QUANTUM PRO MAX ULTRA
 # 10000X STRONGER | FULLY FUNCTIONAL BUTTONS | PERFECT FEEDBACK
+# COMPLETE VERSION - ALL FEATURES INCLUDED
 # ============================================================
 
 import requests
@@ -79,7 +80,8 @@ class Database:
                 negative_feedback INTEGER DEFAULT 0,
                 total_profit DECIMAL DEFAULT 0,
                 total_loss DECIMAL DEFAULT 0,
-                win_rate DECIMAL DEFAULT 0
+                win_rate DECIMAL DEFAULT 0,
+                signals_received INTEGER DEFAULT 0
             )
         ''')
         
@@ -121,7 +123,18 @@ class Database:
                 profit_percent5 DECIMAL DEFAULT 0,
                 market_phase TEXT,
                 volatility REAL,
-                trend_strength REAL
+                trend_strength REAL,
+                momentum_score REAL,
+                predicted_price REAL,
+                adx REAL,
+                stochastic_k REAL,
+                stochastic_d REAL,
+                cci REAL,
+                williams_r REAL,
+                volume_trend REAL,
+                obv REAL,
+                regression_slope REAL,
+                regression_r REAL
             )
         ''')
         
@@ -176,7 +189,11 @@ class Database:
             ('risk_reward_ratio', '3.0'),
             ('aggressive_mode', '0'),
             ('broadcast_mode', '0'),
-            ('learning_enabled', '1')
+            ('learning_enabled', '1'),
+            ('ultra_analysis', '1'),
+            ('auto_trade', '0'),
+            ('max_risk_per_trade', '2.0'),
+            ('min_volume_requirement', '1000000')
         ]
         
         for key, value in defaults:
@@ -217,8 +234,10 @@ class Database:
                 vwap, atr, support1, support2, resistance1, resistance2,
                 score, quality_score, reasons, profit_percent1, profit_percent2,
                 profit_percent3, profit_percent4, profit_percent5,
-                market_phase, volatility, trend_strength
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                market_phase, volatility, trend_strength, momentum_score,
+                predicted_price, adx, stochastic_k, stochastic_d, cci,
+                williams_r, volume_trend, obv, regression_slope, regression_r
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             signal_data['symbol'],
             signal_data['signal'],
@@ -252,7 +271,18 @@ class Database:
             signal_data.get('profit_percent5', 0),
             signal_data.get('market_phase', 'neutral'),
             signal_data.get('volatility', 0),
-            signal_data.get('trend_strength', 0)
+            signal_data.get('trend_strength', 0),
+            signal_data.get('momentum_score', 0),
+            signal_data.get('predicted_price', 0),
+            signal_data.get('adx', 0),
+            signal_data.get('stochastic_k', 0),
+            signal_data.get('stochastic_d', 0),
+            signal_data.get('cci', 0),
+            signal_data.get('williams_r', 0),
+            signal_data.get('volume_trend', 0),
+            signal_data.get('obv', 0),
+            signal_data.get('regression_slope', 0),
+            signal_data.get('regression_r', 0)
         ))
         signal_id = self.cursor.lastrowid
         self.conn.commit()
@@ -275,7 +305,7 @@ class Database:
                            (feedback_type, user_id, signal_id))
         
         if feedback_type == 'positive':
-            self.cursor.execute('UPDATE users SET positive_feedback = positive_feedback + 1, feedback_count = feedback_count + 1 WHERE user_id = ?', (user_id,))
+            self.cursor.execute('UPDATE users SET positive_feedback = positive_feedback + 1, feedback_count = feedback_count + 1, signals_received = signals_received + 1 WHERE user_id = ?', (user_id,))
             self.cursor.execute('UPDATE users SET total_profit = total_profit + ? WHERE user_id = ?', (profit_amount, user_id))
         else:
             self.cursor.execute('UPDATE users SET negative_feedback = negative_feedback + 1, feedback_count = feedback_count + 1 WHERE user_id = ?', (user_id,))
@@ -551,7 +581,8 @@ class QuantumIndicators:
         if high_k == low_k:
             return 50, 50
         k = 100 * (closes[-1] - low_k) / (high_k - low_k)
-        return round(k, 2), 50
+        d = np.mean([k]) if d_period == 1 else k
+        return round(k, 2), round(d, 2)
     
     @staticmethod
     def calculate_cci(highs, lows, closes, period=20):
@@ -636,6 +667,32 @@ class QuantumIndicators:
         fft_vals[5:-5] = 0
         predicted = np.real(ifft(fft_vals))[-1]
         return round(predicted, 8)
+    
+    @staticmethod
+    def calculate_market_strength(closes, highs, lows):
+        if len(closes) < 50:
+            return 50
+        high_50 = max(highs[-50:])
+        low_50 = min(lows[-50:])
+        current = closes[-1]
+        if high_50 == low_50:
+            return 50
+        return round((current - low_50) / (high_50 - low_50) * 100, 2)
+    
+    @staticmethod
+    def calculate_ichimoku(highs, lows, closes):
+        if len(closes) < 52:
+            return None
+        tenkan = (max(highs[-9:]) + min(lows[-9:])) / 2
+        kijun = (max(highs[-26:]) + min(lows[-26:])) / 2
+        senkou_a = (tenkan + kijun) / 2
+        senkou_b = (max(highs[-52:]) + min(lows[-52:])) / 2
+        return {
+            'tenkan': round(tenkan, 8),
+            'kijun': round(kijun, 8),
+            'senkou_a': round(senkou_a, 8),
+            'senkou_b': round(senkou_b, 8)
+        }
 
 # ============================================================
 # ALL CRYPTO SYMBOLS
@@ -691,6 +748,7 @@ def ultra_market_analysis(symbol):
             
             rsi = ui.calculate_rsi(prices, 14)
             macd, macd_signal, macd_hist = ui.calculate_macd(prices, 12, 26, 9)
+            ma7 = ui.calculate_ma(prices, 7)
             ma20 = ui.calculate_ma(prices, 20)
             ma50 = ui.calculate_ma(prices, 50)
             ma100 = ui.calculate_ma(prices, 100)
@@ -706,137 +764,117 @@ def ultra_market_analysis(symbol):
             momentum = ui.calculate_momentum(prices, 14)
             volume_trend = ui.calculate_volume_trend(volumes)
             volatility = ui.calculate_volatility(highs, lows, prices, 20)
+            market_strength = ui.calculate_market_strength(prices, highs, lows)
             obv = ui.calculate_obv(prices, volumes)
             slope, r_value = ui.calculate_linear_regression(prices, 20)
             predicted_price = ui.calculate_fourier_prediction(prices, 50)
+            ichimoku = ui.calculate_ichimoku(highs, lows, prices)
             
             score = 50
             reasons = []
-            signals = []
             
+            # 1. RSI (30 points)
             if rsi < 25:
                 score += 30
                 reasons.append(f"🔥 RSI Oversold: {rsi:.1f}")
-                signals.append('buy')
             elif rsi < 35:
                 score += 22
                 reasons.append(f"📈 RSI Near Oversold: {rsi:.1f}")
-                signals.append('buy')
             elif rsi > 75:
                 score -= 30
                 reasons.append(f"🔥 RSI Overbought: {rsi:.1f}")
-                signals.append('sell')
             elif rsi > 65:
                 score -= 22
                 reasons.append(f"📉 RSI Near Overbought: {rsi:.1f}")
-                signals.append('sell')
             
+            # 2. MACD (30 points)
             if macd > 0 and macd_hist > 0:
                 score += 30
                 reasons.append("🟢 MACD Bullish Cross")
-                signals.append('buy')
             elif macd < 0 and macd_hist < 0:
                 score -= 30
                 reasons.append("🔴 MACD Bearish Cross")
-                signals.append('sell')
             elif macd > 0:
                 score += 18
                 reasons.append("🟡 MACD Positive")
-                signals.append('buy')
             else:
                 score -= 18
                 reasons.append("🟡 MACD Negative")
-                signals.append('sell')
             
+            # 3. Moving Averages (40 points)
             if current > ma20 and ma20 > ma50 and ma50 > ma100 and ma100 > ma200:
                 score += 40
                 reasons.append("🚀 Super Uptrend (MA)")
-                signals.append('buy')
             elif current < ma20 and ma20 < ma50 and ma50 < ma100 and ma100 < ma200:
                 score -= 40
                 reasons.append("💀 Super Downtrend (MA)")
-                signals.append('sell')
             elif current > ma20 and ma20 > ma50 and ma50 > ma100:
                 score += 30
                 reasons.append("📈 Strong Uptrend (MA)")
-                signals.append('buy')
             elif current < ma20 and ma20 < ma50 and ma50 < ma100:
                 score -= 30
                 reasons.append("📉 Strong Downtrend (MA)")
-                signals.append('sell')
             elif current > ma20 and ma20 > ma50:
                 score += 18
                 reasons.append("📈 Uptrend (MA)")
-                signals.append('buy')
             elif current < ma20 and ma20 < ma50:
                 score -= 18
                 reasons.append("📉 Downtrend (MA)")
-                signals.append('sell')
             elif current > ma20:
                 score += 10
                 reasons.append("⬆️ Above MA20")
-                signals.append('buy')
             else:
                 score -= 10
                 reasons.append("⬇️ Below MA20")
-                signals.append('sell')
             
+            # 4. Bollinger Bands (25 points)
             if current < lower_bb:
                 score += 25
                 reasons.append("🎯 Below Lower BB")
-                signals.append('buy')
             elif current > upper_bb:
                 score -= 25
                 reasons.append("🎯 Above Upper BB")
-                signals.append('sell')
             elif current < middle_bb:
                 score += 12
                 reasons.append("📊 Below BB Middle")
-                signals.append('buy')
             else:
                 score -= 12
                 reasons.append("📊 Above BB Middle")
-                signals.append('sell')
             
+            # 5. VWAP (20 points)
             if current > vwap:
                 score += 20
                 reasons.append("✅ Above VWAP")
-                signals.append('buy')
             else:
                 score -= 20
                 reasons.append("❌ Below VWAP")
-                signals.append('sell')
             
+            # 6. Support/Resistance (30 points)
             if support1 > 0:
                 dist_to_support = ((current - support1) / current) * 100
                 if dist_to_support < 0.2:
                     score += 30
-                    reasons.append(f"🛡️ Exact Support")
-                    signals.append('buy')
+                    reasons.append("🛡️ Exact Support")
                 elif dist_to_support < 0.6:
                     score += 22
-                    reasons.append(f"🛡️ Near Support")
-                    signals.append('buy')
+                    reasons.append("🛡️ Near Support")
                 elif dist_to_support < 1.2:
                     score += 14
-                    reasons.append(f"🛡️ Close Support")
-                    signals.append('buy')
+                    reasons.append("🛡️ Close Support")
             
             if resistance1 > 0:
                 dist_to_resistance = ((resistance1 - current) / current) * 100
                 if dist_to_resistance < 0.2:
                     score -= 30
-                    reasons.append(f"🚫 Exact Resistance")
-                    signals.append('sell')
+                    reasons.append("🚫 Exact Resistance")
                 elif dist_to_resistance < 0.6:
                     score -= 22
-                    reasons.append(f"🚫 Near Resistance")
-                    signals.append('sell')
+                    reasons.append("🚫 Near Resistance")
                 elif dist_to_resistance < 1.2:
                     score -= 14
-                    reasons.append(f"🚫 Close Resistance")
-                    signals.append('sell')
+                    reasons.append("🚫 Close Resistance")
             
+            # 7. ADX (25 points)
             if adx > 45:
                 if score > 50:
                     score += 25
@@ -852,95 +890,108 @@ def ultra_market_analysis(symbol):
                     score -= 15
                     reasons.append(f"⚠️ Trend: {adx:.1f}")
             
+            # 8. Stochastic (20 points)
             if stoch_k < 20:
                 score += 20
-                reasons.append(f"📊 Stochastic Oversold")
-                signals.append('buy')
+                reasons.append("📊 Stochastic Oversold")
             elif stoch_k > 80:
                 score -= 20
-                reasons.append(f"📊 Stochastic Overbought")
-                signals.append('sell')
+                reasons.append("📊 Stochastic Overbought")
             
+            # 9. CCI (20 points)
             if cci < -100:
                 score += 20
-                reasons.append(f"📈 CCI Oversold")
-                signals.append('buy')
+                reasons.append("📈 CCI Oversold")
             elif cci > 100:
                 score -= 20
-                reasons.append(f"📉 CCI Overbought")
-                signals.append('sell')
+                reasons.append("📉 CCI Overbought")
             
+            # 10. Williams %R (15 points)
             if williams_r < -80:
                 score += 15
-                reasons.append(f"📈 Williams Oversold")
-                signals.append('buy')
+                reasons.append("📈 Williams Oversold")
             elif williams_r > -20:
                 score -= 15
-                reasons.append(f"📉 Williams Overbought")
-                signals.append('sell')
+                reasons.append("📉 Williams Overbought")
             
+            # 11. Volume Trend (20 points)
             if volume_trend > 15:
                 if score > 50:
                     score += 20
-                    reasons.append(f"📊 Volume Increasing")
-                    signals.append('buy')
+                    reasons.append("📊 Volume Increasing")
                 else:
                     score -= 20
-                    reasons.append(f"📊 Volume Increasing (Bearish)")
-                    signals.append('sell')
+                    reasons.append("📊 Volume Increasing (Bearish)")
             elif volume_trend < -15:
                 if score > 50:
                     score -= 20
-                    reasons.append(f"📊 Volume Decreasing")
-                    signals.append('sell')
+                    reasons.append("📊 Volume Decreasing")
                 else:
                     score += 20
-                    reasons.append(f"📊 Volume Decreasing (Bullish)")
-                    signals.append('buy')
+                    reasons.append("📊 Volume Decreasing (Bullish)")
             
+            # 12. Momentum (20 points)
             if momentum > 3:
                 score += 20
-                reasons.append(f"📈 Strong Momentum")
-                signals.append('buy')
+                reasons.append("📈 Strong Momentum")
             elif momentum < -3:
                 score -= 20
-                reasons.append(f"📉 Weak Momentum")
-                signals.append('sell')
+                reasons.append("📉 Weak Momentum")
             elif momentum > 1:
                 score += 10
-                reasons.append(f"📈 Positive Momentum")
-                signals.append('buy')
+                reasons.append("📈 Positive Momentum")
             elif momentum < -1:
                 score -= 10
-                reasons.append(f"📉 Negative Momentum")
-                signals.append('sell')
+                reasons.append("📉 Negative Momentum")
             
+            # 13. OBV (15 points)
             if obv > 0:
                 score += 15
                 reasons.append("📊 OBV Bullish")
-                signals.append('buy')
             else:
                 score -= 15
                 reasons.append("📊 OBV Bearish")
-                signals.append('sell')
             
+            # 14. Linear Regression (15 points)
             if slope > 0 and r_value > 0.3:
                 score += 15
                 reasons.append(f"📈 Uptrend (R={r_value:.2f})")
-                signals.append('buy')
             elif slope < 0 and r_value < -0.3:
                 score -= 15
                 reasons.append(f"📉 Downtrend (R={r_value:.2f})")
-                signals.append('sell')
             
+            # 15. FFT Prediction (15 points)
             if predicted_price > current * 1.02:
                 score += 15
-                reasons.append(f"🔮 FFT Bullish")
-                signals.append('buy')
+                reasons.append("🔮 FFT Bullish")
             elif predicted_price < current * 0.98:
                 score -= 15
-                reasons.append(f"🔮 FFT Bearish")
-                signals.append('sell')
+                reasons.append("🔮 FFT Bearish")
+            
+            # 16. Ichimoku (10 points)
+            if ichimoku:
+                if current > ichimoku['senkou_a'] and current > ichimoku['senkou_b']:
+                    score += 10
+                    reasons.append("☁️ Above Ichimoku Cloud")
+                elif current < ichimoku['senkou_a'] and current < ichimoku['senkou_b']:
+                    score -= 10
+                    reasons.append("☁️ Below Ichimoku Cloud")
+            
+            # 17. Market Strength (10 points)
+            if market_strength > 70:
+                score += 10
+                reasons.append(f"💪 Market Strength: {market_strength:.1f}")
+            elif market_strength < 30:
+                score -= 10
+                reasons.append(f"💪 Market Weakness: {market_strength:.1f}")
+            
+            # 18. MA7 vs MA20 (10 points)
+            if ma7 > ma20:
+                score += 10
+                reasons.append("📈 MA7 > MA20")
+            else:
+                score -= 10
+                reasons.append("📉 MA7 < MA20")
             
             market_phase = "neutral"
             if adx > 35 and score > 55:
@@ -973,7 +1024,16 @@ def ultra_market_analysis(symbol):
                 'market_phase': market_phase,
                 'weight': tf['weight'],
                 'reasons': reasons[:3],
-                'signals': signals
+                'stoch_k': stoch_k,
+                'stoch_d': stoch_d,
+                'cci': cci,
+                'williams_r': williams_r,
+                'volume_trend': volume_trend,
+                'obv': obv,
+                'slope': slope,
+                'r_value': r_value,
+                'predicted_price': predicted_price,
+                'momentum': momentum
             }
             
             all_scores.append(score)
@@ -1010,6 +1070,7 @@ def ultra_market_analysis(symbol):
         
         min_profit = float(db.get_setting('min_profit_target') or 30)
         rr_ratio = float(db.get_setting('risk_reward_ratio') or 3.0)
+        aggressive = db.get_setting('aggressive_mode') == '1'
         
         fib_ratios = [0.618, 1.0, 1.618, 2.618, 4.236]
         
@@ -1068,6 +1129,13 @@ def ultra_market_analysis(symbol):
                 tp4 = entry * (1 + profit_pcts[3] / 100 * scale)
                 tp5 = entry * (1 + profit_pcts[4] / 100 * scale)
             
+            if aggressive:
+                tp1 = entry + (abs(entry - sl) * 3)
+                tp2 = entry + (abs(entry - sl) * 4.5)
+                tp3 = entry + (abs(entry - sl) * 6.5)
+                tp4 = entry + (abs(entry - sl) * 9)
+                tp5 = entry + (abs(entry - sl) * 12)
+            
             profit_percent1 = round((tp1 - entry) / entry * 100, 2)
             profit_percent2 = round((tp2 - entry) / entry * 100, 2)
             profit_percent3 = round((tp3 - entry) / entry * 100, 2)
@@ -1106,6 +1174,13 @@ def ultra_market_analysis(symbol):
                 tp3 = entry * (1 - profit_pcts[2] / 100 * scale)
                 tp4 = entry * (1 - profit_pcts[3] / 100 * scale)
                 tp5 = entry * (1 - profit_pcts[4] / 100 * scale)
+            
+            if aggressive:
+                tp1 = entry - (abs(sl - entry) * 3)
+                tp2 = entry - (abs(sl - entry) * 4.5)
+                tp3 = entry - (abs(sl - entry) * 6.5)
+                tp4 = entry - (abs(sl - entry) * 9)
+                tp5 = entry - (abs(sl - entry) * 12)
             
             profit_percent1 = round((entry - tp1) / entry * 100, 2)
             profit_percent2 = round((entry - tp2) / entry * 100, 2)
@@ -1156,7 +1231,17 @@ def ultra_market_analysis(symbol):
             'reasons': all_reasons[:8],
             'time': datetime.now().strftime("%H:%M"),
             'timeframes': {k: {'score': v['score'], 'rsi': v['rsi'], 'phase': v.get('market_phase', 'neutral')} 
-                          for k, v in analysis_results.items()}
+                          for k, v in analysis_results.items()},
+            'stochastic_k': analysis_results.get('5m', {}).get('stoch_k', 50),
+            'stochastic_d': analysis_results.get('5m', {}).get('stoch_d', 50),
+            'cci': analysis_results.get('5m', {}).get('cci', 0),
+            'williams_r': analysis_results.get('5m', {}).get('williams_r', -50),
+            'volume_trend': analysis_results.get('5m', {}).get('volume_trend', 0),
+            'obv': analysis_results.get('5m', {}).get('obv', 0),
+            'regression_slope': analysis_results.get('5m', {}).get('slope', 0),
+            'regression_r': analysis_results.get('5m', {}).get('r_value', 0),
+            'predicted_price': analysis_results.get('5m', {}).get('predicted_price', current),
+            'momentum_score': analysis_results.get('5m', {}).get('momentum', 0)
         }
         
     except Exception as e:
@@ -1184,7 +1269,8 @@ class LearningSystem:
                         'bollinger': 1.0, 'vwap': 1.2, 'volume': 1.0,
                         'sr': 1.0, 'adx': 1.0, 'stochastic': 1.0,
                         'cci': 1.0, 'williams': 1.0, 'momentum': 1.0,
-                        'obv': 1.0, 'regression': 1.0, 'fft': 1.2
+                        'obv': 1.0, 'regression': 1.0, 'fft': 1.2,
+                        'ichimoku': 1.0, 'market_strength': 1.0
                     })
                     self.market_weights = data.get('market_weights', {
                         'bullish_trend': 1.0,
@@ -1195,6 +1281,7 @@ class LearningSystem:
                         'neutral': 1.0
                     })
                     self.timeframe_weights = data.get('timeframe_weights', {})
+                    self.indicator_accuracy = data.get('indicator_accuracy', {})
                     return
             except:
                 pass
@@ -1206,7 +1293,8 @@ class LearningSystem:
             'bollinger': 1.0, 'vwap': 1.2, 'volume': 1.0,
             'sr': 1.0, 'adx': 1.0, 'stochastic': 1.0,
             'cci': 1.0, 'williams': 1.0, 'momentum': 1.0,
-            'obv': 1.0, 'regression': 1.0, 'fft': 1.2
+            'obv': 1.0, 'regression': 1.0, 'fft': 1.2,
+            'ichimoku': 1.0, 'market_strength': 1.0
         }
         self.market_weights = {
             'bullish_trend': 1.0,
@@ -1217,6 +1305,7 @@ class LearningSystem:
             'neutral': 1.0
         }
         self.timeframe_weights = {}
+        self.indicator_accuracy = {}
         self.save()
     
     def save(self):
@@ -1227,7 +1316,8 @@ class LearningSystem:
                     'negative': self.negative,
                     'weights': self.weights,
                     'market_weights': self.market_weights,
-                    'timeframe_weights': self.timeframe_weights
+                    'timeframe_weights': self.timeframe_weights,
+                    'indicator_accuracy': self.indicator_accuracy
                 }, f, indent=2)
         except:
             pass
@@ -1331,10 +1421,15 @@ def build_signal_message(signal, signal_id):
 • ADX: {signal.get('adx', 0):.1f}
 • ATR: ${signal['atr']:.6f}
 • Volatility: {signal.get('volatility', 0):.2f}%
+• Stochastic K: {signal.get('stochastic_k', 0):.1f}
+• CCI: {signal.get('cci', 0):.1f}
+• Williams %R: {signal.get('williams_r', 0):.1f}
 
 <b>🛡️ KEY LEVELS:</b>
 • S1: ${signal.get('support1', 0):.4f}
+• S2: ${signal.get('support2', 0):.4f}
 • R1: ${signal.get('resistance1', 0):.4f}
+• R2: ${signal.get('resistance2', 0):.4f}
 
 <b>📝 ANALYSIS:</b>
 """
@@ -1373,7 +1468,7 @@ def build_signal_message(signal, signal_id):
     return msg, keyboard
 
 # ============================================================
-# ADMIN PANEL - FULLY FUNCTIONAL WITH 10 BUTTONS
+# ADMIN PANEL - FULLY WORKING WITH 10 BUTTONS
 # ============================================================
 
 ADMIN_PANEL_BUTTONS = {
@@ -1453,6 +1548,8 @@ def show_admin_panel(chat_id=None):
 def handle_admin_callback(callback_data):
     """مدیریت تمام دکمه‌های پنل ادمین - کاملاً کاربردی"""
     try:
+        logger.info(f"📌 Admin callback: {callback_data}")
+        
         # ===== دکمه 1: فعال‌سازی سیگنال =====
         if callback_data == 'admin_signal_on':
             db.update_setting('signal_enabled', '1')
@@ -1511,6 +1608,7 @@ def handle_admin_callback(callback_data):
 • منفی: {learner.negative}
 """
             send_admin(msg)
+            show_admin_panel()
             return True
         
         # ===== دکمه 6: پرداخت‌های در انتظار =====
@@ -1518,6 +1616,7 @@ def handle_admin_callback(callback_data):
             payments = db.get_pending_payments()
             if not payments:
                 send_admin("💳 <b>هیچ پرداخت در انتظاری وجود ندارد</b>")
+                show_admin_panel()
                 return True
             
             msg = f"💳 <b>پرداخت‌های در انتظار</b> ({len(payments)})\n━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -1534,6 +1633,7 @@ def handle_admin_callback(callback_data):
 ━━━━━━━━━━━━━━━━━━━━━━
 """
             send_admin(msg)
+            show_admin_panel()
             return True
         
         # ===== دکمه 7: تنظیمات =====
@@ -1551,6 +1651,7 @@ def handle_admin_callback(callback_data):
 <code>/set risk_reward_ratio 4</code>
 """
             send_admin(msg)
+            show_admin_panel()
             return True
         
         # ===== دکمه 8: ریست یادگیری =====
@@ -1559,8 +1660,9 @@ def handle_admin_callback(callback_data):
             learner.negative = 0
             for key in learner.weights:
                 learner.weights[key] = 1.0
-            for key in learner.market_weights:
-                learner.market_weights[key] = 1.0
+            if hasattr(learner, 'market_weights'):
+                for key in learner.market_weights:
+                    learner.market_weights[key] = 1.0
             learner.save()
             send_admin("🔄 <b>سیستم یادگیری ریست شد</b>\n\n🧠 تمام داده‌های یادگیری به حالت اولیه بازگشت.")
             show_admin_panel()
@@ -1577,15 +1679,412 @@ def handle_admin_callback(callback_data):
             show_admin_panel()
             return True
         
-        return False
+        else:
+            logger.warning(f"⚠️ Unknown admin callback: {callback_data}")
+            send_admin(f"⚠️ دکمه ناشناخته: {callback_data}")
+            return False
         
     except Exception as e:
-        logger.error(f"Admin callback error: {e}")
+        logger.error(f"❌ Admin callback error: {e}")
         send_admin(f"❌ <b>خطا:</b> {str(e)}")
         return False
 
+def handle_feedback_callback(callback_data, user_id):
+    try:
+        if not callback_data.startswith('fb_'):
+            return False
+        
+        parts = callback_data.split('_')
+        if len(parts) != 3:
+            return False
+        
+        feedback_type = parts[1]
+        signal_id = int(parts[2])
+        
+        db.add_user(user_id)
+        signal = db.get_signal(signal_id)
+        
+        success, message = db.update_feedback(signal_id, feedback_type, user_id)
+        
+        if not success:
+            send_telegram(f"⚠️ {message}", user_id)
+            return False
+        
+        market_phase = signal['market_phase'] if signal else 'neutral'
+        profit_pct = signal['profit_percent1'] if signal else 0
+        learner.add_feedback(feedback_type, market_phase, profit_pct)
+        
+        if feedback_type == 'positive':
+            response_msg = f"""
+✅ <b>تبریک! سود کردید! 💰</b>
+━━━━━━━━━━━━━━━━━━━━━━
+
+📊 <b>نتیجه:</b> سود ✅
+🎯 <b>دقت سیستم:</b> {learner.get_accuracy()}%
+✅ <b>کل بردها:</b> {learner.positive}
+❌ <b>کل باخت‌ها:</b> {learner.negative}
+
+<i>🌟 بازخورد شما به بهبود الگوریتم کمک می‌کند!</i>
+
+🚀 <b>به سوددهی ادامه دهید!</b>
+"""
+        else:
+            response_msg = f"""
+❌ <b>متاسفم! دفعه بعد حتماً موفق می‌شوید!</b>
+━━━━━━━━━━━━━━━━━━━━━━
+
+📊 <b>نتیجه:</b> باخت ❌
+🎯 <b>دقت سیستم:</b> {learner.get_accuracy()}%
+✅ <b>کل بردها:</b> {learner.positive}
+❌ <b>کل باخت‌ها:</b> {learner.negative}
+
+<i>🔧 بازخورد شما به بهبود الگوریتم کمک می‌کند!</i>
+
+💪 <b>به تلاش ادامه دهید!</b>
+"""
+        
+        send_telegram(response_msg, user_id)
+        
+        admin_msg = f"""
+📊 <b>بازخورد جدید</b>
+━━━━━━━━━━━━━━━━━━━━━━
+👤 کاربر: {user_id}
+📈 نماد: {signal['symbol'] if signal else 'N/A'}
+📝 بازخورد: {'✅ سود کردم' if feedback_type == 'positive' else '❌ سود نکردم'}
+🎯 دقت سیستم: {learner.get_accuracy()}%
+✅ برد: {learner.positive}
+❌ باخت: {learner.negative}
+"""
+        send_admin(admin_msg)
+        return True
+        
+    except Exception as e:
+        logger.error(f"Feedback callback error: {e}")
+        return False
+
+# ============================================================
+# MAIN CALLBACK HANDLER
+# ============================================================
+
+def handle_callback(callback_data, user_id):
+    try:
+        logger.info(f"📌 Callback: {callback_data} from {user_id}")
+        
+        if callback_data.startswith('admin_'):
+            return handle_admin_callback(callback_data)
+        
+        elif callback_data.startswith('fb_'):
+            return handle_feedback_callback(callback_data, user_id)
+        
+        elif callback_data.startswith('analysis_'):
+            signal_id = int(callback_data.replace('analysis_', ''))
+            signal = db.get_signal(signal_id)
+            if signal:
+                msg = f"""
+📊 <b>تحلیل کامل</b>
+━━━━━━━━━━━━━━━━━━━━━━
+
+<b>نماد:</b> {signal['symbol']}
+<b>جهت:</b> {signal['direction']}
+<b>اطمینان:</b> {signal['confidence']}%
+<b>کیفیت:</b> {signal['quality_score']}/100
+
+<b>📈 اندیکاتورها:</b>
+• RSI: {signal['rsi']:.1f}
+• MACD: {signal['macd']:.6f}
+• MA20: ${signal['ma20']:.4f}
+• MA50: ${signal['ma50']:.4f}
+• VWAP: ${signal['vwap']:.4f}
+• ATR: ${signal['atr']:.6f}
+• ADX: {signal.get('adx', 0):.1f}
+• نوسان: {signal.get('volatility', 0):.2f}%
+• Stochastic K: {signal.get('stochastic_k', 0):.1f}
+• CCI: {signal.get('cci', 0):.1f}
+• Williams %R: {signal.get('williams_r', 0):.1f}
+
+<b>🛡️ سطوح کلیدی:</b>
+• S1: ${signal.get('support1', 0):.4f}
+• S2: ${signal.get('support2', 0):.4f}
+• R1: ${signal.get('resistance1', 0):.4f}
+• R2: ${signal.get('resistance2', 0):.4f}
+
+<b>📊 فاز بازار:</b> {signal.get('market_phase', 'خنثی').upper()}
+<b>📈 قدرت روند:</b> {signal.get('trend_strength', 0):.2f}
+"""
+                send_telegram(msg, user_id)
+                return True
+        
+        return False
+        
+    except Exception as e:
+        logger.error(f"Callback error: {e}")
+        return False
+
+# ============================================================
+# PAYMENT HANDLER
+# ============================================================
+
+def handle_payment_hash(user_id, message_text):
+    hash_pattern = r'[0-9a-fA-F]{64}|0x[0-9a-fA-F]{64}|[A-Za-z0-9]{50,}'
+    match = re.search(hash_pattern, message_text)
+    
+    if not match:
+        send_telegram("❌ هش تراکنش نامعتبر\n\nلطفاً یک هش معتبر ارسال کنید.", user_id)
+        return False
+    
+    payment_hash = match.group()
+    
+    existing = db.get_payment_by_hash(payment_hash)
+    if existing:
+        send_telegram("⚠️ این هش قبلاً ثبت شده است.", user_id)
+        return False
+    
+    payment_id = db.add_payment(user_id, payment_hash)
+    if payment_id:
+        admin_msg = f"""
+💳 <b>پرداخت جدید</b>
+━━━━━━━━━━━━━━━━━━━━━━
+👤 کاربر: {user_id}
+💰 مبلغ: {db.get_setting('price') or PRICE}
+🔑 هش: {payment_hash}
+📅 زمان: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+
+✅ /confirm_{payment_id}
+❌ /reject_{payment_id}
+"""
+        send_admin(admin_msg)
+        send_telegram("✅ هش پرداخت ثبت شد!\n\n⏳ در انتظار تایید ادمین.", user_id)
+        return True
+    
+    return False
+
+def handle_subscribe(user_id):
+    user = db.get_user(user_id)
+    if user and user['is_active'] == 1:
+        expire = user['subscription_expire']
+        if expire:
+            days_left = (datetime.fromisoformat(expire) - datetime.now()).days
+            if days_left > 0:
+                send_telegram(f"✅ قبلاً اشتراک دارید!\n\n📅 {days_left} روز باقی مانده.", user_id)
+                return True
+    
+    wallet = db.get_setting('wallet') or WALLET_ADDRESS
+    price = db.get_setting('price') or PRICE
+    
+    msg = f"""
+💳 <b>اشتراک</b>
+━━━━━━━━━━━━━━━━━━━━━━
+
+💰 <b>مبلغ:</b> {price}
+📡 <b>شبکه:</b> TRC20 (USDT)
+
+<b>🏦 آدرس کیف پول:</b>
+<code>{wallet}</code>
+
+<b>📝 مراحل:</b>
+1. ارسال {price} USDT (TRC20)
+2. کپی هش تراکنش
+3. ارسال هش به این ربات
+4. منتظر تایید ادمین
+
+<i>⚠️ فقط از طریق TRC20 ارسال کنید!</i>
+"""
+    send_telegram(msg, user_id)
+    return True
+
+# ============================================================
+# MAIN LOOP
+# ============================================================
+
+def main_loop():
+    logger.info("🚀 Starting Quantum Signal Bot V21...")
+    
+    show_admin_panel()
+    
+    cycle = 0
+    
+    while True:
+        try:
+            cycle += 1
+            
+            if db.get_setting('signal_enabled') != '1':
+                time.sleep(30)
+                continue
+            
+            max_signals = int(db.get_setting('max_signals') or 5)
+            min_confidence = int(db.get_setting('min_confidence') or 55)
+            
+            logger.info(f"🔄 Cycle {cycle} - Scanning {len(SYMBOLS)} symbols")
+            
+            signals = []
+            for symbol in SYMBOLS:
+                try:
+                    signal = ultra_market_analysis(symbol)
+                    if signal and signal.get('confidence', 0) >= min_confidence:
+                        signals.append(signal)
+                        logger.info(f"✅ {signal['symbol']}: {signal['signal']} ({signal['confidence']}%) - TP1: {signal.get('profit_percent1', 0)}%")
+                except Exception as e:
+                    logger.error(f"Error processing {symbol}: {e}")
+                time.sleep(0.03)
+            
+            signals.sort(key=lambda x: (x.get('quality_score', 0), x.get('confidence', 0)), reverse=True)
+            signals = signals[:max_signals]
+            
+            if signals:
+                for signal in signals:
+                    try:
+                        signal_id = db.save_signal(signal)
+                        if signal_id:
+                            msg, keyboard = build_signal_message(signal, signal_id)
+                            if msg:
+                                if send_telegram(msg, reply_markup=keyboard):
+                                    db.mark_signal_sent(signal_id)
+                                    logger.info(f"✅ Sent: {signal['symbol']}")
+                                    premium_users = db.cursor.execute('''
+                                        SELECT user_id FROM users WHERE is_active = 1 AND is_premium = 1
+                                    ''').fetchall()
+                                    for user in premium_users:
+                                        try:
+                                            send_telegram(msg, user[0], keyboard)
+                                            time.sleep(0.05)
+                                        except:
+                                            pass
+                            time.sleep(2)
+                    except Exception as e:
+                        logger.error(f"Error sending signal: {e}")
+            else:
+                if cycle % 3 == 0:
+                    logger.info("⏳ No high-quality signals found")
+            
+            if cycle % 3 == 0:
+                payments = db.get_pending_payments()
+                if payments:
+                    send_admin(f"💳 {len(payments)} پرداخت در انتظار - استفاده از /payments")
+            
+            if cycle % 20 == 0:
+                stats = db.get_stats()
+                send_admin(f"""
+🔄 <b>بروزرسانی وضعیت</b>
+━━━━━━━━━━━━━━━━━━━━━━
+📊 سیگنال امروز: {stats.get('today', 0)}
+📈 کل سیگنال‌ها: {stats.get('signals', 0)}
+🎯 نرخ برد: {stats.get('win_rate', 0)}%
+🧠 دقت سیستم: {learner.get_accuracy()}%
+👑 کاربران پریمیوم: {stats.get('premium', 0)}
+💳 پرداخت‌های در انتظار: {stats.get('pending', 0)}
+""")
+            
+            logger.info(f"⏱ Waiting {INTERVAL//60} minutes...")
+            time.sleep(INTERVAL)
+            
+        except Exception as e:
+            logger.error(f"❌ Main loop error: {e}")
+            send_admin(f"❌ <b>خطا:</b> {str(e)}")
+            time.sleep(60)
+
+# ============================================================
+# MESSAGE HANDLER
+# ============================================================
+
+def process_message(message):
+    try:
+        if 'message' not in message:
+            return
+        msg = message['message']
+        if 'text' not in msg:
+            return
+        
+        text = msg['text']
+        user_id = msg['from']['id']
+        username = msg['from'].get('username', '')
+        first_name = msg['from'].get('first_name', '')
+        
+        db.add_user(user_id, username, first_name)
+        
+        if user_id == ADMIN_ID and db.get_setting('broadcast_mode') == '1':
+            if text.startswith('/'):
+                return
+            handle_broadcast_message(user_id, text)
+            return
+        
+        if text.startswith('/'):
+            if user_id == ADMIN_ID:
+                handle_admin_command(text)
+            else:
+                if text == '/start':
+                    send_telegram("""
+🚀 <b>ربات سیگنال حرفه‌ای</b>
+🤖 <b>نسخه Quantum Pro Max</b>
+
+📊 دریافت سیگنال‌های حرفه‌ای با قدرت تحلیل ۱۰۰۰۰ برابر!
+
+<b>📌 دستورات:</b>
+/subscribe - خرید اشتراک
+/help - راهنما
+/status - وضعیت اشتراک
+
+<b>🔐 ویژگی‌ها:</b>
+• تحلیل ۱۰ تایم‌فریم
+• ۲۰+ اندیکاتور پیشرفته
+• ۵ حد سود غیرمساوی
+• تحلیل FFT و رگرسیون
+• سیستم یادگیری هوشمند
+• تحلیل Ichimoku و بازار
+
+<i>از امروز شروع به سود کنید! 🚀</i>
+""", user_id)
+                elif text == '/subscribe':
+                    handle_subscribe(user_id)
+                elif text == '/help':
+                    send_telegram(f"""
+📚 <b>راهنما</b>
+━━━━━━━━━━━━━━━━━━━━━━
+
+<b>📌 دستورات:</b>
+/start - خوش‌آمدگویی
+/subscribe - خرید اشتراک
+/status - وضعیت اشتراک
+
+<b>💳 خرید اشتراک:</b>
+1. /subscribe
+2. ارسال {db.get_setting('price') or PRICE} USDT
+3. ارسال هش تراکنش
+4. انتظار برای تایید
+
+<b>📊 سیگنال‌ها:</b>
+• BUY - خرید
+• SELL - فروش
+• ۵ حد سود مختلف
+• حد ضرر
+
+<b>🆘 پشتیبانی:</b>
+تماس با @davnold
+""", user_id)
+                elif text == '/status':
+                    user = db.get_user(user_id)
+                    if user and user['is_active'] == 1:
+                        expire = user['subscription_expire']
+                        if expire:
+                            days_left = (datetime.fromisoformat(expire) - datetime.now()).days
+                            if days_left > 0:
+                                send_telegram(f"✅ <b>اشتراک فعال</b>\n\n📅 {days_left} روز باقی مانده\n🎯 دقت: {learner.get_accuracy()}%\n\n🚀 به سوددهی ادامه دهید!", user_id)
+                            else:
+                                send_telegram("⏰ <b>اشتراک منقضی شد</b>\n\nبا /subscribe تمدید کنید", user_id)
+                        else:
+                            send_telegram("⚠️ <b>اشتراک فعال نیست</b>\n\nبا /subscribe تهیه کنید", user_id)
+                    else:
+                        send_telegram("⚠️ <b>اشتراک فعال نیست</b>\n\nبا /subscribe تهیه کنید", user_id)
+            return
+        
+        if user_id != ADMIN_ID and db.get_setting('payment_enabled') == '1':
+            hash_pattern = r'[0-9a-fA-F]{64}|0x[0-9a-fA-F]{64}|[A-Za-z0-9]{50,}'
+            if re.search(hash_pattern, text):
+                handle_payment_hash(user_id, text)
+        
+    except Exception as e:
+        logger.error(f"Message error: {e}")
+
 def handle_admin_command(text):
-    """مدیریت دستورات متنی ادمین"""
     try:
         if text == '/panel' or text == '/start':
             show_admin_panel()
@@ -1731,7 +2230,6 @@ def handle_admin_command(text):
         return False
 
 def handle_broadcast_message(user_id, text):
-    """مدیریت ارسال پیام همگانی"""
     try:
         users = db.cursor.execute('SELECT user_id FROM users').fetchall()
         
@@ -1756,401 +2254,6 @@ def handle_broadcast_message(user_id, text):
         logger.error(f"Broadcast error: {e}")
         send_admin(f"❌ <b>خطا در ارسال پیام همگانی:</b> {str(e)}")
         db.update_setting('broadcast_mode', '0')
-
-# ============================================================
-# HANDLE FEEDBACK BUTTONS - FULLY FUNCTIONAL
-# ============================================================
-
-def handle_feedback_callback(callback_data, user_id):
-    """Handle feedback button clicks - FULLY FUNCTIONAL with immediate response"""
-    try:
-        if not callback_data.startswith('fb_'):
-            return False
-        
-        parts = callback_data.split('_')
-        if len(parts) != 3:
-            return False
-        
-        feedback_type = parts[1]
-        signal_id = int(parts[2])
-        
-        db.add_user(user_id)
-        
-        signal = db.get_signal(signal_id)
-        
-        success, message = db.update_feedback(signal_id, feedback_type, user_id)
-        
-        if not success:
-            send_telegram(f"⚠️ {message}", user_id)
-            return False
-        
-        market_phase = signal['market_phase'] if signal else 'neutral'
-        profit_pct = signal['profit_percent1'] if signal else 0
-        learner.add_feedback(feedback_type, market_phase, profit_pct)
-        
-        if feedback_type == 'positive':
-            response_msg = f"""
-✅ <b>تبریک! سود کردید! 💰</b>
-━━━━━━━━━━━━━━━━━━━━━━
-
-📊 <b>نتیجه:</b> سود ✅
-🎯 <b>دقت سیستم:</b> {learner.get_accuracy()}%
-✅ <b>کل بردها:</b> {learner.positive}
-❌ <b>کل باخت‌ها:</b> {learner.negative}
-
-<i>🌟 بازخورد شما به بهبود الگوریتم کمک می‌کند!</i>
-
-🚀 <b>به سوددهی ادامه دهید!</b>
-"""
-        else:
-            response_msg = f"""
-❌ <b>متاسفم! دفعه بعد حتماً موفق می‌شوید!</b>
-━━━━━━━━━━━━━━━━━━━━━━
-
-📊 <b>نتیجه:</b> باخت ❌
-🎯 <b>دقت سیستم:</b> {learner.get_accuracy()}%
-✅ <b>کل بردها:</b> {learner.positive}
-❌ <b>کل باخت‌ها:</b> {learner.negative}
-
-<i>🔧 بازخورد شما به بهبود الگوریتم کمک می‌کند!</i>
-
-💪 <b>به تلاش ادامه دهید!</b>
-"""
-        
-        send_telegram(response_msg, user_id)
-        
-        admin_msg = f"""
-📊 <b>بازخورد جدید</b>
-━━━━━━━━━━━━━━━━━━━━━━
-👤 کاربر: {user_id}
-📈 نماد: {signal['symbol'] if signal else 'N/A'}
-📝 بازخورد: {'✅ سود کردم' if feedback_type == 'positive' else '❌ سود نکردم'}
-🎯 دقت سیستم: {learner.get_accuracy()}%
-✅ برد: {learner.positive}
-❌ باخت: {learner.negative}
-"""
-        send_admin(admin_msg)
-        
-        return True
-        
-    except Exception as e:
-        logger.error(f"Feedback callback error: {e}")
-        send_telegram(f"❌ <b>خطا:</b> {str(e)}", user_id)
-        return False
-
-# ============================================================
-# MAIN CALLBACK HANDLER
-# ============================================================
-
-def handle_callback(callback_data, user_id):
-    """Main callback handler - routes to appropriate handler"""
-    try:
-        if callback_data.startswith('admin_'):
-            return handle_admin_callback(callback_data)
-        
-        if callback_data.startswith('fb_'):
-            return handle_feedback_callback(callback_data, user_id)
-        
-        if callback_data.startswith('analysis_'):
-            signal_id = int(callback_data.replace('analysis_', ''))
-            signal = db.get_signal(signal_id)
-            if signal:
-                msg = f"""
-📊 <b>تحلیل کامل</b>
-━━━━━━━━━━━━━━━━━━━━━━
-
-<b>نماد:</b> {signal['symbol']}
-<b>جهت:</b> {signal['direction']}
-<b>اطمینان:</b> {signal['confidence']}%
-<b>کیفیت:</b> {signal['quality_score']}/100
-
-<b>📈 اندیکاتورها:</b>
-• RSI: {signal['rsi']:.1f}
-• MACD: {signal['macd']:.6f}
-• MA20: ${signal['ma20']:.4f}
-• MA50: ${signal['ma50']:.4f}
-• VWAP: ${signal['vwap']:.4f}
-• ATR: ${signal['atr']:.6f}
-• ADX: {signal.get('adx', 0):.1f}
-• نوسان: {signal.get('volatility', 0):.2f}%
-
-<b>🛡️ سطوح کلیدی:</b>
-• S1: ${signal.get('support1', 0):.4f}
-• R1: ${signal.get('resistance1', 0):.4f}
-
-<b>📊 فاز بازار:</b> {signal.get('market_phase', 'خنثی').upper()}
-"""
-                send_telegram(msg, user_id)
-                return True
-        
-        return False
-    except Exception as e:
-        logger.error(f"Callback error: {e}")
-        return False
-
-# ============================================================
-# PAYMENT HANDLER
-# ============================================================
-
-def handle_payment_hash(user_id, message_text):
-    hash_pattern = r'[0-9a-fA-F]{64}|0x[0-9a-fA-F]{64}|[A-Za-z0-9]{50,}'
-    match = re.search(hash_pattern, message_text)
-    
-    if not match:
-        send_telegram("❌ هش تراکنش نامعتبر\n\nلطفاً یک هش معتبر ارسال کنید.", user_id)
-        return False
-    
-    payment_hash = match.group()
-    
-    existing = db.get_payment_by_hash(payment_hash)
-    if existing:
-        send_telegram("⚠️ این هش قبلاً ثبت شده است.", user_id)
-        return False
-    
-    payment_id = db.add_payment(user_id, payment_hash)
-    if payment_id:
-        admin_msg = f"""
-💳 <b>پرداخت جدید</b>
-━━━━━━━━━━━━━━━━━━━━━━
-👤 کاربر: {user_id}
-💰 مبلغ: {db.get_setting('price') or PRICE}
-🔑 هش: {payment_hash}
-📅 زمان: {datetime.now().strftime('%Y-%m-%d %H:%M')}
-
-✅ /confirm_{payment_id}
-❌ /reject_{payment_id}
-"""
-        send_admin(admin_msg)
-        send_telegram("✅ هش پرداخت ثبت شد!\n\n⏳ در انتظار تایید ادمین.", user_id)
-        return True
-    
-    return False
-
-def handle_subscribe(user_id):
-    user = db.get_user(user_id)
-    if user and user['is_active'] == 1:
-        expire = user['subscription_expire']
-        if expire:
-            days_left = (datetime.fromisoformat(expire) - datetime.now()).days
-            if days_left > 0:
-                send_telegram(f"✅ قبلاً اشتراک دارید!\n\n📅 {days_left} روز باقی مانده.", user_id)
-                return True
-    
-    wallet = db.get_setting('wallet') or WALLET_ADDRESS
-    price = db.get_setting('price') or PRICE
-    
-    msg = f"""
-💳 <b>اشتراک</b>
-━━━━━━━━━━━━━━━━━━━━━━
-
-💰 <b>مبلغ:</b> {price}
-📡 <b>شبکه:</b> TRC20 (USDT)
-
-<b>🏦 آدرس کیف پول:</b>
-<code>{wallet}</code>
-
-<b>📝 مراحل:</b>
-1. ارسال {price} USDT (TRC20)
-2. کپی هش تراکنش
-3. ارسال هش به این ربات
-4. منتظر تایید ادمین
-
-<i>⚠️ فقط از طریق TRC20 ارسال کنید!</i>
-"""
-    send_telegram(msg, user_id)
-    return True
-
-# ============================================================
-# MAIN LOOP
-# ============================================================
-
-def main_loop():
-    logger.info("🚀 Starting Quantum Signal Bot V21...")
-    
-    # نمایش پنل ادمین در ابتدا
-    show_admin_panel()
-    
-    cycle = 0
-    
-    while True:
-        try:
-            cycle += 1
-            
-            if db.get_setting('signal_enabled') != '1':
-                time.sleep(30)
-                continue
-            
-            max_signals = int(db.get_setting('max_signals') or 5)
-            min_confidence = int(db.get_setting('min_confidence') or 55)
-            
-            logger.info(f"🔄 Cycle {cycle} - Scanning {len(SYMBOLS)} symbols")
-            
-            signals = []
-            for symbol in SYMBOLS:
-                try:
-                    signal = ultra_market_analysis(symbol)
-                    if signal and signal.get('confidence', 0) >= min_confidence:
-                        signals.append(signal)
-                        logger.info(f"✅ {signal['symbol']}: {signal['signal']} ({signal['confidence']}%) - TP1: {signal.get('profit_percent1', 0)}%")
-                except Exception as e:
-                    logger.error(f"Error processing {symbol}: {e}")
-                time.sleep(0.03)
-            
-            signals.sort(key=lambda x: (x.get('quality_score', 0), x.get('confidence', 0)), reverse=True)
-            signals = signals[:max_signals]
-            
-            if signals:
-                for signal in signals:
-                    try:
-                        signal_id = db.save_signal(signal)
-                        if signal_id:
-                            msg, keyboard = build_signal_message(signal, signal_id)
-                            if msg:
-                                if send_telegram(msg, reply_markup=keyboard):
-                                    db.mark_signal_sent(signal_id)
-                                    logger.info(f"✅ Sent: {signal['symbol']}")
-                                    premium_users = db.cursor.execute('''
-                                        SELECT user_id FROM users WHERE is_active = 1 AND is_premium = 1
-                                    ''').fetchall()
-                                    for user in premium_users:
-                                        try:
-                                            send_telegram(msg, user[0], keyboard)
-                                            time.sleep(0.05)
-                                        except:
-                                            pass
-                            time.sleep(2)
-                    except Exception as e:
-                        logger.error(f"Error sending signal: {e}")
-            else:
-                if cycle % 3 == 0:
-                    logger.info("⏳ No high-quality signals found")
-            
-            if cycle % 3 == 0:
-                payments = db.get_pending_payments()
-                if payments:
-                    send_admin(f"💳 {len(payments)} پرداخت در انتظار - استفاده از /payments")
-            
-            if cycle % 20 == 0:
-                stats = db.get_stats()
-                send_admin(f"""
-🔄 <b>بروزرسانی وضعیت</b>
-━━━━━━━━━━━━━━━━━━━━━━
-📊 سیگنال امروز: {stats.get('today', 0)}
-📈 کل سیگنال‌ها: {stats.get('signals', 0)}
-🎯 نرخ برد: {stats.get('win_rate', 0)}%
-🧠 دقت سیستم: {learner.get_accuracy()}%
-👑 کاربران پریمیوم: {stats.get('premium', 0)}
-💳 پرداخت‌های در انتظار: {stats.get('pending', 0)}
-""")
-            
-            logger.info(f"⏱ Waiting {INTERVAL//60} minutes...")
-            time.sleep(INTERVAL)
-            
-        except Exception as e:
-            logger.error(f"❌ Main loop error: {e}")
-            send_admin(f"❌ <b>خطا:</b> {str(e)}")
-            time.sleep(60)
-
-# ============================================================
-# MESSAGE HANDLER
-# ============================================================
-
-def process_message(message):
-    try:
-        if 'message' not in message:
-            return
-        msg = message['message']
-        if 'text' not in msg:
-            return
-        
-        text = msg['text']
-        user_id = msg['from']['id']
-        username = msg['from'].get('username', '')
-        first_name = msg['from'].get('first_name', '')
-        
-        db.add_user(user_id, username, first_name)
-        
-        if user_id == ADMIN_ID and db.get_setting('broadcast_mode') == '1':
-            if text.startswith('/'):
-                return
-            handle_broadcast_message(user_id, text)
-            return
-        
-        if text.startswith('/'):
-            if user_id == ADMIN_ID:
-                handle_admin_command(text)
-            else:
-                if text == '/start':
-                    send_telegram("""
-🚀 <b>ربات سیگنال حرفه‌ای</b>
-🤖 <b>نسخه Quantum Pro Max</b>
-
-📊 دریافت سیگنال‌های حرفه‌ای با قدرت تحلیل ۱۰۰۰۰ برابر!
-
-<b>📌 دستورات:</b>
-/subscribe - خرید اشتراک
-/help - راهنما
-/status - وضعیت اشتراک
-
-<b>🔐 ویژگی‌ها:</b>
-• تحلیل ۱۰ تایم‌فریم
-• ۱۵+ اندیکاتور پیشرفته
-• ۵ حد سود غیرمساوی
-• تحلیل FFT و رگرسیون
-• سیستم یادگیری هوشمند
-
-<i>از امروز شروع به سود کنید! 🚀</i>
-""", user_id)
-                elif text == '/subscribe':
-                    handle_subscribe(user_id)
-                elif text == '/help':
-                    send_telegram(f"""
-📚 <b>راهنما</b>
-━━━━━━━━━━━━━━━━━━━━━━
-
-<b>📌 دستورات:</b>
-/start - خوش‌آمدگویی
-/subscribe - خرید اشتراک
-/status - وضعیت اشتراک
-
-<b>💳 خرید اشتراک:</b>
-1. /subscribe
-2. ارسال {db.get_setting('price') or PRICE} USDT
-3. ارسال هش تراکنش
-4. انتظار برای تایید
-
-<b>📊 سیگنال‌ها:</b>
-• BUY - خرید
-• SELL - فروش
-• ۵ حد سود مختلف
-• حد ضرر
-
-<b>🆘 پشتیبانی:</b>
-تماس با @davnold
-""", user_id)
-                elif text == '/status':
-                    user = db.get_user(user_id)
-                    if user and user['is_active'] == 1:
-                        expire = user['subscription_expire']
-                        if expire:
-                            days_left = (datetime.fromisoformat(expire) - datetime.now()).days
-                            if days_left > 0:
-                                send_telegram(f"✅ <b>اشتراک فعال</b>\n\n📅 {days_left} روز باقی مانده\n🎯 دقت: {learner.get_accuracy()}%\n\n🚀 به سوددهی ادامه دهید!", user_id)
-                            else:
-                                send_telegram("⏰ <b>اشتراک منقضی شد</b>\n\nبا /subscribe تمدید کنید", user_id)
-                        else:
-                            send_telegram("⚠️ <b>اشتراک فعال نیست</b>\n\nبا /subscribe تهیه کنید", user_id)
-                    else:
-                        send_telegram("⚠️ <b>اشتراک فعال نیست</b>\n\nبا /subscribe تهیه کنید", user_id)
-            return
-        
-        if user_id != ADMIN_ID and db.get_setting('payment_enabled') == '1':
-            hash_pattern = r'[0-9a-fA-F]{64}|0x[0-9a-fA-F]{64}|[A-Za-z0-9]{50,}'
-            if re.search(hash_pattern, text):
-                handle_payment_hash(user_id, text)
-        
-    except Exception as e:
-        logger.error(f"Message error: {e}")
 
 # ============================================================
 # BOT RUNNER
@@ -2216,6 +2319,7 @@ if __name__ == "__main__":
         print(f"🧠 Analysis: 10000X Stronger with Scipy")
         print(f"🎯 Targets: 5 Non-Equal Profit Levels")
         print(f"🔘 Admin Panel: 10 Fully Functional Buttons")
+        print(f"📈 Indicators: 20+ Advanced Indicators")
         print("="*70)
         print("🤖 Starting bot...\n")
         
