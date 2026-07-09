@@ -1,5 +1,5 @@
 # ============================================================
-# ربات قرعه‌کشی هوشمند UTYOB - نسخه نهایی با دکمه‌های کارآمد
+# ربات قرعه‌کشی هوشمند UTYOB - نسخه نهایی با دکمه‌های جدید
 # ============================================================
 
 import asyncio
@@ -136,20 +136,16 @@ class LanguageManager:
             'poll_option_1': "✅ Yes",
             'poll_option_2': "❌ No",
             
-            # دکمه‌های جدید دانلودر و فاکتور
+            # دکمه‌های جدید
             'download_instagram': "📸 Download Instagram",
             'download_youtube': "🎬 Download YouTube",
-            'instagram_downloader': "📸 Instagram Downloader",
-            'youtube_downloader': "🎬 YouTube Downloader",
             'send_link_instagram': "📤 Please send the Instagram post/video link:\n\nExample: `https://www.instagram.com/p/ABC123/`",
             'send_link_youtube': "📤 Please send the YouTube video link:\n\nExample: `https://www.youtube.com/watch?v=ABC123`",
             'downloading': "⏳ Downloading... Please wait.",
             'download_success': "✅ Download successful! Here is your file:",
             'download_failed': "❌ Download failed! Please check the link and try again.",
             'invalid_link': "❌ Invalid link! Please send a valid Instagram or YouTube link.",
-            'invoice': "📄 Create Invoice",
             'invoice_button': "📄 Create Invoice",
-            'invoice_created': "✅ Invoice created successfully!",
             'open_invoice': "📄 Open Invoice",
             'invoice_description': "📄 **Create Invoice**\n\nPlease click the button below to open the invoice form.\n\n⚠️ Press back button twice to exit the site.",
         },
@@ -221,20 +217,16 @@ class LanguageManager:
             'poll_option_1': "✅ بله",
             'poll_option_2': "❌ خیر",
             
-            # دکمه‌های جدید دانلودر و فاکتور - فارسی
+            # دکمه‌های جدید - فارسی
             'download_instagram': "📸 دانلود اینستاگرام",
             'download_youtube': "🎬 دانلود یوتیوب",
-            'instagram_downloader': "📸 دانلودر اینستاگرام",
-            'youtube_downloader': "🎬 دانلودر یوتیوب",
             'send_link_instagram': "📤 لطفاً لینک پست یا ویدیوی اینستاگرام را ارسال کنید:\n\nمثال: `https://www.instagram.com/p/ABC123/`",
             'send_link_youtube': "📤 لطفاً لینک ویدیوی یوتیوب را ارسال کنید:\n\nمثال: `https://www.youtube.com/watch?v=ABC123`",
             'downloading': "⏳ در حال دانلود... لطفاً صبر کنید.",
             'download_success': "✅ دانلود با موفقیت انجام شد! فایل شما:",
             'download_failed': "❌ دانلود ناموفق! لطفاً لینک را بررسی کنید و مجدداً تلاش کنید.",
             'invalid_link': "❌ لینک نامعتبر! لطفاً یک لینک معتبر از اینستاگرام یا یوتیوب ارسال کنید.",
-            'invoice': "📄 ساخت فاکتور",
             'invoice_button': "📄 ساخت فاکتور",
-            'invoice_created': "✅ فاکتور با موفقیت ساخته شد!",
             'open_invoice': "📄 باز کردن فاکتور",
             'invoice_description': "📄 **ساخت فاکتور**\n\nلطفاً روی دکمه زیر کلیک کنید تا فرم فاکتور باز شود.\n\n⚠️ برای خروج از سایت، دو بار دکمه برگشت را بزنید.",
         },
@@ -306,20 +298,16 @@ class LanguageManager:
             'poll_option_1': "✅ Evet",
             'poll_option_2': "❌ Hayır",
             
-            # دکمه‌های جدید دانلودر و فاکتور - ترکی
+            # دکمه‌های جدید - ترکی
             'download_instagram': "📸 Instagram İndir",
             'download_youtube': "🎬 YouTube İndir",
-            'instagram_downloader': "📸 Instagram İndirici",
-            'youtube_downloader': "🎬 YouTube İndirici",
             'send_link_instagram': "📤 Lütfen Instagram gönderi/video linkini gönderin:\n\nÖrnek: `https://www.instagram.com/p/ABC123/`",
             'send_link_youtube': "📤 Lütfen YouTube video linkini gönderin:\n\nÖrnek: `https://www.youtube.com/watch?v=ABC123`",
             'downloading': "⏳ İndiriliyor... Lütfen bekleyin.",
             'download_success': "✅ İndirme başarılı! Dosyanız:",
             'download_failed': "❌ İndirme başarısız! Lütfen linki kontrol edip tekrar deneyin.",
             'invalid_link': "❌ Geçersiz link! Lütfen geçerli bir Instagram veya YouTube linki gönderin.",
-            'invoice': "📄 Fatura Oluştur",
             'invoice_button': "📄 Fatura Oluştur",
-            'invoice_created': "✅ Fatura başarıyla oluşturuldu!",
             'open_invoice': "📄 Faturayı Aç",
             'invoice_description': "📄 **Fatura Oluştur**\n\nFatura formunu açmak için lütfen aşağıdaki butona tıklayın.\n\n⚠️ Siteden çıkmak için geri tuşuna iki kez basın.",
         }
@@ -353,15 +341,9 @@ class LanguageManager:
     @classmethod
     def get_language_emoji(cls, lang_code: str) -> str:
         return cls.LANGUAGES.get(lang_code, {}).get('emoji', '🇬🇧')
-    
-    @classmethod
-    def get_invoice_text(cls, lang_code: str) -> str:
-        if lang_code not in cls.LANGUAGES:
-            lang_code = cls.DEFAULT_LANG
-        return cls.LANGUAGES[lang_code].get('invoice_button', '📄 Create Invoice')
 
 # ============================================================
-# دیتابیس با ۵۰۰ شارد برای مقیاس‌پذیری بالا
+# دیتابیس با ۵۰۰ شارد
 # ============================================================
 class DatabaseManager:
     def __init__(self, num_shards=DB_SHARDS):
@@ -533,7 +515,7 @@ class DatabaseManager:
 db = DatabaseManager()
 
 # ============================================================
-# سیستم کش پیشرفته با TTL و LRU
+# سیستم کش
 # ============================================================
 class CacheManager:
     def __init__(self, max_size=10000):
@@ -590,7 +572,7 @@ class CacheManager:
 cache = CacheManager(max_size=20000)
 
 # ============================================================
-# سیستم تایید پرداخت با چندین API و کش
+# سیستم تایید پرداخت
 # ============================================================
 class PaymentVerifier:
     def __init__(self):
@@ -709,7 +691,7 @@ class PaymentVerifier:
 payment_verifier = PaymentVerifier()
 
 # ============================================================
-# سیستم قرعه‌کشی با الگوریتم هوش مصنوعی
+# سیستم قرعه‌کشی
 # ============================================================
 class LotterySystem:
     def __init__(self):
@@ -900,7 +882,7 @@ class LotterySystem:
 lottery_system = LotterySystem()
 
 # ============================================================
-# سیستم مدیریت کاربران با پایداری بالا
+# سیستم مدیریت کاربران
 # ============================================================
 class UserManager:
     @staticmethod
@@ -1007,13 +989,10 @@ user_manager = UserManager()
 # مدیریت دانلود از اینستاگرام و یوتیوب
 # ============================================================
 class DownloadManager:
-    """مدیریت دانلود از اینستاگرام و یوتیوب"""
-    
     @staticmethod
     async def download_instagram(url: str) -> Tuple[bool, Optional[bytes], Optional[str]]:
-        """دانلود پست یا استوری اینستاگرام"""
         if Instaloader is None or Post is None:
-            return False, None, "Instaloader not installed. Please install: pip install instaloader"
+            return False, None, "Instaloader not installed"
             
         try:
             temp_dir = tempfile.mkdtemp()
@@ -1035,7 +1014,6 @@ class DownloadManager:
                 return False, None, "Invalid Instagram URL"
             
             post = Post.from_shortcode(loader.context, shortcode.group(1))
-            
             loader.download_post(post, target=f"{temp_dir}/post")
             
             files = os.listdir(temp_dir)
@@ -1057,7 +1035,6 @@ class DownloadManager:
                 file_data = f.read()
             
             shutil.rmtree(temp_dir, ignore_errors=True)
-            
             return True, file_data, os.path.basename(media_file)
             
         except Exception as e:
@@ -1066,9 +1043,8 @@ class DownloadManager:
     
     @staticmethod
     async def download_youtube(url: str) -> Tuple[bool, Optional[bytes], Optional[str]]:
-        """دانلود ویدیو از یوتیوب"""
         if yt_dlp is None:
-            return False, None, "yt-dlp not installed. Please install: pip install yt-dlp"
+            return False, None, "yt-dlp not installed"
             
         try:
             temp_dir = tempfile.mkdtemp()
@@ -1093,7 +1069,6 @@ class DownloadManager:
                 file_data = f.read()
             
             shutil.rmtree(temp_dir, ignore_errors=True)
-            
             return True, file_data, 'video.mp4'
             
         except Exception as e:
@@ -1101,7 +1076,7 @@ class DownloadManager:
             return False, None, str(e)
 
 # ============================================================
-# کلاس اصلی ربات با سرعت بالا
+# کلاس اصلی ربات با دکمه‌های جدید
 # ============================================================
 class UTYOBot:
     def __init__(self):
@@ -1125,28 +1100,28 @@ class UTYOBot:
     def _setup_handlers(self):
         app = self.application
         
-        # دستورات
         app.add_handler(CommandHandler("start", self.start_command))
         app.add_handler(CommandHandler("help", self.help_command))
         app.add_handler(CommandHandler("referral", self.referral_command))
         app.add_handler(CommandHandler("language", self.language_command))
         
-        # دکمه‌های منو
         app.add_handler(CallbackQueryHandler(self.main_menu_callback, pattern="^main_menu$"))
         app.add_handler(CallbackQueryHandler(self.lottery_callback, pattern="^lottery$"))
         app.add_handler(CallbackQueryHandler(self.referral_callback, pattern="^referral$"))
         app.add_handler(CallbackQueryHandler(self.guide_callback, pattern="^guide$"))
         app.add_handler(CallbackQueryHandler(self.language_callback, pattern="^language$"))
         
-        # دکمه‌های اشتراک
+        # دکمه‌های جدید
+        app.add_handler(CallbackQueryHandler(self.download_instagram_callback, pattern="^download_instagram$"))
+        app.add_handler(CallbackQueryHandler(self.download_youtube_callback, pattern="^download_youtube$"))
+        app.add_handler(CallbackQueryHandler(self.create_invoice_callback, pattern="^create_invoice$"))
+        
         app.add_handler(CallbackQueryHandler(self.subscribe_callback, pattern="^subscribe$"))
         app.add_handler(CallbackQueryHandler(self.confirm_subscribe_callback, pattern="^confirm_subscribe$"))
         
-        # دکمه‌های قرعه‌کشی
         app.add_handler(CallbackQueryHandler(self.join_lottery_callback, pattern="^join_lottery$"))
         app.add_handler(CallbackQueryHandler(self.confirm_payment_callback, pattern="^confirm_payment$"))
         
-        # دکمه‌های پنل مدیریت
         app.add_handler(CallbackQueryHandler(self.admin_panel_callback, pattern="^admin_panel$"))
         app.add_handler(CallbackQueryHandler(self.admin_broadcast_callback, pattern="^admin_broadcast$"))
         app.add_handler(CallbackQueryHandler(self.admin_start_lottery_callback, pattern="^admin_start_lottery$"))
@@ -1156,31 +1131,20 @@ class UTYOBot:
         app.add_handler(CallbackQueryHandler(self.admin_add_api_callback, pattern="^admin_add_api$"))
         app.add_handler(CallbackQueryHandler(self.admin_stats_callback, pattern="^admin_stats$"))
         
-        # تایید/رد تراکنش توسط ادمین
         app.add_handler(CallbackQueryHandler(self.admin_verify_approve_callback, pattern="^admin_verify_approve_"))
         app.add_handler(CallbackQueryHandler(self.admin_verify_reject_callback, pattern="^admin_verify_reject_"))
         
-        # مراحل قرعه‌کشی
         app.add_handler(CallbackQueryHandler(self.start_lottery_confirm_callback, pattern="^start_lottery_confirm$"))
         app.add_handler(CallbackQueryHandler(self.start_lottery_final_callback, pattern="^start_lottery_final$"))
         
-        # برداشت جایزه
         app.add_handler(CallbackQueryHandler(self.withdraw_prize_callback, pattern="^withdraw_prize$"))
         app.add_handler(CallbackQueryHandler(self.confirm_withdraw_callback, pattern="^confirm_withdraw$"))
         
-        # تغییر زبان
         app.add_handler(CallbackQueryHandler(self.set_language_callback, pattern="^set_lang_"))
         
-        # دکمه‌های جدید دانلودر و فاکتور
-        app.add_handler(CallbackQueryHandler(self.download_instagram_callback, pattern="^download_instagram$"))
-        app.add_handler(CallbackQueryHandler(self.download_youtube_callback, pattern="^download_youtube$"))
-        app.add_handler(CallbackQueryHandler(self.create_invoice_callback, pattern="^create_invoice$"))
-        
-        # مدیریت پیام‌ها
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         app.add_handler(MessageHandler(filters.PHOTO, self.handle_photo))
         
-        # مدیریت خطاها
         app.add_error_handler(self.error_handler)
 
     # ============================================================
@@ -1348,7 +1312,6 @@ class UTYOBot:
         
         lang = self._get_user_language(user.id)
         
-        # دکمه PLAY
         keyboard = [[InlineKeyboardButton(
             LanguageManager.get_text(lang, 'play_button'),
             callback_data="main_menu"
@@ -1396,7 +1359,6 @@ class UTYOBot:
         user_id = query.from_user.id
         lang = self._get_user_language(user_id)
         
-        # ساخت دکمه‌های منو
         keyboard = [
             [InlineKeyboardButton(
                 LanguageManager.get_text(lang, 'lottery'),
@@ -1410,6 +1372,7 @@ class UTYOBot:
                 LanguageManager.get_text(lang, 'guide'),
                 callback_data="guide"
             )],
+            # دکمه‌های جدید
             [InlineKeyboardButton(
                 LanguageManager.get_text(lang, 'download_instagram'),
                 callback_data="download_instagram"
@@ -1428,7 +1391,6 @@ class UTYOBot:
             )]
         ]
         
-        # دکمه پنل مدیریت برای ادمین‌ها
         if user_id in ADMIN_IDS:
             keyboard.append([InlineKeyboardButton(
                 LanguageManager.get_text(lang, 'admin_panel'),
@@ -1443,110 +1405,6 @@ class UTYOBot:
             parse_mode=ParseMode.MARKDOWN
         )
     
-    async def lottery_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        
-        user = user_manager.get_user(user_id)
-        if not user or not user['has_subscription']:
-            keyboard = [
-                [InlineKeyboardButton(
-                    LanguageManager.get_text(lang, 'subscribe'),
-                    callback_data="subscribe"
-                )],
-                [InlineKeyboardButton(
-                    LanguageManager.get_text(lang, 'back'),
-                    callback_data="main_menu"
-                )]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                LanguageManager.get_text(lang, 'no_subscription'),
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-        
-        keyboard = [
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'lottery'),
-                callback_data="join_lottery"
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'back'),
-                callback_data="main_menu"
-            )]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            f"🎰 **UTYOB {LanguageManager.get_text(lang, 'lottery')}**\n\n"
-            f"👤 User: {user['first_name'] or user_id}\n\n"
-            f"💰 Prize: Up to $10,000\n"
-            f"🎯 Fair: Yes",
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    async def referral_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        await self._show_referral(update, user_id)
-    
-    async def guide_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        
-        keyboard = [[InlineKeyboardButton(
-            LanguageManager.get_text(lang, 'back'),
-            callback_data="main_menu"
-        )]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            LanguageManager.get_text(lang, 'guide_text'),
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    async def language_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        await self._show_language_selector(update, user_id)
-    
-    async def set_language_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang_code = query.data.replace('set_lang_', '')
-        
-        if self._set_user_language(user_id, lang_code):
-            lang = self._get_user_language(user_id)
-            
-            keyboard = [[InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'main_menu_btn'),
-                callback_data="main_menu"
-            )]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                f"✅ Language changed to {LanguageManager.get_language_name(lang_code)}!\n\n"
-                f"🌐 زبان به {LanguageManager.get_language_name(lang_code)} تغییر یافت!",
-                reply_markup=reply_markup
-            )
-
     # ============================================================
     # کالبک‌های دانلودر
     # ============================================================
@@ -2365,7 +2223,9 @@ class UTYOBot:
                 try:
                     await self.application.bot.send_message(
                         chat_id=winner_id,
-                        text=f"🎉 **تبریک! شما برنده قرعه‌کشی شدید!**\n\n💰 مبلغ جایزه: ${prize_per_winner:,}\n🏆 شماره قرعه‌کشی: {result['lottery_id']}\n\nبرای برداشت جایزه خود روی دکمه زیر کلیک کنید:",
+                        text=LanguageManager.get_text(winner_lang, 'winner_message',
+                            prize_per_winner, result['lottery_id']
+                        ),
                         reply_markup=reply_markup,
                         parse_mode=ParseMode.MARKDOWN
                     )
@@ -2736,7 +2596,7 @@ class UTYOBot:
             await self._send_poll(update, text, context)
             return
         
-        # دریافت هش تراکنش برای تایید دستی
+        # دریافت هش تراکنش
         if context.user_data.get('waiting_for_tx_hash'):
             tx_hash = text.strip()
             
@@ -2862,7 +2722,7 @@ class UTYOBot:
             )
             return
         
-        # مرحله برداشت: دریافت آدرس کیف پول
+        # مرحله برداشت
         if context.user_data.get('withdraw_pending'):
             wallet_address = text.strip()
             
@@ -3158,18 +3018,6 @@ async def main():
         logger.info(f"🔑 APIs: {len(TRONGRID_APIS)}")
         logger.info(f"⚡ Threads: 50")
         logger.info(f"💾 Cache size: 20,000 items")
-        
-        if yt_dlp is None:
-            logger.warning("⚠️ yt-dlp not installed! YouTube download will not work.")
-            logger.warning("   Install with: pip install yt-dlp")
-        else:
-            logger.info("✅ yt-dlp installed")
-            
-        if Instaloader is None:
-            logger.warning("⚠️ instaloader not installed! Instagram download will not work.")
-            logger.warning("   Install with: pip install instaloader")
-        else:
-            logger.info("✅ instaloader installed")
         
         await bot.application.initialize()
         await bot.application.start()
