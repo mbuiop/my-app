@@ -342,6 +342,7 @@ class LanguageManager:
     def get_language_emoji(cls, lang_code: str) -> str:
         return cls.LANGUAGES.get(lang_code, {}).get('emoji', '🇬🇧')
 
+
 # ============================================================
 # دیتابیس با ۵۰۰ شارد
 # ============================================================
@@ -1404,7 +1405,93 @@ class UTYOBot:
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
-    
+
+    # ============================================================
+    # کالبک‌های دکمه‌های منو
+    # ============================================================
+
+    async def lottery_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        lang = self._get_user_language(user_id)
+        
+        user = user_manager.get_user(user_id)
+        if not user or not user['has_subscription']:
+            keyboard = [
+                [InlineKeyboardButton(
+                    LanguageManager.get_text(lang, 'subscribe'),
+                    callback_data="subscribe"
+                )],
+                [InlineKeyboardButton(
+                    LanguageManager.get_text(lang, 'back'),
+                    callback_data="main_menu"
+                )]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                LanguageManager.get_text(lang, 'no_subscription'),
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+        
+        keyboard = [
+            [InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'lottery'),
+                callback_data="join_lottery"
+            )],
+            [InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'back'),
+                callback_data="main_menu"
+            )]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f"🎰 **UTYOB {LanguageManager.get_text(lang, 'lottery')}**\n\n"
+            f"👤 User: {user['first_name'] or user_id}\n\n"
+            f"💰 Prize: Up to $10,000\n"
+            f"🎯 Fair: Yes",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+    async def referral_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        await self._show_referral(update, user_id)
+
+    async def guide_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        lang = self._get_user_language(user_id)
+        
+        keyboard = [[InlineKeyboardButton(
+            LanguageManager.get_text(lang, 'back'),
+            callback_data="main_menu"
+        )]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            LanguageManager.get_text(lang, 'guide_text'),
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+    async def language_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        await self._show_language_selector(update, user_id)
+
     # ============================================================
     # کالبک‌های دانلودر
     # ============================================================
@@ -2223,9 +2310,7 @@ class UTYOBot:
                 try:
                     await self.application.bot.send_message(
                         chat_id=winner_id,
-                        text=LanguageManager.get_text(winner_lang, 'winner_message',
-                            prize_per_winner, result['lottery_id']
-                        ),
+                        text=f"🎉 **تبریک! شما برنده قرعه‌کشی شدید!**\n\n💰 مبلغ جایزه: ${prize_per_winner:,}\n🏆 شماره قرعه‌کشی: {result['lottery_id']}\n\nبرای برداشت جایزه خود روی دکمه زیر کلیک کنید:",
                         reply_markup=reply_markup,
                         parse_mode=ParseMode.MARKDOWN
                     )
