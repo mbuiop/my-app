@@ -1,5 +1,5 @@
 # ============================================================
-# ربات قرعه‌کشی هوشمند UTYOB - نسخه نهایی با بهینه‌سازی سرعت
+# ربات قرعه‌کشی هوشمند UTYOB - نسخه نهایی با تمام قابلیت‌ها
 # ============================================================
 
 import asyncio
@@ -15,13 +15,12 @@ import time
 import os
 import sys
 import re
-import yt_dlp
-import instaloader
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Optional, Any
 from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, request, jsonify
-from urllib.parse import urlparse
+import yt_dlp
+import instaloader
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
@@ -52,27 +51,68 @@ PAYMENT_AMOUNT = 100
 
 DB_SHARDS = 500
 CACHE_TTL = 300
-
 WEBSITE_URL = "https://mbuiop.github.io/Tablikgram/"
 
 # ============================================================
-# سیستم چندزبانه کامل - زبان پیش‌فرض فارسی
+# سیستم رمزنگاری برای امنیت
+# ============================================================
+class EncryptionManager:
+    def __init__(self):
+        self.secret_key = os.environ.get('ENCRYPTION_KEY', 'UTYOB_SECURE_KEY_2024')
+        self.salt = os.environ.get('ENCRYPTION_SALT', 'UTYOB_SALT_2024')
+    
+    def encrypt(self, data: str) -> str:
+        import base64
+        from cryptography.fernet import Fernet
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+        
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=self.salt.encode(),
+            iterations=100000,
+        )
+        key = base64.urlsafe_b64encode(kdf.derive(self.secret_key.encode()))
+        f = Fernet(key)
+        return f.encrypt(data.encode()).decode()
+    
+    def decrypt(self, encrypted_data: str) -> str:
+        import base64
+        from cryptography.fernet import Fernet
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+        
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=self.salt.encode(),
+            iterations=100000,
+        )
+        key = base64.urlsafe_b64encode(kdf.derive(self.secret_key.encode()))
+        f = Fernet(key)
+        return f.decrypt(encrypted_data.encode()).decode()
+
+encryption = EncryptionManager()
+
+# ============================================================
+# سیستم چندزبانه کامل
 # ============================================================
 class LanguageManager:
     LANGUAGES = {
         'en': {
             'name': 'English',
             'emoji': '🇬🇧',
-            'welcome': "🎮 **Welcome to UTYOB Lottery Bot!**\n\n💰 Win amazing prizes up to $10,000!\n🎯 Fair and transparent lottery system\n🌟 Join now and test your luck!\n\nClick PLAY to enter the game.",
+            'welcome': "🎮 **Welcome to UTYOB Lottery Bot!**\n\n💰 Win amazing prizes up to $10,000!\n🎯 Fair and transparent lottery system\n🌟 Join now and test your luck!",
             'play_button': "▶️ PLAY",
+            'download_instagram': "📥 Download from Instagram",
+            'download_youtube': "📥 Download from YouTube",
             'main_menu': "🎯 **UTYOB Lottery Bot**\n\nSelect an option below:\n👇👇👇",
             'lottery': "🎰 Join Lottery",
             'referral': "🔗 Referral",
             'guide': "📖 Guide",
             'language': "🌐 Change Language",
             'admin_panel': "⚙️ Admin Panel",
-            'instagram_download': "📥 Instagram Downloader",
-            'youtube_download': "📥 YouTube Downloader",
             'no_subscription': "❌ **You don't have an active subscription!**\n\nTo participate in the lottery, you must first purchase a subscription.\n\n💰 Subscription cost: $100\n📅 Validity: 1 month\n\nClick the button below to subscribe.",
             'subscribe': "🔄 Subscribe Now",
             'back': "🔙 Back",
@@ -120,35 +160,27 @@ class LanguageManager:
             'poll_message': "📊 **Poll**\n\n{}",
             'poll_option_1': "✅ Yes",
             'poll_option_2': "❌ No",
-            'instagram_download_text': "📥 **Instagram Downloader**\n\nSend me an Instagram post/reel/story link, and I'll download it for you!\n\n⚠️ **Supported:**\n• Posts\n• Reels\n• IGTV\n• Stories\n\n📤 **Send your Instagram link:**",
-            'youtube_download_text': "📥 **YouTube Downloader**\n\nSend me a YouTube video link, and I'll download it for you!\n\n⚠️ **Supported:**\n• Videos\n• Shorts\n• Playlists (first video)\n\n📤 **Send your YouTube link:**",
-            'downloading': "⏳ Downloading... Please wait.",
-            'download_success': "✅ **Download completed!** 🎉\n\n🔹 File: {}\n🔹 Size: {}",
-            'download_failed': "❌ **Download failed!**\n\n🔹 Reason: {}\n\n📌 Please make sure the link is correct.",
-            'invalid_link': "❌ Invalid link!\n\nPlease send a valid Instagram or YouTube link.",
-            'downloading_instagram': "⏳ Downloading from Instagram...\nPlease wait, this may take a few seconds.",
-            'downloading_youtube': "⏳ Downloading from YouTube...\nPlease wait, this may take a few seconds.",
-            'referral_join_message': "🎉 **User @{} joined using your referral link!**\n\n🔗 Referral code: `{}`\n\n💰 You will receive 5% of their deposit!",
-            'winner_list_title': "🏆 **Lottery Winners List**\n\nHere are all the lottery winners:",
-            'winner_entry': "• User ID: `{}` - ${:,}\n",
-            'no_winners': "No winners yet.",
-            'manual_winner_added': "✅ Winner added manually!\n\n👤 User ID: {}\n💰 Amount: ${}",
-            'user_id_label': "👤 User ID:",
-            'winner_message': "🎉 **Congratulations! You won the lottery!** 🎉\n\n💰 Prize amount: ${:,}\n🏆 Lottery ID: #{}\n\nClick the button below to withdraw your prize:",
+            'referral_join_notification': "🎉 **New referral joined!**\n\n👤 Referred by: {}\n👤 New user: {}\n🔗 Referral code: {}\n\n💰 You earned a reward!",
+            'download_instagram_prompt': "📸 **Instagram Downloader**\n\nPlease send me the Instagram link (Post, Story, Reel, or Video):\n\n🔗 Example: `https://www.instagram.com/p/...`\n\n⚠️ **Note:** Only public content can be downloaded.",
+            'download_youtube_prompt': "▶️ **YouTube Downloader**\n\nPlease send me the YouTube link:\n\n🔗 Example: `https://www.youtube.com/watch?v=...`\n\n📱 Supports:\n• Videos (any quality)\n• Playlists\n• Shorts",
+            'downloading': "⏳ Downloading...\nPlease wait, this may take a moment.",
+            'download_success': "✅ **Download complete!**\n\n🔗 Link: {}\n📁 File size: {} MB\n\n🎉 Enjoy your content!",
+            'download_failed': "❌ **Download failed!**\n\n🔹 Reason: {}\n\n📌 **Possible solutions:**\n• Check the link is valid\n• Content might be private\n• Try again later\n\n🔄 Try a different link.",
+            'send_link_first': "❌ Please send the link first!\n\nUse /download_instagram or /download_youtube to get started.",
         },
         'fa': {
             'name': 'فارسی',
             'emoji': '🇮🇷',
-            'welcome': "🎮 **به ربات قرعه‌کشی UTYOB خوش آمدید!**\n\n💰 برنده جوایز شگفت‌انگیز تا ۱۰۰۰۰ دلار شوید!\n🎯 سیستم قرعه‌کشی عادلانه و شفاف\n🌟 همین حالا بپیوندید و شانس خود را امتحان کنید!\n\nبرای ورود به بازی، روی PLAY کلیک کنید.",
+            'welcome': "🎮 **به ربات قرعه‌کشی UTYOB خوش آمدید!**\n\n💰 برنده جوایز شگفت‌انگیز تا ۱۰۰۰۰ دلار شوید!\n🎯 سیستم قرعه‌کشی عادلانه و شفاف\n🌟 همین حالا بپیوندید و شانس خود را امتحان کنید!",
             'play_button': "▶️ PLAY",
+            'download_instagram': "📥 دانلود از اینستاگرام",
+            'download_youtube': "📥 دانلود از یوتیوب",
             'main_menu': "🎯 **ربات قرعه‌کشی UTYOB**\n\nیکی از گزینه‌های زیر را انتخاب کنید:\n👇👇👇",
             'lottery': "🎰 شرکت در قرعه‌کشی",
             'referral': "🔗 رفرال",
             'guide': "📖 راهنمایی",
             'language': "🌐 تغییر زبان",
             'admin_panel': "⚙️ پنل مدیریت",
-            'instagram_download': "📥 دانلود از اینستاگرام",
-            'youtube_download': "📥 دانلود از یوتوب",
             'no_subscription': "❌ **شما اشتراک فعال ندارید!**\n\nبرای شرکت در قرعه‌کشی، ابتدا باید اشتراک تهیه کنید.\n\n💰 هزینه اشتراک: ۱۰۰ دلار\n📅 مدت اعتبار: ۱ ماه\n\nبرای تهیه اشتراک، روی دکمه زیر کلیک کنید.",
             'subscribe': "🔄 خرید اشتراک",
             'back': "🔙 بازگشت",
@@ -196,35 +228,27 @@ class LanguageManager:
             'poll_message': "📊 **نظرسنجی**\n\n{}",
             'poll_option_1': "✅ بله",
             'poll_option_2': "❌ خیر",
-            'instagram_download_text': "📥 **دانلود از اینستاگرام**\n\nلینک پست/ریل/استوری اینستاگرام را ارسال کنید تا برای شما دانلود کنم!\n\n⚠️ **پشتیبانی:**\n• پست‌ها\n• ریل‌ها\n• IGTV\n• استوری‌ها\n\n📤 **لینک اینستاگرام خود را ارسال کنید:**",
-            'youtube_download_text': "📥 **دانلود از یوتوب**\n\nلینک ویدیوی یوتوب را ارسال کنید تا برای شما دانلود کنم!\n\n⚠️ **پشتیبانی:**\n• ویدیوها\n• Shorts\n• پلی‌لیست‌ها (اولین ویدیو)\n\n📤 **لینک یوتوب خود را ارسال کنید:**",
-            'downloading': "⏳ در حال دانلود... لطفاً صبر کنید.",
-            'download_success': "✅ **دانلود کامل شد!** 🎉\n\n🔹 فایل: {}\n🔹 حجم: {}",
-            'download_failed': "❌ **دانلود ناموفق!**\n\n🔹 دلیل: {}\n\n📌 لطفاً از صحت لینک اطمینان حاصل کنید.",
-            'invalid_link': "❌ لینک نامعتبر!\n\nلطفاً یک لینک معتبر اینستاگرام یا یوتوب ارسال کنید.",
-            'downloading_instagram': "⏳ در حال دانلود از اینستاگرام...\nلطفاً چند لحظه صبر کنید.",
-            'downloading_youtube': "⏳ در حال دانلود از یوتوب...\nلطفاً چند لحظه صبر کنید.",
-            'referral_join_message': "🎉 **کاربر @{} با لینک رفرال شما وارد شد!**\n\n🔗 کد رفرال: `{}`\n\n💰 شما ۵٪ از واریز او را دریافت خواهید کرد!",
-            'winner_list_title': "🏆 **لیست برندگان قرعه‌کشی**\n\nدر اینجا تمام برندگان قرعه‌کشی را مشاهده می‌کنید:",
-            'winner_entry': "• شناسه کاربر: `{}` - ${:,}\n",
-            'no_winners': "هنوز برنده‌ای وجود ندارد.",
-            'manual_winner_added': "✅ برنده به صورت دستی اضافه شد!\n\n👤 شناسه کاربر: {}\n💰 مبلغ: ${}",
-            'user_id_label': "👤 شناسه کاربر:",
-            'winner_message': "🎉 **تبریک! شما در قرعه‌کشی برنده شدید!** 🎉\n\n💰 مبلغ جایزه: ${:,}\n🏆 شماره قرعه‌کشی: #{}\n\nبرای برداشت جایزه، روی دکمه زیر کلیک کنید:",
+            'referral_join_notification': "🎉 **کاربر جدید با رفرال وارد شد!**\n\n👤 معرفی شده توسط: {}\n👤 کاربر جدید: {}\n🔗 کد رفرال: {}\n\n💰 شما پاداش دریافت کردید!",
+            'download_instagram_prompt': "📸 **دانلود از اینستاگرام**\n\nلطفاً لینک اینستاگرام را ارسال کنید:\n\n🔗 مثال: `https://www.instagram.com/p/...`\n\n⚠️ **توجه:** فقط محتوای عمومی قابل دانلود است.",
+            'download_youtube_prompt': "▶️ **دانلود از یوتیوب**\n\nلطفاً لینک یوتیوب را ارسال کنید:\n\n🔗 مثال: `https://www.youtube.com/watch?v=...`\n\n📱 پشتیبانی از:\n• ویدیوها (هر کیفیتی)\n• پلی‌لیست‌ها\n• Shorts",
+            'downloading': "⏳ در حال دانلود...\nلطفاً چند لحظه صبر کنید.",
+            'download_success': "✅ **دانلود کامل شد!**\n\n🔗 لینک: {}\n📁 حجم فایل: {} MB\n\n🎉 از محتوای خود لذت ببرید!",
+            'download_failed': "❌ **دانلود ناموفق!**\n\n🔹 دلیل: {}\n\n📌 **راهکارهای ممکن:**\n• لینک را بررسی کنید\n• محتوا ممکن است خصوصی باشد\n• بعداً دوباره تلاش کنید\n\n🔄 لینک دیگری را امتحان کنید.",
+            'send_link_first': "❌ لطفاً ابتدا لینک را ارسال کنید!\n\nاز /download_instagram یا /download_youtube استفاده کنید.",
         },
         'tr': {
             'name': 'Türkçe',
             'emoji': '🇹🇷',
-            'welcome': "🎮 **UTYOB Piyango Botuna Hoş Geldiniz!**\n\n💰 10.000$'a kadar harika ödüller kazanın!\n🎯 Adil ve şeffaf piyango sistemi\n🌟 Hemen katıl ve şansını dene!\n\nOyuna girmek için PLAY'a tıkla.",
+            'welcome': "🎮 **UTYOB Piyango Botuna Hoş Geldiniz!**\n\n💰 10.000$'a kadar harika ödüller kazanın!\n🎯 Adil ve şeffaf piyango sistemi\n🌟 Hemen katıl ve şansını dene!",
             'play_button': "▶️ PLAY",
+            'download_instagram': "📥 Instagram'dan İndir",
+            'download_youtube': "📥 YouTube'dan İndir",
             'main_menu': "🎯 **UTYOB Piyango Botu**\n\nAşağıdaki seçeneklerden birini seçin:\n👇👇👇",
             'lottery': "🎰 Piyangoya Katıl",
             'referral': "🔗 Referans",
             'guide': "📖 Rehber",
             'language': "🌐 Dil Değiştir",
             'admin_panel': "⚙️ Yönetim Paneli",
-            'instagram_download': "📥 Instagram İndirici",
-            'youtube_download': "📥 YouTube İndirici",
             'no_subscription': "❌ **Aktif aboneliğiniz yok!**\n\nPiyangoya katılmak için önce abonelik satın almalısınız.\n\n💰 Abonelik ücreti: 100$\n📅 Geçerlilik: 1 ay\n\nAbone olmak için aşağıdaki butona tıklayın.",
             'subscribe': "🔄 Abone Ol",
             'back': "🔙 Geri",
@@ -272,29 +296,21 @@ class LanguageManager:
             'poll_message': "📊 **Anket**\n\n{}",
             'poll_option_1': "✅ Evet",
             'poll_option_2': "❌ Hayır",
-            'instagram_download_text': "📥 **Instagram İndirici**\n\nBir Instagram gönderisi/reel/hikaye bağlantısı gönderin, sizin için indireyim!\n\n⚠️ **Desteklenen:**\n• Gönderiler\n• Reel'ler\n• IGTV\n• Hikayeler\n\n📤 **Instagram bağlantınızı gönderin:**",
-            'youtube_download_text': "📥 **YouTube İndirici**\n\nBir YouTube video bağlantısı gönderin, sizin için indireyim!\n\n⚠️ **Desteklenen:**\n• Videolar\n• Shorts'lar\n• Oynatma listeleri (ilk video)\n\n📤 **YouTube bağlantınızı gönderin:**",
-            'downloading': "⏳ İndiriliyor... Lütfen bekleyin.",
-            'download_success': "✅ **İndirme tamamlandı!** 🎉\n\n🔹 Dosya: {}\n🔹 Boyut: {}",
-            'download_failed': "❌ **İndirme başarısız!**\n\n🔹 Sebep: {}\n\n📌 Lütfen bağlantının doğru olduğundan emin olun.",
-            'invalid_link': "❌ Geçersiz bağlantı!\n\nLütfen geçerli bir Instagram veya YouTube bağlantısı gönderin.",
-            'downloading_instagram': "⏳ Instagram'dan indiriliyor...\nLütfen birkaç saniye bekleyin.",
-            'downloading_youtube': "⏳ YouTube'dan indiriliyor...\nLütfen birkaç saniye bekleyin.",
-            'referral_join_message': "🎉 **Kullanıcı @{} referans bağlantınızı kullanarak katıldı!**\n\n🔗 Referans kodu: `{}`\n\n💰 Yatırımının %5'ini alacaksınız!",
-            'winner_list_title': "🏆 **Piyango Kazananları Listesi**\n\nTüm piyango kazananları burada:",
-            'winner_entry': "• Kullanıcı ID: `{}` - ${:,}\n",
-            'no_winners': "Henüz kazanan yok.",
-            'manual_winner_added': "✅ Kazanan manuel olarak eklendi!\n\n👤 Kullanıcı ID: {}\n💰 Tutar: ${}",
-            'user_id_label': "👤 Kullanıcı ID:",
-            'winner_message': "🎉 **Tebrikler! Piyangoyu kazandınız!** 🎉\n\n💰 Ödül tutarı: ${:,}\n🏆 Piyango ID: #{}\n\nÖdülünüzü çekmek için aşağıdaki butona tıklayın:",
+            'referral_join_notification': "🎉 **Yeni referans katıldı!**\n\n👤 Referans veren: {}\n👤 Yeni kullanıcı: {}\n🔗 Referans kodu: {}\n\n💰 Ödül kazandınız!",
+            'download_instagram_prompt': "📸 **Instagram İndirici**\n\nLütfen Instagram linkini gönderin:\n\n🔗 Örnek: `https://www.instagram.com/p/...`\n\n⚠️ **Not:** Sadece herkese açık içerikler indirilebilir.",
+            'download_youtube_prompt': "▶️ **YouTube İndirici**\n\nLütfen YouTube linkini gönderin:\n\n🔗 Örnek: `https://www.youtube.com/watch?v=...`\n\n📱 Desteklenenler:\n• Videolar (her kalite)\n• Oynatma listeleri\n• Shorts",
+            'downloading': "⏳ İndiriliyor...\nLütfen bekleyin, bu biraz zaman alabilir.",
+            'download_success': "✅ **İndirme tamamlandı!**\n\n🔗 Link: {}\n📁 Dosya boyutu: {} MB\n\n🎉 İçeriğinizin tadını çıkarın!",
+            'download_failed': "❌ **İndirme başarısız!**\n\n🔹 Sebep: {}\n\n📌 **Olası çözümler:**\n• Linkin geçerli olduğunu kontrol edin\n• İçerik gizli olabilir\n• Daha sonra tekrar deneyin\n\n🔄 Farklı bir link deneyin.",
+            'send_link_first': "❌ Lütfen önce linki gönderin!\n\nBaşlamak için /download_instagram veya /download_youtube kullanın.",
         }
     }
     
-    DEFAULT_LANG = 'fa'  # زبان پیش‌فرض فارسی
+    DEFAULT_LANG = 'en'
     
     @classmethod
     def get_text(cls, lang_code: str, key: str, *args, **kwargs) -> str:
-        if not lang_code or lang_code not in cls.LANGUAGES:
+        if lang_code not in cls.LANGUAGES:
             lang_code = cls.DEFAULT_LANG
             
         text = cls.LANGUAGES[lang_code].get(key, cls.LANGUAGES[cls.DEFAULT_LANG].get(key, key))
@@ -313,18 +329,14 @@ class LanguageManager:
     
     @classmethod
     def get_language_name(cls, lang_code: str) -> str:
-        if not lang_code or lang_code not in cls.LANGUAGES:
-            lang_code = cls.DEFAULT_LANG
-        return cls.LANGUAGES.get(lang_code, {}).get('name', 'فارسی')
+        return cls.LANGUAGES.get(lang_code, {}).get('name', 'English')
     
     @classmethod
     def get_language_emoji(cls, lang_code: str) -> str:
-        if not lang_code or lang_code not in cls.LANGUAGES:
-            lang_code = cls.DEFAULT_LANG
-        return cls.LANGUAGES.get(lang_code, {}).get('emoji', '🇮🇷')
+        return cls.LANGUAGES.get(lang_code, {}).get('emoji', '🇬🇧')
 
 # ============================================================
-# دیتابیس با ۵۰۰ شارد برای مقیاس‌پذیری بالا
+# دیتابیس با ۵۰۰ شارد
 # ============================================================
 class DatabaseManager:
     def __init__(self, num_shards=DB_SHARDS):
@@ -357,7 +369,7 @@ class DatabaseManager:
                 username TEXT,
                 first_name TEXT,
                 last_name TEXT,
-                language TEXT DEFAULT 'fa',
+                language TEXT DEFAULT 'en',
                 wallet_address TEXT,
                 referral_code TEXT UNIQUE,
                 referred_by INTEGER,
@@ -433,15 +445,7 @@ class DatabaseManager:
             )
         ''')
         
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS referral_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                referrer_id INTEGER,
-                referred_id INTEGER,
-                joined_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
+        # ایندکس‌های بهینه
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_referral ON users(referral_code)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_subscription ON users(has_subscription, subscription_end)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id)')
@@ -452,8 +456,6 @@ class DatabaseManager:
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_pending_tx_status ON pending_verifications(status)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_created ON users(created_at)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_subscription_end ON users(subscription_end)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_referral_logs_referrer ON referral_logs(referrer_id)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_referral_logs_referred ON referral_logs(referred_id)')
         
         conn.commit()
         
@@ -507,7 +509,7 @@ class DatabaseManager:
 db = DatabaseManager()
 
 # ============================================================
-# سیستم کش پیشرفته با TTL و LRU
+# سیستم کش پیشرفته
 # ============================================================
 class CacheManager:
     def __init__(self, max_size=10000):
@@ -564,7 +566,98 @@ class CacheManager:
 cache = CacheManager(max_size=20000)
 
 # ============================================================
-# سیستم تایید پرداخت با چندین API و کش
+# سیستم دانلود از اینستاگرام و یوتیوب
+# ============================================================
+class DownloadManager:
+    def __init__(self):
+        self.executor = ThreadPoolExecutor(max_workers=20)
+        self.download_path = "downloads"
+        os.makedirs(self.download_path, exist_ok=True)
+        
+    async def download_instagram(self, url: str) -> Dict[str, Any]:
+        """دانلود محتوای اینستاگرام با قدرت بالا"""
+        try:
+            loader = instaloader.Instaloader(
+                download_videos=True,
+                download_pictures=True,
+                compress_json=False,
+                save_metadata=False,
+                post_metadata_txt_pattern="",
+                max_connection_attempts=3,
+                request_timeout=30,
+                download_comments=False,
+                download_geotags=False,
+                download_pictures=True,
+                download_video_thumbnails=False
+            )
+            
+            post = instaloader.Post.from_shortcode(loader.context, url.split('/')[-2])
+            
+            filename = f"{self.download_path}/instagram_{post.shortcode}_{int(time.time())}"
+            loader.download_post(post, target=filename)
+            
+            files = [f for f in os.listdir(filename) if os.path.isfile(os.path.join(filename, f))]
+            
+            return {
+                'success': True,
+                'files': files,
+                'path': filename,
+                'url': url,
+                'type': 'video' if post.is_video else 'image',
+                'caption': post.caption
+            }
+        except Exception as e:
+            logger.error(f"Instagram download error: {e}")
+            return {'success': False, 'error': str(e)}
+    
+    async def download_youtube(self, url: str) -> Dict[str, Any]:
+        """دانلود محتوای یوتیوب با قدرت بالا"""
+        try:
+            ydl_opts = {
+                'format': 'best[height<=1080]',
+                'outtmpl': f'{self.download_path}/youtube_%(title)s_%(id)s.%(ext)s',
+                'quiet': True,
+                'no_warnings': True,
+                'extract_flat': False,
+                'ignoreerrors': True,
+                'no_check_certificate': True,
+                'prefer_ffmpeg': True,
+                'postprocessors': [{
+                    'key': 'FFmpegVideoConvertor',
+                    'preferedformat': 'mp4'
+                }]
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                filename = ydl.prepare_filename(info)
+                
+                if not os.path.exists(filename):
+                    for ext in ['.mp4', '.webm', '.mkv']:
+                        alt = filename.replace('.mp4', ext) if ext != '.mp4' else filename
+                        if os.path.exists(alt):
+                            filename = alt
+                            break
+                
+                file_size = os.path.getsize(filename) / (1024 * 1024) if os.path.exists(filename) else 0
+                
+                return {
+                    'success': True,
+                    'filename': filename,
+                    'file_size': file_size,
+                    'title': info.get('title', 'Unknown'),
+                    'url': url,
+                    'duration': info.get('duration', 0),
+                    'views': info.get('view_count', 0)
+                }
+        except Exception as e:
+            logger.error(f"YouTube download error: {e}")
+            return {'success': False, 'error': str(e)}
+
+download_manager = DownloadManager()
+
+# ============================================================
+# سیستم تایید پرداخت
 # ============================================================
 class PaymentVerifier:
     def __init__(self):
@@ -681,159 +774,6 @@ class PaymentVerifier:
         return False
 
 payment_verifier = PaymentVerifier()
-
-# ============================================================
-# سیستم دانلودر قدرتمند
-# ============================================================
-class DownloadManager:
-    def __init__(self):
-        self.executor = ThreadPoolExecutor(max_workers=20)
-        self.download_path = "downloads"
-        os.makedirs(self.download_path, exist_ok=True)
-        
-    def is_instagram_url(self, url: str) -> bool:
-        patterns = [
-            r'instagram\.com',
-            r'instagr\.am',
-            r'www\.instagram\.com'
-        ]
-        return any(re.search(pattern, url, re.IGNORECASE) for pattern in patterns)
-    
-    def is_youtube_url(self, url: str) -> bool:
-        patterns = [
-            r'youtube\.com',
-            r'youtu\.be',
-            r'www\.youtube\.com',
-            r'm\.youtube\.com'
-        ]
-        return any(re.search(pattern, url, re.IGNORECASE) for pattern in patterns)
-    
-    async def download_instagram(self, url: str) -> Tuple[bool, Optional[str], str]:
-        try:
-            loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(
-                self.executor,
-                self._download_instagram_sync,
-                url
-            )
-        except Exception as e:
-            logger.error(f"Instagram download error: {e}")
-            return False, None, str(e)
-    
-    def _download_instagram_sync(self, url: str) -> Tuple[bool, Optional[str], str]:
-        try:
-            import instaloader
-            
-            loader = instaloader.Instaloader(
-                download_videos=True,
-                download_pictures=True,
-                save_metadata=False,
-                post_metadata_txt_pattern="",
-                filename_pattern="{shortcode}",
-                download_geotags=False,
-                download_comments=False,
-                compress_json=False
-            )
-            
-            shortcode = self._extract_instagram_shortcode(url)
-            if not shortcode:
-                return False, None, "Invalid Instagram URL"
-            
-            post = instaloader.Post.from_shortcode(loader.context, shortcode)
-            loader.download_post(post, target=f"{self.download_path}/instagram_{shortcode}")
-            
-            import glob
-            files = glob.glob(f"{self.download_path}/instagram_{shortcode}/*")
-            if files:
-                return True, files[0], "Download completed"
-            
-            return False, None, "No files downloaded"
-            
-        except Exception as e:
-            logger.error(f"Instagram download error: {e}")
-            return False, None, str(e)
-    
-    def _extract_instagram_shortcode(self, url: str) -> Optional[str]:
-        patterns = [
-            r'instagram\.com/p/([^/?]+)',
-            r'instagram\.com/reel/([^/?]+)',
-            r'instagram\.com/tv/([^/?]+)',
-            r'instagr\.am/p/([^/?]+)',
-            r'instagr\.am/reel/([^/?]+)',
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, url)
-            if match:
-                return match.group(1)
-        return None
-    
-    async def download_youtube(self, url: str) -> Tuple[bool, Optional[str], str]:
-        try:
-            loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(
-                self.executor,
-                self._download_youtube_sync,
-                url
-            )
-        except Exception as e:
-            logger.error(f"YouTube download error: {e}")
-            return False, None, str(e)
-    
-    def _download_youtube_sync(self, url: str) -> Tuple[bool, Optional[str], str]:
-        try:
-            import yt_dlp
-            
-            ydl_opts = {
-                'format': 'best[ext=mp4]/best',
-                'outtmpl': f'{self.download_path}/youtube_%(title)s_%(id)s.%(ext)s',
-                'quiet': True,
-                'no_warnings': True,
-                'extract_flat': False,
-                'ignoreerrors': True,
-                'no_color': True,
-                'progress_hooks': [],
-                'postprocessors': [{
-                    'key': 'FFmpegVideoConvertor',
-                    'preferedformat': 'mp4',
-                }],
-                'format_sort': ['res:1080', 'res:720', 'res:480', 'res:360'],
-                'writesubtitles': False,
-                'writeautomaticsub': False,
-                'subtitleslangs': [],
-            }
-            
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                if info and 'requested_downloads' in info:
-                    for dl in info['requested_downloads']:
-                        if 'filepath' in dl:
-                            return True, dl['filepath'], "Download completed"
-                
-                if info and 'title' in info:
-                    import glob
-                    title = info['title']
-                    files = glob.glob(f"{self.download_path}/youtube_{title}_*.mp4")
-                    if files:
-                        return True, files[0], "Download completed"
-                
-                return False, None, "No files downloaded"
-                
-        except Exception as e:
-            logger.error(f"YouTube download error: {e}")
-            return False, None, str(e)
-    
-    def get_file_size(self, file_path: str) -> str:
-        try:
-            size = os.path.getsize(file_path)
-            for unit in ['B', 'KB', 'MB', 'GB']:
-                if size < 1024.0:
-                    return f"{size:.1f} {unit}"
-                size /= 1024.0
-            return f"{size:.1f} TB"
-        except:
-            return "Unknown"
-
-download_manager = DownloadManager()
 
 # ============================================================
 # سیستم قرعه‌کشی با الگوریتم هوش مصنوعی
@@ -1023,44 +963,25 @@ class LotterySystem:
             )
         except Exception as e:
             logger.error(f"Error updating winner stats for {user_id}: {e}")
-    
+            
     def get_all_winners(self):
         try:
             results = db.execute_global(
-                """SELECT w.*, u.first_name, u.username 
-                   FROM winners w
-                   JOIN users u ON w.user_id = u.user_id
-                   ORDER BY w.created_at DESC"""
+                """SELECT w.*, u.first_name, u.username, u.language 
+                   FROM winners w 
+                   JOIN users u ON w.user_id = u.user_id 
+                   ORDER BY w.created_at DESC 
+                   LIMIT 100"""
             )
             return results
         except Exception as e:
-            logger.error(f"Error getting all winners: {e}")
+            logger.error(f"Error getting winners: {e}")
             return []
-    
-    def add_manual_winner(self, user_id, amount):
-        try:
-            cursor = db.execute(user_id,
-                "SELECT wallet_address FROM users WHERE user_id = ?",
-                (user_id,)
-            )
-            user_data = cursor.fetchone()
-            wallet_address = user_data['wallet_address'] if user_data else None
-            
-            db.execute(user_id,
-                """INSERT INTO winners 
-                   (lottery_id, user_id, prize_amount, wallet_address, paid_status) 
-                   VALUES (0, ?, ?, ?, 0)""",
-                (user_id, amount, wallet_address)
-            )
-            return True
-        except Exception as e:
-            logger.error(f"Error adding manual winner: {e}")
-            return False
 
 lottery_system = LotterySystem()
 
 # ============================================================
-# سیستم مدیریت کاربران با پایداری بالا
+# سیستم مدیریت کاربران
 # ============================================================
 class UserManager:
     @staticmethod
@@ -1075,58 +996,52 @@ class UserManager:
                 referral_code = UserManager._generate_referral_code(user_id)
                 db.execute(user_id,
                     """INSERT INTO users 
-                       (user_id, username, first_name, last_name, referral_code, language, referred_by) 
-                       VALUES (?, ?, ?, ?, ?, 'fa', ?)""",
+                       (user_id, username, first_name, last_name, referral_code, referred_by, language) 
+                       VALUES (?, ?, ?, ?, ?, ?, 'en')""",
                     (user_id, username, first_name, last_name, referral_code, referred_by)
                 )
                 
+                # اعلان به معرف
                 if referred_by:
-                    db.execute(user_id,
-                        """INSERT INTO referral_logs (referrer_id, referred_id) 
-                           VALUES (?, ?)""",
-                        (referred_by, user_id)
-                    )
-                    UserManager._notify_referral(referred_by, username or user_id)
-                
+                    UserManager._notify_referrer(referred_by, user_id, referral_code)
+                    
                 return True
+            elif referred_by:
+                # به‌روزرسانی referrer اگر کاربر قبلاً ثبت شده بود
+                db.execute(user_id,
+                    "UPDATE users SET referred_by = ? WHERE user_id = ? AND referred_by IS NULL",
+                    (referred_by, user_id)
+                )
+                if referred_by:
+                    UserManager._notify_referrer(referred_by, user_id, None)
             return False
         except Exception as e:
             logger.error(f"Error registering user {user_id}: {e}")
             return False
-    
-    @staticmethod
-    def _notify_referral(referrer_id, referred_username):
-        try:
-            from telegram import Bot
-            bot = Bot(token=BOT_TOKEN)
             
-            referrer_lang = UserManager.get_language(referrer_id)
-            referral_code = UserManager.get_referral_code(referrer_id)
-            text = LanguageManager.get_text(referrer_lang, 'referral_join_message', 
-                referred_username, 
-                referral_code
+    @staticmethod
+    def _notify_referrer(referrer_id, new_user_id, referral_code):
+        """ارسال اعلان به معرف"""
+        try:
+            referrer = UserManager.get_user(referrer_id)
+            if not referrer:
+                return
+                
+            lang = referrer.get('language', 'en')
+            
+            text = LanguageManager.get_text(lang, 'referral_join_notification',
+                referrer.get('first_name', referrer_id),
+                new_user_id,
+                referral_code or 'Unknown'
             )
             
-            asyncio.create_task(bot.send_message(
-                chat_id=referrer_id,
-                text=text,
-                parse_mode=ParseMode.MARKDOWN
-            ))
+            # ارسال پیام به معرف (به صورت async در جای دیگر انجام می‌شود)
+            # این تابع فقط پیام را آماده می‌کند
+            return text
         except Exception as e:
-            logger.error(f"Error notifying referral: {e}")
+            logger.error(f"Error notifying referrer: {e}")
+            return None
     
-    @staticmethod
-    def get_referral_code(user_id):
-        user = UserManager.get_user(user_id)
-        return user['referral_code'] if user else None
-    
-    @staticmethod
-    def get_language(user_id):
-        user = UserManager.get_user(user_id)
-        if user and user['language']:
-            return user['language']
-        return 'fa'
-            
     @staticmethod
     def _generate_referral_code(user_id):
         import hashlib
@@ -1198,22 +1113,39 @@ class UserManager:
     @staticmethod
     def get_all_users():
         try:
-            results = db.execute_global("SELECT user_id, username, first_name, language FROM users")
+            results = db.execute_global(
+                "SELECT user_id, username, first_name, last_name, language, referral_code, referred_by, has_subscription FROM users ORDER BY created_at DESC"
+            )
             return results
         except Exception as e:
             logger.error(f"Error getting all users: {e}")
             return []
+            
+    @staticmethod
+    def get_user_by_referral_code(referral_code):
+        try:
+            results = db.execute_global(
+                "SELECT user_id FROM users WHERE referral_code = ?",
+                (referral_code,)
+            )
+            if results:
+                return results[0]['user_id']
+            return None
+        except Exception as e:
+            logger.error(f"Error getting user by referral code: {e}")
+            return None
 
 user_manager = UserManager()
 
 # ============================================================
-# کلاس اصلی ربات با سرعت بالا
+# کلاس اصلی ربات با تمام قابلیت‌ها
 # ============================================================
 class UTYOBot:
     def __init__(self):
         self.application = Application.builder().token(BOT_TOKEN).build()
         self.pending_verifications = {}
         self.executor = ThreadPoolExecutor(max_workers=50)
+        self.user_states = {}  # برای مدیریت بازگشت مرحله‌ای
         self._setup_handlers()
         self._init_system()
         
@@ -1231,25 +1163,33 @@ class UTYOBot:
     def _setup_handlers(self):
         app = self.application
         
+        # دستورات عمومی
         app.add_handler(CommandHandler("start", self.start_command))
         app.add_handler(CommandHandler("help", self.help_command))
         app.add_handler(CommandHandler("referral", self.referral_command))
         app.add_handler(CommandHandler("language", self.language_command))
+        app.add_handler(CommandHandler("download_instagram", self.download_instagram_command))
+        app.add_handler(CommandHandler("download_youtube", self.download_youtube_command))
         
+        # دکمه‌های منو
         app.add_handler(CallbackQueryHandler(self.main_menu_callback, pattern="^main_menu$"))
         app.add_handler(CallbackQueryHandler(self.lottery_callback, pattern="^lottery$"))
         app.add_handler(CallbackQueryHandler(self.referral_callback, pattern="^referral$"))
         app.add_handler(CallbackQueryHandler(self.guide_callback, pattern="^guide$"))
         app.add_handler(CallbackQueryHandler(self.language_callback, pattern="^language$"))
-        app.add_handler(CallbackQueryHandler(self.instagram_download_callback, pattern="^instagram_download$"))
-        app.add_handler(CallbackQueryHandler(self.youtube_download_callback, pattern="^youtube_download$"))
+        app.add_handler(CallbackQueryHandler(self.download_instagram_callback, pattern="^download_instagram$"))
+        app.add_handler(CallbackQueryHandler(self.download_youtube_callback, pattern="^download_youtube$"))
+        app.add_handler(CallbackQueryHandler(self.play_website_callback, pattern="^play_website$"))
         
+        # دکمه‌های اشتراک
         app.add_handler(CallbackQueryHandler(self.subscribe_callback, pattern="^subscribe$"))
         app.add_handler(CallbackQueryHandler(self.confirm_subscribe_callback, pattern="^confirm_subscribe$"))
         
+        # دکمه‌های قرعه‌کشی
         app.add_handler(CallbackQueryHandler(self.join_lottery_callback, pattern="^join_lottery$"))
         app.add_handler(CallbackQueryHandler(self.confirm_payment_callback, pattern="^confirm_payment$"))
         
+        # دکمه‌های پنل مدیریت
         app.add_handler(CallbackQueryHandler(self.admin_panel_callback, pattern="^admin_panel$"))
         app.add_handler(CallbackQueryHandler(self.admin_broadcast_callback, pattern="^admin_broadcast$"))
         app.add_handler(CallbackQueryHandler(self.admin_start_lottery_callback, pattern="^admin_start_lottery$"))
@@ -1258,23 +1198,30 @@ class UTYOBot:
         app.add_handler(CallbackQueryHandler(self.admin_pay_winners_callback, pattern="^admin_pay_winners$"))
         app.add_handler(CallbackQueryHandler(self.admin_add_api_callback, pattern="^admin_add_api$"))
         app.add_handler(CallbackQueryHandler(self.admin_stats_callback, pattern="^admin_stats$"))
-        app.add_handler(CallbackQueryHandler(self.admin_winners_list_callback, pattern="^admin_winners_list$"))
-        app.add_handler(CallbackQueryHandler(self.admin_add_winner_callback, pattern="^admin_add_winner$"))
+        app.add_handler(CallbackQueryHandler(self.admin_list_users_callback, pattern="^admin_list_users$"))
+        app.add_handler(CallbackQueryHandler(self.admin_send_message_callback, pattern="^admin_send_message$"))
+        app.add_handler(CallbackQueryHandler(self.admin_show_winners_callback, pattern="^admin_show_winners$"))
         
+        # تایید/رد تراکنش توسط ادمین
         app.add_handler(CallbackQueryHandler(self.admin_verify_approve_callback, pattern="^admin_verify_approve_"))
         app.add_handler(CallbackQueryHandler(self.admin_verify_reject_callback, pattern="^admin_verify_reject_"))
         
+        # مراحل قرعه‌کشی
         app.add_handler(CallbackQueryHandler(self.start_lottery_confirm_callback, pattern="^start_lottery_confirm$"))
         app.add_handler(CallbackQueryHandler(self.start_lottery_final_callback, pattern="^start_lottery_final$"))
         
+        # برداشت جایزه
         app.add_handler(CallbackQueryHandler(self.withdraw_prize_callback, pattern="^withdraw_prize$"))
         app.add_handler(CallbackQueryHandler(self.confirm_withdraw_callback, pattern="^confirm_withdraw$"))
         
+        # تغییر زبان
         app.add_handler(CallbackQueryHandler(self.set_language_callback, pattern="^set_lang_"))
         
+        # مدیریت پیام‌ها
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         app.add_handler(MessageHandler(filters.PHOTO, self.handle_photo))
         
+        # مدیریت خطاها
         app.add_error_handler(self.error_handler)
 
     # ============================================================
@@ -1285,7 +1232,7 @@ class UTYOBot:
         user = user_manager.get_user(user_id)
         if user and user['language']:
             return user['language']
-        return 'fa'
+        return 'en'
     
     def _set_user_language(self, user_id, lang_code):
         if lang_code in LanguageManager.LANGUAGES:
@@ -1425,6 +1372,47 @@ class UTYOBot:
         )
         result = cursor.fetchone()
         return result['prize_amount'] if result else 0
+    
+    def _get_main_menu_keyboard(self, user_id, lang):
+        """ساخت کیبورد منوی اصلی با تمام دکمه‌ها"""
+        keyboard = [
+            [InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'play_button'),
+                callback_data="play_website"
+            )],
+            [InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'download_instagram'),
+                callback_data="download_instagram"
+            )],
+            [InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'download_youtube'),
+                callback_data="download_youtube"
+            )],
+            [InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'lottery'),
+                callback_data="lottery"
+            )],
+            [InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'referral'),
+                callback_data="referral"
+            )],
+            [InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'guide'),
+                callback_data="guide"
+            )],
+            [InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'language'),
+                callback_data="language"
+            )]
+        ]
+        
+        if user_id in ADMIN_IDS:
+            keyboard.append([InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'admin_panel'),
+                callback_data="admin_panel"
+            )])
+        
+        return InlineKeyboardMarkup(keyboard)
 
     # ============================================================
     # دستورات عمومی
@@ -1432,17 +1420,16 @@ class UTYOBot:
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
-        
         referred_by = None
-        if context.args and context.args[0].startswith('ref_'):
-            ref_code = context.args[0].replace('ref_', '')
-            cursor = db.execute(0,
-                "SELECT user_id FROM users WHERE referral_code = ?",
-                (ref_code,)
-            )
-            result = cursor.fetchone()
-            if result:
-                referred_by = result['user_id']
+        
+        # بررسی رفرال از لینک
+        if context.args:
+            ref_code = context.args[0]
+            if ref_code.startswith('ref_'):
+                ref_code = ref_code[4:]
+                referred_by = user_manager.get_user_by_referral_code(ref_code)
+                if referred_by == user.id:
+                    referred_by = None
         
         user_manager.register_user(
             user.id,
@@ -1454,30 +1441,30 @@ class UTYOBot:
         
         lang = self._get_user_language(user.id)
         
-        keyboard = [
-            [InlineKeyboardButton("▶️ PLAY", url=WEBSITE_URL)],
-            [InlineKeyboardButton("🎰 شرکت در قرعه‌کشی", callback_data="lottery")],
-            [InlineKeyboardButton("📥 دانلود از اینستاگرام", callback_data="instagram_download")],
-            [InlineKeyboardButton("📥 دانلود از یوتوب", callback_data="youtube_download")],
-            [InlineKeyboardButton("🔗 رفرال", callback_data="referral")],
-            [InlineKeyboardButton("📖 راهنمایی", callback_data="guide")],
-            [InlineKeyboardButton("🌐 تغییر زبان", callback_data="language")]
-        ]
+        # ارسال اعلان به معرف
+        if referred_by and referred_by != user.id:
+            referrer = user_manager.get_user(referred_by)
+            if referrer:
+                referrer_lang = referrer.get('language', 'en')
+                text = LanguageManager.get_text(referrer_lang, 'referral_join_notification',
+                    referrer.get('first_name', referred_by),
+                    user.id,
+                    'New'
+                )
+                try:
+                    await self.application.bot.send_message(
+                        chat_id=referred_by,
+                        text=text,
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                except Exception as e:
+                    logger.error(f"Error sending referral notification: {e}")
         
-        if user.id in ADMIN_IDS:
-            keyboard.append([InlineKeyboardButton(
-                "⚙️ پنل مدیریت",
-                callback_data="admin_panel"
-            )])
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        # نمایش منوی اصلی کامل
+        reply_markup = self._get_main_menu_keyboard(user.id, lang)
         
         await update.message.reply_text(
-            "🎮 **به ربات قرعه‌کشی UTYOB خوش آمدید!**\n\n"
-            "💰 برنده جوایز شگفت‌انگیز تا ۱۰۰۰۰ دلار شوید!\n"
-            "🎯 سیستم قرعه‌کشی عادلانه و شفاف\n"
-            "🌟 همین حالا بپیوندید و شانس خود را امتحان کنید!\n\n"
-            "برای ورود به بازی، روی PLAY کلیک کنید.",
+            LanguageManager.get_text(lang, 'welcome'),
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
@@ -1486,37 +1473,10 @@ class UTYOBot:
         user_id = update.effective_user.id
         lang = self._get_user_language(user_id)
         
-        keyboard = [[InlineKeyboardButton(
-            "🔙 بازگشت",
-            callback_data="main_menu"
-        )]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        reply_markup = self._get_main_menu_keyboard(user_id, lang)
         
         await update.message.reply_text(
-            "📖 **راهنمای کامل ربات UTYOB**\n\n"
-            "🎯 **نحوه کار:**\n"
-            "1. **ثبت‌نام**: با دستور /start ثبت‌نام کنید\n"
-            "2. **اشتراک**: برای شرکت در قرعه‌کشی، اشتراک تهیه کنید\n"
-            "3. **واریز**: مبلغ ۱۰۰ دلار به آدرس مشخص واریز کنید\n"
-            "4. **شرکت**: پس از تایید، در قرعه‌کشی شرکت کنید\n"
-            "5. **برنده**: در صورت برنده شدن، جایزه دریافت کنید\n\n"
-            "💰 **مبلغ واریز:**\n"
-            "• مبلغ ثابت: ۱۰۰ دلار\n"
-            "• آدرس واریز: TV61aTh98MGqmteYzda5AaBzdXgGqreG6A\n"
-            "• شبکه: TRC20\n\n"
-            "🎁 **جوایز:**\n"
-            "• جایزه اول: ۵۰٪ از کل مبلغ\n"
-            "• جایزه دوم: ۳۰٪ از کل مبلغ\n"
-            "• جایزه سوم: ۲۰٪ از کل مبلغ\n\n"
-            "🔗 **سیستم رفرال:**\n"
-            "• هر کاربر کد رفرال اختصاصی دارد\n"
-            "• به ازای هر دعوت، ۵٪ پاداش دریافت کنید\n\n"
-            "⚠️ **قوانین:**\n"
-            "• هر کاربر فقط یک بار در هر قرعه‌کشی شرکت می‌کند\n"
-            "• برندگان قبلی شانس کمتری در قرعه‌کشی‌های بعدی دارند\n"
-            "• تمامی تراکنش‌ها به صورت خودکار تایید می‌شوند\n\n"
-            "📞 **پشتیبانی:**\n"
-            "برای سوالات و مشکلات با مدیریت تماس بگیرید.",
+            LanguageManager.get_text(lang, 'guide_text'),
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
@@ -1528,6 +1488,44 @@ class UTYOBot:
     async def language_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         await self._show_language_selector(update, user_id)
+    
+    async def download_instagram_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        lang = self._get_user_language(user_id)
+        
+        context.user_data['download_type'] = 'instagram'
+        
+        reply_markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'back'),
+                callback_data="main_menu"
+            )
+        ]])
+        
+        await update.message.reply_text(
+            LanguageManager.get_text(lang, 'download_instagram_prompt'),
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+    
+    async def download_youtube_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        lang = self._get_user_language(user_id)
+        
+        context.user_data['download_type'] = 'youtube'
+        
+        reply_markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'back'),
+                callback_data="main_menu"
+            )
+        ]])
+        
+        await update.message.reply_text(
+            LanguageManager.get_text(lang, 'download_youtube_prompt'),
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
 
     # ============================================================
     # کالبک‌های منوی اصلی
@@ -1540,41 +1538,78 @@ class UTYOBot:
         user_id = query.from_user.id
         lang = self._get_user_language(user_id)
         
-        keyboard = [
-            [InlineKeyboardButton("▶️ PLAY", url=WEBSITE_URL)],
-            [InlineKeyboardButton("🎰 شرکت در قرعه‌کشی", callback_data="lottery")],
-            [InlineKeyboardButton("📥 دانلود از اینستاگرام", callback_data="instagram_download")],
-            [InlineKeyboardButton("📥 دانلود از یوتوب", callback_data="youtube_download")],
-            [InlineKeyboardButton("🔗 رفرال", callback_data="referral")],
-            [InlineKeyboardButton("📖 راهنمایی", callback_data="guide")],
-            [InlineKeyboardButton("🌐 تغییر زبان", callback_data="language")]
-        ]
+        reply_markup = self._get_main_menu_keyboard(user_id, lang)
         
-        if user_id in ADMIN_IDS:
-            keyboard.append([InlineKeyboardButton(
-                "⚙️ پنل مدیریت",
-                callback_data="admin_panel"
-            )])
+        await query.edit_message_text(
+            LanguageManager.get_text(lang, 'main_menu'),
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+    
+    async def play_website_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
         
+        user_id = query.from_user.id
+        lang = self._get_user_language(user_id)
+        
+        # ارسال لینک سایت بدون تایید
+        await query.edit_message_text(
+            f"🌐 **Opening website...**\n\n"
+            f"[Click here to open]({WEBSITE_URL})\n\n"
+            f"🔙 Press back button to return to menu.",
+            parse_mode=ParseMode.MARKDOWN,
+            disable_web_page_preview=False
+        )
+        
+        # همچنین لینک را به صورت مستقیم ارسال می‌کنیم
+        await query.message.reply_text(
+            f"🔗 [Open UTYOB Website]({WEBSITE_URL})",
+            parse_mode=ParseMode.MARKDOWN,
+            disable_web_page_preview=False
+        )
+    
+    async def download_instagram_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        lang = self._get_user_language(user_id)
+        
+        context.user_data['download_type'] = 'instagram'
+        
+        keyboard = [[InlineKeyboardButton(
+            LanguageManager.get_text(lang, 'back'),
+            callback_data="main_menu"
+        )]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        try:
-            await query.edit_message_text(
-                "🎯 **ربات قرعه‌کشی UTYOB**\n\n"
-                "یکی از گزینه‌های زیر را انتخاب کنید:\n"
-                "👇👇👇",
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-        except Exception as e:
-            logger.error(f"Error editing message: {e}")
-            await query.message.reply_text(
-                "🎯 **ربات قرعه‌کشی UTYOB**\n\n"
-                "یکی از گزینه‌های زیر را انتخاب کنید:\n"
-                "👇👇👇",
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
+        await query.edit_message_text(
+            LanguageManager.get_text(lang, 'download_instagram_prompt'),
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+    
+    async def download_youtube_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        lang = self._get_user_language(user_id)
+        
+        context.user_data['download_type'] = 'youtube'
+        
+        keyboard = [[InlineKeyboardButton(
+            LanguageManager.get_text(lang, 'back'),
+            callback_data="main_menu"
+        )]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            LanguageManager.get_text(lang, 'download_youtube_prompt'),
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
     
     async def lottery_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
@@ -1587,22 +1622,18 @@ class UTYOBot:
         if not user or not user['has_subscription']:
             keyboard = [
                 [InlineKeyboardButton(
-                    "🔄 خرید اشتراک",
+                    LanguageManager.get_text(lang, 'subscribe'),
                     callback_data="subscribe"
                 )],
                 [InlineKeyboardButton(
-                    "🔙 بازگشت",
+                    LanguageManager.get_text(lang, 'back'),
                     callback_data="main_menu"
                 )]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
-                "❌ **شما اشتراک فعال ندارید!**\n\n"
-                "برای شرکت در قرعه‌کشی، ابتدا باید اشتراک تهیه کنید.\n\n"
-                "💰 هزینه اشتراک: ۱۰۰ دلار\n"
-                "📅 مدت اعتبار: ۱ ماه\n\n"
-                "برای تهیه اشتراک، روی دکمه زیر کلیک کنید.",
+                LanguageManager.get_text(lang, 'no_subscription'),
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN
             )
@@ -1610,21 +1641,21 @@ class UTYOBot:
         
         keyboard = [
             [InlineKeyboardButton(
-                "🎰 شرکت در قرعه‌کشی",
+                LanguageManager.get_text(lang, 'lottery'),
                 callback_data="join_lottery"
             )],
             [InlineKeyboardButton(
-                "🔙 بازگشت",
+                LanguageManager.get_text(lang, 'back'),
                 callback_data="main_menu"
             )]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
-            f"🎰 **قرعه‌کشی UTYOB**\n\n"
-            f"👤 کاربر: {user['first_name'] or user_id}\n\n"
-            f"💰 جایزه: تا ۱۰,۰۰۰ دلار\n\n"
-            f"برای شرکت در قرعه‌کشی روی دکمه زیر کلیک کنید:",
+            f"🎰 **UTYOB {LanguageManager.get_text(lang, 'lottery')}**\n\n"
+            f"👤 {LanguageManager.get_text(lang, 'user', lang=lang)}: {user['first_name'] or user_id}\n\n"
+            f"💰 {LanguageManager.get_text(lang, 'prize', lang=lang)}: Up to $10,000\n"
+            f"🎯 {LanguageManager.get_text(lang, 'fair', lang=lang)}: Yes",
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
@@ -1643,37 +1674,10 @@ class UTYOBot:
         user_id = query.from_user.id
         lang = self._get_user_language(user_id)
         
-        keyboard = [[InlineKeyboardButton(
-            "🔙 بازگشت",
-            callback_data="main_menu"
-        )]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        reply_markup = self._get_main_menu_keyboard(user_id, lang)
         
         await query.edit_message_text(
-            "📖 **راهنمای کامل ربات UTYOB**\n\n"
-            "🎯 **نحوه کار:**\n"
-            "1. **ثبت‌نام**: با دستور /start ثبت‌نام کنید\n"
-            "2. **اشتراک**: برای شرکت در قرعه‌کشی، اشتراک تهیه کنید\n"
-            "3. **واریز**: مبلغ ۱۰۰ دلار به آدرس مشخص واریز کنید\n"
-            "4. **شرکت**: پس از تایید، در قرعه‌کشی شرکت کنید\n"
-            "5. **برنده**: در صورت برنده شدن، جایزه دریافت کنید\n\n"
-            "💰 **مبلغ واریز:**\n"
-            "• مبلغ ثابت: ۱۰۰ دلار\n"
-            "• آدرس واریز: TV61aTh98MGqmteYzda5AaBzdXgGqreG6A\n"
-            "• شبکه: TRC20\n\n"
-            "🎁 **جوایز:**\n"
-            "• جایزه اول: ۵۰٪ از کل مبلغ\n"
-            "• جایزه دوم: ۳۰٪ از کل مبلغ\n"
-            "• جایزه سوم: ۲۰٪ از کل مبلغ\n\n"
-            "🔗 **سیستم رفرال:**\n"
-            "• هر کاربر کد رفرال اختصاصی دارد\n"
-            "• به ازای هر دعوت، ۵٪ پاداش دریافت کنید\n\n"
-            "⚠️ **قوانین:**\n"
-            "• هر کاربر فقط یک بار در هر قرعه‌کشی شرکت می‌کند\n"
-            "• برندگان قبلی شانس کمتری در قرعه‌کشی‌های بعدی دارند\n"
-            "• تمامی تراکنش‌ها به صورت خودکار تایید می‌شوند\n\n"
-            "📞 **پشتیبانی:**\n"
-            "برای سوالات و مشکلات با مدیریت تماس بگیرید.",
+            LanguageManager.get_text(lang, 'guide_text'),
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
@@ -1695,175 +1699,13 @@ class UTYOBot:
         if self._set_user_language(user_id, lang_code):
             lang = self._get_user_language(user_id)
             
-            keyboard = [[InlineKeyboardButton(
-                "🔙 منوی اصلی",
-                callback_data="main_menu"
-            )]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
+            reply_markup = self._get_main_menu_keyboard(user_id, lang)
             
             await query.edit_message_text(
-                f"✅ زبان به {LanguageManager.get_language_name(lang_code)} تغییر یافت!",
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
+                f"✅ Language changed to {LanguageManager.get_language_name(lang_code)}!\n\n"
+                f"🌐 زبان به {LanguageManager.get_language_name(lang_code)} تغییر یافت!",
+                reply_markup=reply_markup
             )
-
-    # ============================================================
-    # کالبک‌های دانلود اینستاگرام و یوتوب
-    # ============================================================
-    
-    async def instagram_download_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        
-        context.user_data['waiting_for_instagram'] = True
-        
-        keyboard = [[InlineKeyboardButton(
-            "🔙 بازگشت",
-            callback_data="main_menu"
-        )]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            "📥 **دانلود از اینستاگرام**\n\n"
-            "لینک پست/ریل/استوری اینستاگرام را ارسال کنید تا برای شما دانلود کنم!\n\n"
-            "⚠️ **پشتیبانی:**\n"
-            "• پست‌ها\n"
-            "• ریل‌ها\n"
-            "• IGTV\n"
-            "• استوری‌ها\n\n"
-            "📤 **لینک اینستاگرام خود را ارسال کنید:**",
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    async def youtube_download_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        
-        context.user_data['waiting_for_youtube'] = True
-        
-        keyboard = [[InlineKeyboardButton(
-            "🔙 بازگشت",
-            callback_data="main_menu"
-        )]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            "📥 **دانلود از یوتوب**\n\n"
-            "لینک ویدیوی یوتوب را ارسال کنید تا برای شما دانلود کنم!\n\n"
-            "⚠️ **پشتیبانی:**\n"
-            "• ویدیوها\n"
-            "• Shorts\n"
-            "• پلی‌لیست‌ها (اولین ویدیو)\n\n"
-            "📤 **لینک یوتوب خود را ارسال کنید:**",
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    async def _handle_instagram_download(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        lang = self._get_user_language(user_id)
-        url = update.message.text.strip()
-        
-        if not download_manager.is_instagram_url(url):
-            await update.message.reply_text(
-                "❌ لینک نامعتبر!\n\nلطفاً یک لینک معتبر اینستاگرام ارسال کنید.",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-        
-        await update.message.reply_text(
-            "⏳ در حال دانلود از اینستاگرام...\nلطفاً چند لحظه صبر کنید.",
-            parse_mode=ParseMode.MARKDOWN
-        )
-        
-        success, file_path, message = await download_manager.download_instagram(url)
-        
-        if success and file_path and os.path.exists(file_path):
-            try:
-                file_size = download_manager.get_file_size(file_path)
-                file_name = os.path.basename(file_path)
-                
-                with open(file_path, 'rb') as f:
-                    await update.message.reply_video(
-                        video=f,
-                        caption=f"✅ **دانلود کامل شد!** 🎉\n\n🔹 فایل: {file_name}\n🔹 حجم: {file_size}",
-                        supports_streaming=True
-                    )
-                
-                try:
-                    os.remove(file_path)
-                    os.rmdir(os.path.dirname(file_path))
-                except:
-                    pass
-                    
-            except Exception as e:
-                await update.message.reply_text(
-                    f"❌ **دانلود ناموفق!**\n\n🔹 دلیل: {str(e)}",
-                    parse_mode=ParseMode.MARKDOWN
-                )
-        else:
-            await update.message.reply_text(
-                f"❌ **دانلود ناموفق!**\n\n🔹 دلیل: {message}",
-                parse_mode=ParseMode.MARKDOWN
-            )
-        
-        context.user_data['waiting_for_instagram'] = False
-    
-    async def _handle_youtube_download(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        lang = self._get_user_language(user_id)
-        url = update.message.text.strip()
-        
-        if not download_manager.is_youtube_url(url):
-            await update.message.reply_text(
-                "❌ لینک نامعتبر!\n\nلطفاً یک لینک معتبر یوتوب ارسال کنید.",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-        
-        await update.message.reply_text(
-            "⏳ در حال دانلود از یوتوب...\nلطفاً چند لحظه صبر کنید.",
-            parse_mode=ParseMode.MARKDOWN
-        )
-        
-        success, file_path, message = await download_manager.download_youtube(url)
-        
-        if success and file_path and os.path.exists(file_path):
-            try:
-                file_size = download_manager.get_file_size(file_path)
-                file_name = os.path.basename(file_path)
-                
-                with open(file_path, 'rb') as f:
-                    await update.message.reply_video(
-                        video=f,
-                        caption=f"✅ **دانلود کامل شد!** 🎉\n\n🔹 فایل: {file_name}\n🔹 حجم: {file_size}",
-                        supports_streaming=True
-                    )
-                
-                try:
-                    os.remove(file_path)
-                except:
-                    pass
-                    
-            except Exception as e:
-                await update.message.reply_text(
-                    f"❌ **دانلود ناموفق!**\n\n🔹 دلیل: {str(e)}",
-                    parse_mode=ParseMode.MARKDOWN
-                )
-        else:
-            await update.message.reply_text(
-                f"❌ **دانلود ناموفق!**\n\n🔹 دلیل: {message}",
-                parse_mode=ParseMode.MARKDOWN
-            )
-        
-        context.user_data['waiting_for_youtube'] = False
 
     # ============================================================
     # کالبک‌های اشتراک
@@ -1879,7 +1721,7 @@ class UTYOBot:
         user = user_manager.get_user(user_id)
         if user and user['has_subscription']:
             keyboard = [[InlineKeyboardButton(
-                "🔙 بازگشت",
+                LanguageManager.get_text(lang, 'back'),
                 callback_data="main_menu"
             )]]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1894,23 +1736,14 @@ class UTYOBot:
         
         keyboard = [
             [InlineKeyboardButton(
-                "❌ انصراف",
+                LanguageManager.get_text(lang, 'cancel'),
                 callback_data="main_menu"
             )]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
-            f"💳 **خرید اشتراک UTYOB**\n\n"
-            f"لطفاً آدرس کیف پول مبدا (TRC20) خود را وارد کنید:\n\n"
-            f"🔹 **هزینه اشتراک:** ۱۰۰ دلار\n"
-            f"🔹 **آدرس مقصد:**\n"
-            f"`{DESTINATION_WALLET}`\n\n"
-            f"⚠️ **نکات مهم:**\n"
-            f"• فقط از شبکه TRC20 استفاده کنید\n"
-            f"• مبلغ دقیقاً ۱۰۰ دلار باشد\n"
-            f"• پس از واریز، روی دکمه زیر کلیک کنید\n\n"
-            f"📤 **آدرس کیف پول خود را وارد کنید:**",
+            LanguageManager.get_text(lang, 'subscribe_wallet', DESTINATION_WALLET),
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
@@ -1925,29 +1758,20 @@ class UTYOBot:
         user = user_manager.get_user(user_id)
         if not user or not user['wallet_address']:
             keyboard = [[InlineKeyboardButton(
-                "🔙 بازگشت",
+                LanguageManager.get_text(lang, 'back'),
                 callback_data="main_menu"
             )]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
-                f"💳 **خرید اشتراک UTYOB**\n\n"
-                f"لطفاً آدرس کیف پول مبدا (TRC20) خود را وارد کنید:\n\n"
-                f"🔹 **هزینه اشتراک:** ۱۰۰ دلار\n"
-                f"🔹 **آدرس مقصد:**\n"
-                f"`{DESTINATION_WALLET}`\n\n"
-                f"⚠️ **نکات مهم:**\n"
-                f"• فقط از شبکه TRC20 استفاده کنید\n"
-                f"• مبلغ دقیقاً ۱۰۰ دلار باشد\n"
-                f"• پس از واریز، روی دکمه زیر کلیک کنید\n\n"
-                f"📤 **آدرس کیف پول خود را وارد کنید:**",
+                LanguageManager.get_text(lang, 'subscribe_wallet', DESTINATION_WALLET),
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN
             )
             return
         
         await query.edit_message_text(
-            "⏳ در حال بررسی پرداخت شما...\nلطفاً چند لحظه صبر کنید.",
+            LanguageManager.get_text(lang, 'verifying'),
             parse_mode=ParseMode.MARKDOWN
         )
         
@@ -1971,22 +1795,18 @@ class UTYOBot:
             
             keyboard = [
                 [InlineKeyboardButton(
-                    "🎰 شرکت در قرعه‌کشی",
+                    LanguageManager.get_text(lang, 'lottery'),
                     callback_data="lottery"
                 )],
                 [InlineKeyboardButton(
-                    "🔙 منوی اصلی",
+                    LanguageManager.get_text(lang, 'main_menu_btn'),
                     callback_data="main_menu"
                 )]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
-                f"✅ **اشتراک شما فعال شد!** 🎉\n\n"
-                f"🔹 مبلغ: ${PAYMENT_AMOUNT}\n"
-                f"🔹 تراکنش: `{tx_id}`\n\n"
-                f"🎉 اشتراک شما با موفقیت فعال شد!\n"
-                f"🙏 به UTYOB خوش آمدید!",
+                LanguageManager.get_text(lang, 'subscribe_success', PAYMENT_AMOUNT, tx_id),
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN
             )
@@ -1995,7 +1815,7 @@ class UTYOBot:
                 try:
                     await self.application.bot.send_message(
                         chat_id=admin_id,
-                        text=f"✅ اشتراک جدید!\nکاربر: {user_id}\nمبلغ: ${PAYMENT_AMOUNT}\nتراکنش: {tx_id}"
+                        text=f"✅ New subscription!\nUser: {user_id}\nAmount: ${PAYMENT_AMOUNT}\nTx: {tx_id}"
                     )
                 except:
                     pass
@@ -2005,22 +1825,14 @@ class UTYOBot:
             
             keyboard = [
                 [InlineKeyboardButton(
-                    "❌ انصراف",
+                    LanguageManager.get_text(lang, 'cancel'),
                     callback_data="main_menu"
                 )]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
-                f"❌ **پرداخت اشتراک تایید نشد!**\n\n"
-                f"🔹 دلیل: {message}\n\n"
-                f"📌 **راهکارها:**\n"
-                f"1. مبلغ دقیقاً ۱۰۰ دلار باشد\n"
-                f"2. آدرس مقصد صحیح باشد\n"
-                f"3. تراکنش انجام شده باشد\n"
-                f"4. از شبکه TRC20 استفاده کنید\n\n"
-                f"🔄 پس از بررسی، مجدداً تلاش کنید.\n\n"
-                f"اگر از پرداخت خود مطمئن هستید، هش تراکنش خود را ارسال کنید:",
+                LanguageManager.get_text(lang, 'subscribe_failed', message),
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN
             )
@@ -2040,22 +1852,18 @@ class UTYOBot:
         if not user or not user['has_subscription']:
             keyboard = [
                 [InlineKeyboardButton(
-                    "🔄 خرید اشتراک",
+                    LanguageManager.get_text(lang, 'subscribe'),
                     callback_data="subscribe"
                 )],
                 [InlineKeyboardButton(
-                    "🔙 بازگشت",
+                    LanguageManager.get_text(lang, 'back'),
                     callback_data="main_menu"
                 )]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
-                "❌ **شما اشتراک فعال ندارید!**\n\n"
-                "برای شرکت در قرعه‌کشی، ابتدا باید اشتراک تهیه کنید.\n\n"
-                "💰 هزینه اشتراک: ۱۰۰ دلار\n"
-                "📅 مدت اعتبار: ۱ ماه\n\n"
-                "برای تهیه اشتراک، روی دکمه زیر کلیک کنید.",
+                LanguageManager.get_text(lang, 'no_subscription'),
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN
             )
@@ -2065,14 +1873,14 @@ class UTYOBot:
         
         keyboard = [
             [InlineKeyboardButton(
-                "❌ انصراف",
+                LanguageManager.get_text(lang, 'cancel'),
                 callback_data="main_menu"
             )]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
-            "📤 **آدرس کیف پول TRC20 خود را وارد کنید:**",
+            LanguageManager.get_text(lang, 'enter_wallet_short'),
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
@@ -2087,20 +1895,20 @@ class UTYOBot:
         user = user_manager.get_user(user_id)
         if not user or not user['wallet_address']:
             keyboard = [[InlineKeyboardButton(
-                "🔙 بازگشت",
+                LanguageManager.get_text(lang, 'back'),
                 callback_data="main_menu"
             )]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
-                "📤 **آدرس کیف پول TRC20 خود را وارد کنید:**",
+                LanguageManager.get_text(lang, 'enter_wallet_short'),
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN
             )
             return
         
         await query.edit_message_text(
-            "⏳ در حال بررسی پرداخت شما...\nلطفاً چند لحظه صبر کنید.",
+            LanguageManager.get_text(lang, 'verifying'),
             parse_mode=ParseMode.MARKDOWN
         )
         
@@ -2114,22 +1922,18 @@ class UTYOBot:
         if result['success']:
             keyboard = [
                 [InlineKeyboardButton(
-                    "🎰 بازگشت به قرعه‌کشی",
+                    LanguageManager.get_text(lang, 'lottery_back'),
                     callback_data="lottery"
                 )],
                 [InlineKeyboardButton(
-                    "🔙 منوی اصلی",
+                    LanguageManager.get_text(lang, 'main_menu_btn'),
                     callback_data="main_menu"
                 )]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
-                f"✅ **پرداخت شما تایید شد!** 🎉\n\n"
-                f"🔹 مبلغ: ${PAYMENT_AMOUNT}\n"
-                f"🔹 تراکنش: `{result['tx_id']}`\n\n"
-                f"🎉 شما با موفقیت در قرعه‌کشی ثبت نام کردید.\n"
-                f"🙏 برای شما آرزوی موفقیت داریم!",
+                LanguageManager.get_text(lang, 'payment_success', PAYMENT_AMOUNT, result['tx_id']),
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN
             )
@@ -2139,22 +1943,14 @@ class UTYOBot:
             
             keyboard = [
                 [InlineKeyboardButton(
-                    "❌ انصراف",
+                    LanguageManager.get_text(lang, 'cancel'),
                     callback_data="main_menu"
                 )]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
-                f"❌ **پرداخت شما تایید نشد!**\n\n"
-                f"🔹 دلیل: {result['message']}\n\n"
-                f"📌 **راهکارها:**\n"
-                f"1. مبلغ دقیقاً ۱۰۰ دلار باشد\n"
-                f"2. آدرس مقصد صحیح باشد\n"
-                f"3. تراکنش انجام شده باشد\n"
-                f"4. از شبکه TRC20 استفاده کنید\n\n"
-                f"🔄 پس از بررسی، مجدداً تلاش کنید.\n\n"
-                f"اگر از پرداخت خود مطمئن هستید، هش تراکنش خود را ارسال کنید:",
+                LanguageManager.get_text(lang, 'payment_failed', result['message']),
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN
             )
@@ -2207,11 +2003,11 @@ class UTYOBot:
         user_lang = self._get_user_language(user_id)
         keyboard = [
             [InlineKeyboardButton(
-                "🎰 شرکت در قرعه‌کشی",
+                LanguageManager.get_text(user_lang, 'lottery'),
                 callback_data="lottery"
             )],
             [InlineKeyboardButton(
-                "🔙 منوی اصلی",
+                LanguageManager.get_text(user_lang, 'main_menu_btn'),
                 callback_data="main_menu"
             )]
         ]
@@ -2220,11 +2016,7 @@ class UTYOBot:
         try:
             await self.application.bot.send_message(
                 chat_id=user_id,
-                text=f"✅ **تراکنش شما تایید شد!** 🎉\n\n"
-                     f"💰 اشتراک فعال شد!\n"
-                     f"🔗 هش: `{pending['tx_hash']}`\n\n"
-                     f"🎉 اشتراک شما با موفقیت فعال شد!\n"
-                     f"🙏 به UTYOB خوش آمدید!",
+                text=LanguageManager.get_text(user_lang, 'user_verify_approved', pending['tx_hash']),
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN
             )
@@ -2232,11 +2024,9 @@ class UTYOBot:
             logger.error(f"Error sending to user {user_id}: {e}")
         
         await query.edit_message_text(
-            f"✅ **تراکنش تایید شد!**\n\n"
-            f"👤 کاربر: {user_id}\n"
-            f"💰 مبلغ: ${pending['amount']}\n"
-            f"🔗 هش: `{pending['tx_hash']}`\n\n"
-            f"اشتراک کاربر فعال شد.",
+            LanguageManager.get_text('fa', 'admin_verify_approved',
+                user_id, pending['amount'], pending['tx_hash']
+            ),
             parse_mode=ParseMode.MARKDOWN
         )
         
@@ -2281,7 +2071,7 @@ class UTYOBot:
         
         user_lang = self._get_user_language(user_id)
         keyboard = [[InlineKeyboardButton(
-            "🔄 تلاش مجدد",
+            LanguageManager.get_text(user_lang, 'retry'),
             callback_data="subscribe"
         )]]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -2289,13 +2079,7 @@ class UTYOBot:
         try:
             await self.application.bot.send_message(
                 chat_id=user_id,
-                text=f"❌ **تراکنش شما رد شد!**\n\n"
-                     f"🔗 هش: `{pending['tx_hash']}`\n\n"
-                     f"لطفاً تراکنش خود را بررسی کرده و مجدداً تلاش کنید.\n\n"
-                     f"📌 **دلایل احتمالی:**\n"
-                     f"• مبلغ دقیقاً ۱۰۰ دلار نبوده\n"
-                     f"• آدرس مقصد اشتباه بوده\n"
-                     f"• تراکنش کامل نشده است",
+                text=LanguageManager.get_text(user_lang, 'user_verify_rejected', pending['tx_hash']),
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN
             )
@@ -2303,10 +2087,9 @@ class UTYOBot:
             logger.error(f"Error sending to user {user_id}: {e}")
         
         await query.edit_message_text(
-            f"❌ **تراکنش رد شد!**\n\n"
-            f"👤 کاربر: {user_id}\n"
-            f"🔗 هش: `{pending['tx_hash']}`\n\n"
-            f"به کاربر اطلاع داده شد.",
+            LanguageManager.get_text('fa', 'admin_verify_rejected',
+                user_id, pending['tx_hash']
+            ),
             parse_mode=ParseMode.MARKDOWN
         )
 
@@ -2330,13 +2113,6 @@ class UTYOBot:
         active_users = len(user_manager.get_active_users())
         cache_stats = cache.get_stats()
         
-        users_list = user_manager.get_all_users()
-        users_text = ""
-        for user in users_list[:10]:
-            users_text += f"• `{user['user_id']}` - {user['first_name'] or user['username'] or 'Unknown'} (زبان: {user['language'] or 'fa'})\n"
-        if len(users_list) > 10:
-            users_text += f"... و {len(users_list) - 10} نفر دیگر"
-        
         pending_count = len(self._get_pending_transactions())
         unpaid_winners = len(self._get_unpaid_winners())
         all_winners = lottery_system.get_all_winners()
@@ -2347,8 +2123,9 @@ class UTYOBot:
             [InlineKeyboardButton(f"✅ تایید دستی ({pending_count})", callback_data="admin_manual_verify")],
             [InlineKeyboardButton("📊 ارسال نظرسنجی", callback_data="admin_poll")],
             [InlineKeyboardButton(f"💰 واریز به برندگان ({unpaid_winners})", callback_data="admin_pay_winners")],
-            [InlineKeyboardButton(f"🏆 لیست برندگان ({len(all_winners)})", callback_data="admin_winners_list")],
-            [InlineKeyboardButton("➕ اضافه کردن برنده دستی", callback_data="admin_add_winner")],
+            [InlineKeyboardButton("🏆 لیست برندگان", callback_data="admin_show_winners")],
+            [InlineKeyboardButton("👥 لیست کاربران", callback_data="admin_list_users")],
+            [InlineKeyboardButton("📩 ارسال پیام به کاربر", callback_data="admin_send_message")],
             [InlineKeyboardButton("🔑 اضافه کردن API", callback_data="admin_add_api")],
             [InlineKeyboardButton("📈 آمار و اطلاعات", callback_data="admin_stats")],
             [InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]
@@ -2364,7 +2141,6 @@ class UTYOBot:
             f"💰 برندگان پرداخت نشده: {unpaid_winners}\n"
             f"🏆 کل برندگان: {len(all_winners)}\n"
             f"🔑 کلیدهای API: {len(payment_verifier.apis)}\n\n"
-            f"👥 **لیست کاربران:**\n{users_text}\n\n"
             f"انتخاب کنید:"
         )
         
@@ -2374,7 +2150,41 @@ class UTYOBot:
             parse_mode=ParseMode.MARKDOWN
         )
     
-    async def admin_winners_list_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def admin_list_users_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        if user_id not in ADMIN_IDS:
+            return
+        
+        users = user_manager.get_all_users()
+        
+        text = "👥 **لیست کامل کاربران**\n\n"
+        for i, user in enumerate(users, 1):
+            text += f"{i}. ID: `{user['user_id']}`\n"
+            text += f"   نام: {user['first_name'] or 'نامشخص'}\n"
+            text += f"   زبان: {user['language'] or 'en'}\n"
+            text += f"   اشتراک: {'✅' if user['has_subscription'] else '❌'}\n"
+            text += f"   کد رفرال: {user['referral_code'] or 'ندارد'}\n"
+            if user.get('referred_by'):
+                text += f"   معرف: {user['referred_by']}\n"
+            text += "   ---\n"
+            
+            if i >= 20:
+                text += f"\n... و {len(users) - 20} کاربر دیگر"
+                break
+        
+        keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            text,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+    
+    async def admin_show_winners_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
         
@@ -2387,21 +2197,21 @@ class UTYOBot:
         if not winners:
             keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text("🏆 هیچ برنده‌ای وجود ندارد!", reply_markup=reply_markup)
+            await query.edit_message_text("🏆 **لیست برندگان**\n\nهیچ برنده‌ای ثبت نشده است.", reply_markup=reply_markup)
             return
         
-        text = "🏆 **لیست تمام برندگان قرعه‌کشی**\n\n"
-        for winner in winners[:20]:
-            status = "✅ پرداخت شده" if winner['paid_status'] == 1 else "⏳ در انتظار پرداخت"
-            text += f"• شناسه کاربر: `{winner['user_id']}`\n"
-            text += f"  💰 مبلغ: ${winner['prize_amount']:,}\n"
-            text += f"  📊 وضعیت: {status}\n"
-            if winner['first_name']:
-                text += f"  👤 نام: {winner['first_name']}\n"
-            text += f"  📅 تاریخ: {winner['created_at'][:10]}\n\n"
-        
-        if len(winners) > 20:
-            text += f"... و {len(winners) - 20} برنده دیگر"
+        text = "🏆 **لیست برندگان قرعه‌کشی**\n\n"
+        for i, winner in enumerate(winners, 1):
+            text += f"{i}. 👤 کاربر: `{winner['user_id']}`\n"
+            text += f"   نام: {winner['first_name'] or 'نامشخص'}\n"
+            text += f"   🏆 مبلغ: ${winner['prize_amount']:,}\n"
+            text += f"   📅 تاریخ: {winner['created_at']}\n"
+            text += f"   💰 وضعیت: {'✅ پرداخت شده' if winner['paid_status'] else '⏳ در انتظار پرداخت'}\n"
+            text += "   ---\n"
+            
+            if i >= 20:
+                text += f"\n... و {len(winners) - 20} برنده دیگر"
+                break
         
         keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -2412,7 +2222,7 @@ class UTYOBot:
             parse_mode=ParseMode.MARKDOWN
         )
     
-    async def admin_add_winner_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def admin_send_message_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
         
@@ -2420,17 +2230,16 @@ class UTYOBot:
         if user_id not in ADMIN_IDS:
             return
         
-        context.user_data['admin_action'] = 'add_winner'
+        context.user_data['admin_action'] = 'send_to_user'
+        context.user_data['send_to_user_step'] = 1
         
         keyboard = [[InlineKeyboardButton("🔙 انصراف", callback_data="admin_panel")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
-            "➕ **اضافه کردن برنده دستی**\n\n"
-            "لطفاً شناسه کاربر (User ID) و مبلغ جایزه را وارد کنید:\n\n"
-            "فرمت: `USER_ID AMOUNT`\n"
-            "مثال: `123456789 100`\n\n"
-            "⚠️ کاربر باید در سیستم ثبت‌نام کرده باشد.",
+            "📩 **ارسال پیام به کاربر خاص**\n\n"
+            "لطفاً شناسه (ID) کاربر را وارد کنید:\n\n"
+            "💡 برای مشاهده ID کاربران، از گزینه 'لیست کاربران' استفاده کنید.",
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
@@ -2634,13 +2443,14 @@ class UTYOBot:
         cache_stats = cache.get_stats()
         tx_stats = self._get_transaction_stats()
         lottery_stats = self._get_lottery_stats()
+        all_users = user_manager.get_all_users()
         
-        users_list = user_manager.get_all_users()
+        # نمایش ۵ کاربر اول با ID کامل
         users_text = ""
-        for user in users_list[:10]:
-            users_text += f"• `{user['user_id']}` - {user['first_name'] or user['username'] or 'Unknown'} (زبان: {user['language'] or 'fa'})\n"
-        if len(users_list) > 10:
-            users_text += f"... و {len(users_list) - 10} نفر دیگر"
+        for user in all_users[:5]:
+            users_text += f"• ID: `{user['user_id']}` - {user['first_name'] or user['username'] or 'Unknown'}\n"
+        if len(all_users) > 5:
+            users_text += f"... و {len(all_users) - 5} کاربر دیگر"
         
         keyboard = [
             [InlineKeyboardButton("🔄 به‌روزرسانی", callback_data="admin_stats")],
@@ -2668,7 +2478,7 @@ class UTYOBot:
             f"• API‌ها: {len(payment_verifier.apis)}\n"
             f"• شاردها: {DB_SHARDS}\n"
             f"• رشته‌های اجرایی: ۵۰\n\n"
-            f"👥 **لیست کاربران:**\n{users_text}"
+            f"👥 **نمونه کاربران:**\n{users_text}"
         )
         
         await query.edit_message_text(
@@ -2721,11 +2531,11 @@ class UTYOBot:
                 winner_lang = self._get_user_language(winner_id)
                 keyboard = [
                     [InlineKeyboardButton(
-                        "💰 برداشت جایزه",
+                        LanguageManager.get_text(winner_lang, 'withdraw_prize'),
                         callback_data="withdraw_prize"
                     )],
                     [InlineKeyboardButton(
-                        "🎰 قرعه‌کشی بعدی",
+                        LanguageManager.get_text(winner_lang, 'next_lottery'),
                         callback_data="main_menu"
                     )]
                 ]
@@ -2734,10 +2544,9 @@ class UTYOBot:
                 try:
                     await self.application.bot.send_message(
                         chat_id=winner_id,
-                        text=f"🎉 **تبریک! شما در قرعه‌کشی برنده شدید!** 🎉\n\n"
-                             f"💰 مبلغ جایزه: ${prize_per_winner:,}\n"
-                             f"🏆 شماره قرعه‌کشی: #{result['lottery_id']}\n\n"
-                             f"برای برداشت جایزه، روی دکمه زیر کلیک کنید:",
+                        text=LanguageManager.get_text(winner_lang, 'winner_message',
+                            prize_per_winner, result['lottery_id']
+                        ),
                         reply_markup=reply_markup,
                         parse_mode=ParseMode.MARKDOWN
                     )
@@ -2790,18 +2599,18 @@ class UTYOBot:
         if not winner:
             keyboard = [
                 [InlineKeyboardButton(
-                    "🎰 شرکت در قرعه‌کشی",
+                    LanguageManager.get_text(lang, 'lottery'),
                     callback_data="lottery"
                 )],
                 [InlineKeyboardButton(
-                    "🔙 منوی اصلی",
+                    LanguageManager.get_text(lang, 'main_menu_btn'),
                     callback_data="main_menu"
                 )]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
-                "❌ شما برنده‌ای ندارید!\n\nدر قرعه‌کشی‌های بعدی شرکت کنید.",
+                LanguageManager.get_text(lang, 'no_winner'),
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN
             )
@@ -2809,15 +2618,15 @@ class UTYOBot:
         
         if winner['paid_status'] == 1:
             keyboard = [[InlineKeyboardButton(
-                "🔙 منوی اصلی",
+                LanguageManager.get_text(lang, 'main_menu_btn'),
                 callback_data="main_menu"
             )]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
-                f"✅ جایزه شما قبلاً پرداخت شده است!\n\n"
-                f"💰 مبلغ: ${winner['prize_amount']}\n"
-                f"📅 تاریخ: {winner['paid_at']}",
+                LanguageManager.get_text(lang, 'already_paid',
+                    winner['prize_amount'], winner['paid_at']
+                ),
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN
             )
@@ -2828,21 +2637,14 @@ class UTYOBot:
         
         keyboard = [
             [InlineKeyboardButton(
-                "❌ انصراف",
+                LanguageManager.get_text(lang, 'cancel'),
                 callback_data="main_menu"
             )]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
-            f"💰 **برداشت جایزه**\n\n"
-            f"مبلغ جایزه: **${winner['prize_amount']:,}**\n\n"
-            f"لطفاً آدرس کیف پول TRC20 خود را وارد کنید:\n\n"
-            f"⚠️ **نکات مهم:**\n"
-            f"• فقط از شبکه TRC20 استفاده کنید\n"
-            f"• آدرس باید دقیق و صحیح باشد\n"
-            f"• پس از تایید، واریز انجام می‌شود\n\n"
-            f"📤 **آدرس کیف پول خود را وارد کنید:**",
+            LanguageManager.get_text(lang, 'enter_withdraw_wallet', winner['prize_amount']),
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
@@ -2856,13 +2658,13 @@ class UTYOBot:
         
         if not context.user_data.get('withdraw_pending'):
             keyboard = [[InlineKeyboardButton(
-                "🔙 منوی اصلی",
+                LanguageManager.get_text(lang, 'main_menu_btn'),
                 callback_data="main_menu"
             )]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
-                "⚠️ درخواست برداشت یافت نشد!",
+                "⚠️ No pending withdrawal.",
                 reply_markup=reply_markup
             )
             return
@@ -2870,13 +2672,13 @@ class UTYOBot:
         user = user_manager.get_user(user_id)
         if not user or not user['wallet_address']:
             keyboard = [[InlineKeyboardButton(
-                "🔙 بازگشت",
+                LanguageManager.get_text(lang, 'back'),
                 callback_data="main_menu"
             )]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
-                "❌ آدرس کیف پول یافت نشد!",
+                "❌ No wallet address found!",
                 reply_markup=reply_markup
             )
             return
@@ -2894,22 +2696,21 @@ class UTYOBot:
             
             keyboard = [
                 [InlineKeyboardButton(
-                    "🎰 قرعه‌کشی بعدی",
+                    LanguageManager.get_text(lang, 'next_lottery'),
                     callback_data="lottery"
                 )],
                 [InlineKeyboardButton(
-                    "🔙 منوی اصلی",
+                    LanguageManager.get_text(lang, 'main_menu_btn'),
                     callback_data="main_menu"
                 )]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
-                f"✅ **برداشت شما با موفقیت ثبت شد!** 🎉\n\n"
-                f"💰 مبلغ: ${await self._get_winner_amount(user_id):,}\n"
-                f"📤 آدرس: {user['wallet_address']}\n\n"
-                f"⏳ مبلغ به زودی به حساب شما واریز می‌شود.\n"
-                f"🔔 پس از واریز، به شما اطلاع داده می‌شود.",
+                LanguageManager.get_text(lang, 'withdraw_success',
+                    await self._get_winner_amount(user_id),
+                    user['wallet_address']
+                ),
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN
             )
@@ -2918,7 +2719,7 @@ class UTYOBot:
                 try:
                     await self.application.bot.send_message(
                         chat_id=admin_id,
-                        text=f"💰 درخواست برداشت\nکاربر: {user_id}\nمبلغ: ${await self._get_winner_amount(user_id)}\nآدرس: {user['wallet_address']}"
+                        text=f"💰 Withdrawal request\nUser: {user_id}\nAmount: ${await self._get_winner_amount(user_id)}\nAddress: {user['wallet_address']}"
                     )
                 except:
                     pass
@@ -2942,27 +2743,20 @@ class UTYOBot:
             (user_id,)
         ))
         
-        text = (
-            f"🔗 **سیستم رفرال UTYOB**\n\n"
-            f"👤 شما: {user['first_name'] or user_id}\n"
-            f"📊 تعداد دعوت‌ها: {referred_count}\n\n"
-            f"🔑 **کد رفرال شما:**\n"
-            f"`{referral_code}`\n\n"
-            f"🔗 **لینک دعوت:**\n"
-            f"{referral_link}\n\n"
-            f"💰 **پاداش دعوت:**\n"
-            f"• به ازای هر دعوت: ۵٪ از واریز\n"
-            f"• پاداش فوری پس از تایید\n\n"
-            f"📤 لینک را برای دوستان خود ارسال کنید!"
+        text = LanguageManager.get_text(lang, 'referral_text',
+            user['first_name'] or user_id,
+            referred_count,
+            referral_code,
+            referral_link
         )
         
         keyboard = [
             [InlineKeyboardButton(
-                "📤 اشتراک‌گذاری",
+                LanguageManager.get_text(lang, 'share'),
                 url=f"https://t.me/share/url?url={referral_link}"
             )],
             [InlineKeyboardButton(
-                "🔙 بازگشت",
+                LanguageManager.get_text(lang, 'back'),
                 callback_data="main_menu"
             )]
         ]
@@ -2984,16 +2778,32 @@ class UTYOBot:
     
     async def _show_language_selector(self, update, user_id):
         current_lang = self._get_user_language(user_id)
+        lang = current_lang
         
-        keyboard = [
-            [InlineKeyboardButton("🇬🇧 English", callback_data="set_lang_en")],
-            [InlineKeyboardButton("🇮🇷 فارسی", callback_data="set_lang_fa")],
-            [InlineKeyboardButton("🇹🇷 Türkçe", callback_data="set_lang_tr")],
-            [InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]
-        ]
+        languages = {
+            'en': LanguageManager.get_text(lang, 'name', lang='en'),
+            'fa': LanguageManager.get_text(lang, 'name', lang='fa'),
+            'tr': LanguageManager.get_text(lang, 'name', lang='tr')
+        }
+        
+        keyboard = []
+        for code, name in languages.items():
+            if code == current_lang:
+                name = f"✅ {name}"
+            keyboard.append([InlineKeyboardButton(
+                f"{LanguageManager.get_language_emoji(code)} {name}",
+                callback_data=f"set_lang_{code}"
+            )])
+        
+        keyboard.append([InlineKeyboardButton(
+            LanguageManager.get_text(lang, 'back'),
+            callback_data="main_menu"
+        )])
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        text = f"🌐 **تغییر زبان**\n\nزبان فعلی: {LanguageManager.get_language_name(current_lang)}\n\nلطفاً زبان مورد نظر خود را انتخاب کنید:"
+        text = LanguageManager.get_text(lang, 'language_selector',
+            LanguageManager.get_language_name(current_lang)
+        )
         
         if isinstance(update, Update):
             if update.callback_query:
@@ -3018,20 +2828,14 @@ class UTYOBot:
         text = update.message.text
         lang = self._get_user_language(user_id)
         
-        # ========== دانلود اینستاگرام ==========
-        if context.user_data.get('waiting_for_instagram'):
-            await self._handle_instagram_download(update, context)
-            return
-        
-        # ========== دانلود یوتوب ==========
-        if context.user_data.get('waiting_for_youtube'):
-            await self._handle_youtube_download(update, context)
-            return
-        
-        # ========== اقدامات ادمین ==========
+        # بررسی اقدامات ادمین
         admin_action = context.user_data.get('admin_action')
         
-        if admin_action == 'broadcast':
+        if admin_action == 'send_to_user':
+            await self._handle_send_to_user(update, text, context)
+            return
+        
+        elif admin_action == 'broadcast':
             await self._send_broadcast(update, text, context)
             return
         
@@ -3047,17 +2851,23 @@ class UTYOBot:
             await self._send_poll(update, text, context)
             return
         
-        elif admin_action == 'add_winner':
-            await self._handle_add_winner(update, text, context)
+        # دانلود از اینستاگرام
+        if context.user_data.get('download_type') == 'instagram':
+            await self._handle_instagram_download(update, text, context)
             return
         
-        # ========== دریافت هش تراکنش ==========
+        # دانلود از یوتیوب
+        if context.user_data.get('download_type') == 'youtube':
+            await self._handle_youtube_download(update, text, context)
+            return
+        
+        # دریافت هش تراکنش برای تایید دستی
         if context.user_data.get('waiting_for_tx_hash'):
             tx_hash = text.strip()
             
             if not self._validate_tx_hash(tx_hash):
                 await update.message.reply_text(
-                    "❌ هش تراکنش نامعتبر!\n\nلطفاً یک هش تراکنش معتبر TRON ارسال کنید.\nمثال: `abc123def456...`",
+                    LanguageManager.get_text(lang, 'tx_hash_invalid'),
                     parse_mode=ParseMode.MARKDOWN
                 )
                 return
@@ -3076,10 +2886,7 @@ class UTYOBot:
             context.user_data['payment_from_address'] = None
             
             await update.message.reply_text(
-                f"✅ هش تراکنش دریافت شد!\n\n"
-                f"🔹 هش: `{tx_hash}`\n\n"
-                f"⏳ تراکنش شما در حال بررسی توسط مدیر است.\n"
-                f"📢 پس از تایید به شما اطلاع داده می‌شود.",
+                LanguageManager.get_text(lang, 'tx_hash_received', tx_hash),
                 parse_mode=ParseMode.MARKDOWN
             )
             
@@ -3103,13 +2910,9 @@ class UTYOBot:
                     
                     await self.application.bot.send_message(
                         chat_id=admin_id,
-                        text=f"✅ **درخواست تایید تراکنش**\n\n"
-                             f"👤 کاربر: {user_id}\n"
-                             f"📤 از: {from_address}\n"
-                             f"📥 به: {DESTINATION_WALLET}\n"
-                             f"💰 مبلغ: ${PAYMENT_AMOUNT}\n"
-                             f"🔗 هش تراکنش: `{tx_hash}`\n\n"
-                             f"لطفاً این تراکنش را تایید کنید:",
+                        text=LanguageManager.get_text('fa', 'admin_verify_tx',
+                            user_id, from_address, DESTINATION_WALLET, PAYMENT_AMOUNT, tx_hash
+                        ),
                         reply_markup=reply_markup,
                         parse_mode=ParseMode.MARKDOWN
                     )
@@ -3118,13 +2921,13 @@ class UTYOBot:
             
             return
         
-        # ========== دریافت آدرس کیف پول برای اشتراک ==========
+        # مرحله 1: دریافت آدرس کیف پول برای اشتراک
         if context.user_data.get('waiting_for_subscribe'):
             wallet_address = text.strip()
             
             if not self._validate_wallet_address(wallet_address):
                 await update.message.reply_text(
-                    "❌ آدرس کیف پول نامعتبر!\n\nلطفاً یک آدرس معتبر TRC20 وارد کنید.\nمثال: `TV61aTh98MGqmteYzda5AaBzdXgGqreG6A`",
+                    LanguageManager.get_text(lang, 'invalid_wallet'),
                     parse_mode=ParseMode.MARKDOWN
                 )
                 return
@@ -3134,38 +2937,30 @@ class UTYOBot:
             
             keyboard = [
                 [InlineKeyboardButton(
-                    "✅ پرداخت کردم",
+                    LanguageManager.get_text(lang, 'confirm_subscribe'),
                     callback_data="confirm_subscribe"
                 )],
                 [InlineKeyboardButton(
-                    "❌ انصراف",
+                    LanguageManager.get_text(lang, 'cancel'),
                     callback_data="main_menu"
                 )]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await update.message.reply_text(
-                f"✅ **آدرس کیف پول ذخیره شد!**\n\n"
-                f"🔹 آدرس شما: `{wallet_address}`\n\n"
-                f"💰 **لطفاً مبلغ ۱۰۰ دلار به آدرس زیر واریز کنید:**\n"
-                f"`{DESTINATION_WALLET}`\n\n"
-                f"⚠️ **نکات مهم:**\n"
-                f"• فقط از شبکه TRC20 استفاده کنید\n"
-                f"• مبلغ دقیقاً ۱۰۰ دلار باشد\n"
-                f"• پس از واریز، روی دکمه زیر کلیک کنید\n\n"
-                f"✅ **پس از واریز کلیک کنید:**",
+                LanguageManager.get_text(lang, 'after_subscribe_wallet', wallet_address, DESTINATION_WALLET),
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN
             )
             return
         
-        # ========== دریافت آدرس کیف پول برای شرکت در قرعه‌کشی ==========
+        # مرحله 1: دریافت آدرس کیف پول برای شرکت در قرعه‌کشی
         if context.user_data.get('waiting_for_wallet'):
             wallet_address = text.strip()
             
             if not self._validate_wallet_address(wallet_address):
                 await update.message.reply_text(
-                    "❌ آدرس کیف پول نامعتبر!\n\nلطفاً یک آدرس معتبر TRC20 وارد کنید.\nمثال: `TV61aTh98MGqmteYzda5AaBzdXgGqreG6A`",
+                    LanguageManager.get_text(lang, 'invalid_wallet'),
                     parse_mode=ParseMode.MARKDOWN
                 )
                 return
@@ -3175,38 +2970,30 @@ class UTYOBot:
             
             keyboard = [
                 [InlineKeyboardButton(
-                    "✅ پرداخت کردم",
+                    LanguageManager.get_text(lang, 'confirm_payment'),
                     callback_data="confirm_payment"
                 )],
                 [InlineKeyboardButton(
-                    "❌ انصراف",
+                    LanguageManager.get_text(lang, 'cancel'),
                     callback_data="main_menu"
                 )]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await update.message.reply_text(
-                f"✅ **آدرس کیف پول ذخیره شد!**\n\n"
-                f"🔹 آدرس شما: `{wallet_address}`\n\n"
-                f"💰 **لطفاً مبلغ ۱۰۰ دلار به آدرس زیر واریز کنید:**\n"
-                f"`{DESTINATION_WALLET}`\n\n"
-                f"⚠️ **نکات مهم:**\n"
-                f"• فقط از شبکه TRC20 استفاده کنید\n"
-                f"• پس از واریز، روی دکمه زیر کلیک کنید\n"
-                f"• سیستم به صورت خودکار تایید می‌کند\n\n"
-                f"✅ **پس از واریز، کلیک کنید:**",
+                LanguageManager.get_text(lang, 'after_wallet', wallet_address, DESTINATION_WALLET),
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN
             )
             return
         
-        # ========== برداشت جایزه ==========
+        # مرحله برداشت: دریافت آدرس کیف پول
         if context.user_data.get('withdraw_pending'):
             wallet_address = text.strip()
             
             if not self._validate_wallet_address(wallet_address):
                 await update.message.reply_text(
-                    "❌ آدرس کیف پول نامعتبر!\n\nلطفاً یک آدرس معتبر TRC20 وارد کنید.\nمثال: `TV61aTh98MGqmteYzda5AaBzdXgGqreG6A`",
+                    LanguageManager.get_text(lang, 'invalid_wallet'),
                     parse_mode=ParseMode.MARKDOWN
                 )
                 return
@@ -3226,22 +3013,21 @@ class UTYOBot:
                 
                 keyboard = [
                     [InlineKeyboardButton(
-                        "🎰 قرعه‌کشی بعدی",
+                        LanguageManager.get_text(lang, 'next_lottery'),
                         callback_data="lottery"
                     )],
                     [InlineKeyboardButton(
-                        "🔙 منوی اصلی",
+                        LanguageManager.get_text(lang, 'main_menu_btn'),
                         callback_data="main_menu"
                     )]
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 
                 await update.message.reply_text(
-                    f"✅ **برداشت شما با موفقیت ثبت شد!** 🎉\n\n"
-                    f"💰 مبلغ: ${await self._get_winner_amount(user_id):,}\n"
-                    f"📤 آدرس: {wallet_address}\n\n"
-                    f"⏳ مبلغ به زودی به حساب شما واریز می‌شود.\n"
-                    f"🔔 پس از واریز، به شما اطلاع داده می‌شود.",
+                    LanguageManager.get_text(lang, 'withdraw_success',
+                        await self._get_winner_amount(user_id),
+                        wallet_address
+                    ),
                     reply_markup=reply_markup,
                     parse_mode=ParseMode.MARKDOWN
                 )
@@ -3250,27 +3036,194 @@ class UTYOBot:
                     try:
                         await self.application.bot.send_message(
                             chat_id=admin_id,
-                            text=f"💰 درخواست برداشت\nکاربر: {user_id}\nمبلغ: ${await self._get_winner_amount(user_id)}\nآدرس: {wallet_address}"
+                            text=f"💰 Withdrawal request\nUser: {user_id}\nAmount: ${await self._get_winner_amount(user_id)}\nAddress: {wallet_address}"
                         )
                     except:
                         pass
             return
         
-        # ========== پیام نامعتبر ==========
-        keyboard = [[InlineKeyboardButton(
-            "🔙 منوی اصلی",
-            callback_data="main_menu"
-        )]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        # پیام معمولی
+        reply_markup = self._get_main_menu_keyboard(user_id, lang)
         
         await update.message.reply_text(
-            "⚠️ دستور نامعتبر!\n\nاز دکمه‌های موجود استفاده کنید یا /help را ببینید.",
+            LanguageManager.get_text(lang, 'invalid_command'),
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+    
+    async def _handle_send_to_user(self, update, text, context):
+        user_id = update.effective_user.id
+        lang = self._get_user_language(user_id)
+        step = context.user_data.get('send_to_user_step', 1)
+        
+        if step == 1:
+            try:
+                target_user_id = int(text.strip())
+                context.user_data['send_to_user_target'] = target_user_id
+                context.user_data['send_to_user_step'] = 2
+                
+                await update.message.reply_text(
+                    f"✅ کاربر با ID `{target_user_id}` انتخاب شد.\n\n"
+                    f"📩 لطفاً متن پیام را ارسال کنید:",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            except ValueError:
+                await update.message.reply_text(
+                    "❌ شناسه کاربر نامعتبر!\nلطفاً یک عدد معتبر وارد کنید."
+                )
+        
+        elif step == 2:
+            target_user_id = context.user_data.get('send_to_user_target')
+            if target_user_id:
+                try:
+                    await self.application.bot.send_message(
+                        chat_id=target_user_id,
+                        text=text,
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                    
+                    await update.message.reply_text(
+                        f"✅ پیام با موفقیت به کاربر `{target_user_id}` ارسال شد!",
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                except Exception as e:
+                    await update.message.reply_text(
+                        f"❌ خطا در ارسال پیام: {str(e)}"
+                    )
+                
+                context.user_data['admin_action'] = None
+                context.user_data['send_to_user_step'] = None
+                context.user_data['send_to_user_target'] = None
+                
+                reply_markup = self._get_main_menu_keyboard(user_id, lang)
+                await update.message.reply_text(
+                    "🔙 به منوی اصلی بازگشتید.",
+                    reply_markup=reply_markup
+                )
+    
+    async def _handle_instagram_download(self, update, text, context):
+        user_id = update.effective_user.id
+        lang = self._get_user_language(user_id)
+        
+        # بررسی لینک اینستاگرام
+        instagram_pattern = r'(https?://(?:www\.)?instagram\.com/(?:p|reel|stories|tv)/[a-zA-Z0-9_-]+)'
+        match = re.search(instagram_pattern, text)
+        
+        if not match:
+            await update.message.reply_text(
+                "❌ لینک اینستاگرام معتبر نیست!\n\n"
+                "لطفاً لینک معتبر ارسال کنید.\n"
+                "مثال: `https://www.instagram.com/p/...`",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+        
+        url = match.group(1)
+        
+        await update.message.reply_text(
+            LanguageManager.get_text(lang, 'downloading'),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        
+        # دانلود
+        result = await download_manager.download_instagram(url)
+        
+        if result['success']:
+            # ارسال فایل
+            try:
+                for file in result['files']:
+                    file_path = os.path.join(result['path'], file)
+                    if os.path.exists(file_path):
+                        with open(file_path, 'rb') as f:
+                            if file.endswith(('.mp4', '.mov')):
+                                await update.message.reply_video(video=f)
+                            else:
+                                await update.message.reply_photo(photo=f)
+                        os.remove(file_path)
+                
+                await update.message.reply_text(
+                    LanguageManager.get_text(lang, 'download_success', url, '0.5'),
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            except Exception as e:
+                await update.message.reply_text(
+                    LanguageManager.get_text(lang, 'download_failed', str(e)),
+                    parse_mode=ParseMode.MARKDOWN
+                )
+        else:
+            await update.message.reply_text(
+                LanguageManager.get_text(lang, 'download_failed', result.get('error', 'Unknown error')),
+                parse_mode=ParseMode.MARKDOWN
+            )
+        
+        # بازگشت به منوی اصلی
+        reply_markup = self._get_main_menu_keyboard(user_id, lang)
+        await update.message.reply_text(
+            LanguageManager.get_text(lang, 'main_menu'),
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+    
+    async def _handle_youtube_download(self, update, text, context):
+        user_id = update.effective_user.id
+        lang = self._get_user_language(user_id)
+        
+        # بررسی لینک یوتیوب
+        youtube_pattern = r'(https?://(?:www\.)?(?:youtube\.com|youtu\.be)/[a-zA-Z0-9_-]+)'
+        match = re.search(youtube_pattern, text)
+        
+        if not match:
+            await update.message.reply_text(
+                "❌ لینک یوتیوب معتبر نیست!\n\n"
+                "لطفاً لینک معتبر ارسال کنید.\n"
+                "مثال: `https://www.youtube.com/watch?v=...`",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+        
+        url = match.group(1)
+        
+        await update.message.reply_text(
+            LanguageManager.get_text(lang, 'downloading'),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        
+        # دانلود
+        result = await download_manager.download_youtube(url)
+        
+        if result['success']:
+            try:
+                with open(result['filename'], 'rb') as f:
+                    await update.message.reply_video(video=f)
+                
+                os.remove(result['filename'])
+                
+                await update.message.reply_text(
+                    LanguageManager.get_text(lang, 'download_success', url, round(result['file_size'], 1)),
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            except Exception as e:
+                await update.message.reply_text(
+                    LanguageManager.get_text(lang, 'download_failed', str(e)),
+                    parse_mode=ParseMode.MARKDOWN
+                )
+        else:
+            await update.message.reply_text(
+                LanguageManager.get_text(lang, 'download_failed', result.get('error', 'Unknown error')),
+                parse_mode=ParseMode.MARKDOWN
+            )
+        
+        # بازگشت به منوی اصلی
+        reply_markup = self._get_main_menu_keyboard(user_id, lang)
+        await update.message.reply_text(
+            LanguageManager.get_text(lang, 'main_menu'),
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
     
     async def _handle_lottery_steps(self, update, text, context):
         user_id = update.effective_user.id
+        lang = self._get_user_language(user_id)
         step = context.user_data.get('lottery_step', 1)
         
         if step == 2:
@@ -3345,85 +3298,6 @@ class UTYOBot:
                 parse_mode=ParseMode.MARKDOWN
             )
     
-    async def _handle_add_winner(self, update, text, context):
-        user_id = update.effective_user.id
-        lang = self._get_user_language(user_id)
-        
-        try:
-            parts = text.strip().split()
-            if len(parts) != 2:
-                await update.message.reply_text(
-                    "❌ فرمت نامعتبر!\n\n"
-                    "لطفاً به فرمت `USER_ID AMOUNT` وارد کنید.\n"
-                    "مثال: `123456789 100`",
-                    parse_mode=ParseMode.MARKDOWN
-                )
-                return
-            
-            winner_id = int(parts[0])
-            amount = float(parts[1])
-            
-            if amount <= 0:
-                await update.message.reply_text("❌ مبلغ باید بزرگتر از صفر باشد!")
-                return
-            
-            user = user_manager.get_user(winner_id)
-            if not user:
-                await update.message.reply_text(
-                    f"❌ کاربر با شناسه `{winner_id}` یافت نشد!\n\n"
-                    f"لطفاً از ثبت‌نام کاربر اطمینان حاصل کنید.",
-                    parse_mode=ParseMode.MARKDOWN
-                )
-                return
-            
-            if lottery_system.add_manual_winner(winner_id, amount):
-                context.user_data['admin_action'] = None
-                await update.message.reply_text(
-                    f"✅ برنده به صورت دستی اضافه شد!\n\n"
-                    f"👤 شناسه کاربر: {winner_id}\n"
-                    f"💰 مبلغ: ${amount}",
-                    parse_mode=ParseMode.MARKDOWN
-                )
-                
-                try:
-                    user_lang = self._get_user_language(winner_id)
-                    keyboard = [
-                        [InlineKeyboardButton(
-                            "💰 برداشت جایزه",
-                            callback_data="withdraw_prize"
-                        )],
-                        [InlineKeyboardButton(
-                            "🔙 منوی اصلی",
-                            callback_data="main_menu"
-                        )]
-                    ]
-                    reply_markup = InlineKeyboardMarkup(keyboard)
-                    
-                    await self.application.bot.send_message(
-                        chat_id=winner_id,
-                        text=f"🎉 **تبریک! شما برنده شدید!**\n\n"
-                             f"💰 مبلغ جایزه: ${amount:,}\n"
-                             f"🏆 قرعه‌کشی: دستی\n\n"
-                             f"برای برداشت جایزه، روی دکمه زیر کلیک کنید:",
-                        reply_markup=reply_markup,
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-                except Exception as e:
-                    logger.error(f"Error notifying winner {winner_id}: {e}")
-            else:
-                await update.message.reply_text(
-                    "❌ خطا در اضافه کردن برنده!\n"
-                    "لطفاً دوباره تلاش کنید.",
-                    parse_mode=ParseMode.MARKDOWN
-                )
-        except ValueError:
-            await update.message.reply_text(
-                "❌ فرمت نامعتبر!\n\n"
-                "لطفاً به فرمت `USER_ID AMOUNT` وارد کنید.\n"
-                "مثال: `123456789 100`",
-                parse_mode=ParseMode.MARKDOWN
-            )
-    
     async def _send_poll(self, update, text, context):
         user_id = update.effective_user.id
         
@@ -3439,16 +3313,16 @@ class UTYOBot:
         
         for user in users:
             try:
-                user_lang = user['language'] if user['language'] else 'fa'
+                user_lang = user['language'] if user['language'] else 'en'
                 
                 keyboard = [
                     [
                         InlineKeyboardButton(
-                            "✅ بله",
+                            LanguageManager.get_text(user_lang, 'poll_option_1'),
                             callback_data="poll_yes"
                         ),
                         InlineKeyboardButton(
-                            "❌ خیر",
+                            LanguageManager.get_text(user_lang, 'poll_option_2'),
                             callback_data="poll_no"
                         )
                     ]
@@ -3457,7 +3331,7 @@ class UTYOBot:
                 
                 await self.application.bot.send_message(
                     chat_id=user['user_id'],
-                    text=f"📊 **نظرسنجی**\n\n{text}",
+                    text=LanguageManager.get_text(user_lang, 'poll_message', text),
                     reply_markup=reply_markup,
                     parse_mode=ParseMode.MARKDOWN
                 )
@@ -3484,6 +3358,7 @@ class UTYOBot:
     
     async def _send_broadcast(self, update, text, context):
         user_id = update.effective_user.id
+        lang = self._get_user_language(user_id)
         
         await update.message.reply_text(
             "⏳ در حال ارسال پیام به کاربران...\nلطفاً صبر کنید.",
@@ -3527,14 +3402,10 @@ class UTYOBot:
         user_id = update.effective_user.id
         lang = self._get_user_language(user_id)
         
-        keyboard = [[InlineKeyboardButton(
-            "🔙 منوی اصلی",
-            callback_data="main_menu"
-        )]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        reply_markup = self._get_main_menu_keyboard(user_id, lang)
         
         await update.message.reply_text(
-            "📸 عکس دریافت شد!\nاما این قابلیت پشتیبانی نمی‌شود.",
+            LanguageManager.get_text(lang, 'photo_not_supported'),
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
@@ -3547,15 +3418,11 @@ class UTYOBot:
                 user_id = update.effective_user.id
                 lang = self._get_user_language(user_id)
                 
-                keyboard = [[InlineKeyboardButton(
-                    "🔙 منوی اصلی",
-                    callback_data="main_menu"
-                )]]
-                reply_markup = InlineKeyboardMarkup(keyboard)
+                reply_markup = self._get_main_menu_keyboard(user_id, lang)
                 
                 await self.application.bot.send_message(
                     chat_id=user_id,
-                    text="⚠️ خطایی رخ داد! لطفاً دوباره تلاش کنید.",
+                    text=LanguageManager.get_text(lang, 'error_message'),
                     reply_markup=reply_markup
                 )
         except:
