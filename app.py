@@ -65,8 +65,6 @@ class LanguageManager:
             'guide': "📖 Guide",
             'language': "🌐 Change Language",
             'admin_panel': "⚙️ Admin Panel",
-            'instagram_download': "📸 Instagram Downloader",
-            'youtube_download': "▶️ YouTube Downloader",
             'no_subscription': "❌ **You don't have an active subscription!**\n\nTo participate in the lottery, you must first purchase a subscription.\n\n💰 Subscription cost: $100\n📅 Validity: 1 month\n\nClick the button below to subscribe.",
             'subscribe': "🔄 Subscribe Now",
             'back': "🔙 Back",
@@ -123,14 +121,6 @@ class LanguageManager:
             'poll_message': "📊 **Poll**\n\n{}",
             'poll_option_1': "✅ Yes",
             'poll_option_2': "❌ No",
-
-            # بخش دانلودر
-            'instagram_downloader': "📸 **Instagram Downloader**\n\nSend me an Instagram post/reel URL and I'll download it for you!\n\n📤 Send the link:",
-            'youtube_downloader': "▶️ **YouTube Downloader**\n\nSend me a YouTube video URL and I'll download it for you!\n\n📤 Send the link:",
-            'downloading': "⏳ Downloading... Please wait.",
-            'download_success': "✅ **Download completed!**\n\n📥 File ready for download.",
-            'download_failed': "❌ **Download failed!**\n\n🔹 Reason: {}\n\n📌 Make sure the link is correct and the video is available.",
-            'invalid_url': "❌ Invalid URL!\n\nPlease send a valid Instagram or YouTube link.",
         },
         'fa': {
             'name': 'فارسی',
@@ -143,8 +133,6 @@ class LanguageManager:
             'guide': "📖 راهنمایی",
             'language': "🌐 تغییر زبان",
             'admin_panel': "⚙️ پنل مدیریت",
-            'instagram_download': "📸 دانلودر اینستاگرام",
-            'youtube_download': "▶️ دانلودر یوتیوب",
             'no_subscription': "❌ **شما اشتراک فعال ندارید!**\n\nبرای شرکت در قرعه‌کشی، ابتدا باید اشتراک تهیه کنید.\n\n💰 هزینه اشتراک: ۱۰۰ دلار\n📅 مدت اعتبار: ۱ ماه\n\nبرای تهیه اشتراک، روی دکمه زیر کلیک کنید.",
             'subscribe': "🔄 خرید اشتراک",
             'back': "🔙 بازگشت",
@@ -201,14 +189,6 @@ class LanguageManager:
             'poll_message': "📊 **نظرسنجی**\n\n{}",
             'poll_option_1': "✅ بله",
             'poll_option_2': "❌ خیر",
-
-            # بخش دانلودر
-            'instagram_downloader': "📸 **دانلودر اینستاگرام**\n\nلینک پست یا ریل اینستاگرام را ارسال کنید تا آن را دانلود کنم!\n\n📤 لینک را ارسال کنید:",
-            'youtube_downloader': "▶️ **دانلودر یوتیوب**\n\nلینک ویدیو یوتیوب را ارسال کنید تا آن را دانلود کنم!\n\n📤 لینک را ارسال کنید:",
-            'downloading': "⏳ در حال دانلود... لطفاً صبر کنید.",
-            'download_success': "✅ **دانلود کامل شد!**\n\n📥 فایل آماده دانلود است.",
-            'download_failed': "❌ **دانلود ناموفق!**\n\n🔹 دلیل: {}\n\n📌 مطمئن شوید لینک صحیح است و ویدیو در دسترس است.",
-            'invalid_url': "❌ لینک نامعتبر!\n\nلطفاً یک لینک معتبر از اینستاگرام یا یوتیوب ارسال کنید.",
         },
         'tr': {
             'name': 'Türkçe',
@@ -221,8 +201,6 @@ class LanguageManager:
             'guide': "📖 Rehber",
             'language': "🌐 Dil Değiştir",
             'admin_panel': "⚙️ Yönetim Paneli",
-            'instagram_download': "📸 Instagram İndirici",
-            'youtube_download': "▶️ YouTube İndirici",
             'no_subscription': "❌ **Aktif aboneliğiniz yok!**\n\nPiyangoya katılmak için önce abonelik satın almalısınız.\n\n💰 Abonelik ücreti: 100$\n📅 Geçerlilik: 1 ay\n\nAbone olmak için aşağıdaki butona tıklayın.",
             'subscribe': "🔄 Abone Ol",
             'back': "🔙 Geri",
@@ -279,14 +257,6 @@ class LanguageManager:
             'poll_message': "📊 **Anket**\n\n{}",
             'poll_option_1': "✅ Evet",
             'poll_option_2': "❌ Hayır",
-
-            # İndirici bölümü
-            'instagram_downloader': "📸 **Instagram İndirici**\n\nBir Instagram gönderisi/reel URL'si gönderin, sizin için indireyim!\n\n📤 Linki gönder:",
-            'youtube_downloader': "▶️ **YouTube İndirici**\n\nBir YouTube video URL'si gönderin, sizin için indireyim!\n\n📤 Linki gönder:",
-            'downloading': "⏳ İndiriliyor... Lütfen bekleyin.",
-            'download_success': "✅ **İndirme tamamlandı!**\n\n📥 Dosya indirilmeye hazır.",
-            'download_failed': "❌ **İndirme başarısız!**\n\n🔹 Sebep: {}\n\n📌 Linkin doğru olduğundan ve videonun mevcut olduğundan emin olun.",
-            'invalid_url': "❌ Geçersiz URL!\n\nLütfen geçerli bir Instagram veya YouTube linki gönderin.",
         }
     }
     
@@ -1027,10 +997,6 @@ class UTYOBot:
         app.add_handler(CallbackQueryHandler(self.guide_callback, pattern="^guide$"))
         app.add_handler(CallbackQueryHandler(self.language_callback, pattern="^language$"))
         
-        # دکمه‌های دانلودر
-        app.add_handler(CallbackQueryHandler(self.instagram_download_callback, pattern="^instagram_download$"))
-        app.add_handler(CallbackQueryHandler(self.youtube_download_callback, pattern="^youtube_download$"))
-        
         # دکمه‌های اشتراک
         app.add_handler(CallbackQueryHandler(self.subscribe_callback, pattern="^subscribe$"))
         app.add_handler(CallbackQueryHandler(self.confirm_subscribe_callback, pattern="^confirm_subscribe$"))
@@ -1293,14 +1259,6 @@ class UTYOBot:
                 callback_data="referral"
             )],
             [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'instagram_download'),
-                callback_data="instagram_download"
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'youtube_download'),
-                callback_data="youtube_download"
-            )],
-            [InlineKeyboardButton(
                 LanguageManager.get_text(lang, 'guide'),
                 callback_data="guide"
             )],
@@ -1426,88 +1384,6 @@ class UTYOBot:
                 f"✅ Language changed to {LanguageManager.get_language_name(lang_code)}!\n\n"
                 f"🌐 زبان به {LanguageManager.get_language_name(lang_code)} تغییر یافت!",
                 reply_markup=reply_markup
-            )
-
-    # ============================================================
-    # کالبک‌های دانلودر
-    # ============================================================
-    
-    async def instagram_download_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        
-        context.user_data['download_mode'] = 'instagram'
-        
-        keyboard = [[InlineKeyboardButton(
-            LanguageManager.get_text(lang, 'back'),
-            callback_data="main_menu"
-        )]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            LanguageManager.get_text(lang, 'instagram_downloader'),
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    async def youtube_download_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        
-        context.user_data['download_mode'] = 'youtube'
-        
-        keyboard = [[InlineKeyboardButton(
-            LanguageManager.get_text(lang, 'back'),
-            callback_data="main_menu"
-        )]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            LanguageManager.get_text(lang, 'youtube_downloader'),
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    async def _download_media(self, update: Update, context: ContextTypes.DEFAULT_TYPE, url: str, media_type: str):
-        user_id = update.effective_user.id
-        lang = self._get_user_language(user_id)
-        
-        await update.message.reply_text(
-            LanguageManager.get_text(lang, 'downloading'),
-            parse_mode=ParseMode.MARKDOWN
-        )
-        
-        try:
-            if media_type == 'instagram':
-                # شبیه‌سازی دانلود اینستاگرام
-                await asyncio.sleep(3)
-                await update.message.reply_video(
-                    video="https://sample-videos.com/video321/mp4/720/big_buck_bunny_720p_1mb.mp4",
-                    caption=LanguageManager.get_text(lang, 'download_success')
-                )
-            elif media_type == 'youtube':
-                # شبیه‌سازی دانلود یوتیوب
-                await asyncio.sleep(3)
-                await update.message.reply_video(
-                    video="https://sample-videos.com/video321/mp4/720/big_buck_bunny_720p_1mb.mp4",
-                    caption=LanguageManager.get_text(lang, 'download_success')
-                )
-            else:
-                await update.message.reply_text(
-                    LanguageManager.get_text(lang, 'download_failed', 'Unknown media type'),
-                    parse_mode=ParseMode.MARKDOWN
-                )
-        except Exception as e:
-            logger.error(f"Download error: {e}")
-            await update.message.reply_text(
-                LanguageManager.get_text(lang, 'download_failed', str(e)),
-                parse_mode=ParseMode.MARKDOWN
             )
 
     # ============================================================
@@ -2539,20 +2415,6 @@ class UTYOBot:
         text = update.message.text
         lang = self._get_user_language(user_id)
         
-        # بررسی اگر کاربر در حالت دانلودر است
-        download_mode = context.user_data.get('download_mode')
-        if download_mode in ['instagram', 'youtube']:
-            if text.startswith('http://') or text.startswith('https://'):
-                await self._download_media(update, context, text, download_mode)
-                context.user_data['download_mode'] = None
-                return
-            else:
-                await update.message.reply_text(
-                    LanguageManager.get_text(lang, 'invalid_url'),
-                    parse_mode=ParseMode.MARKDOWN
-                )
-                return
-        
         # بررسی اقدامات ادمین
         admin_action = context.user_data.get('admin_action')
         
@@ -2932,7 +2794,7 @@ class UTYOBot:
         
         context.user_data['admin_action'] = None
         
-        keyboard = [[InlineButton("🔙 بازگشت", callback_data="admin_panel")]]
+        keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
