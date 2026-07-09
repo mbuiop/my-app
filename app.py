@@ -1,5 +1,5 @@
 # ============================================================
-# ربات قرعه‌کشی هوشمند UTYOB - نسخه نهایی با دانلودرهای واقعی
+# ربات قرعه‌کشی هوشمند UTYOB - نسخه نهایی با بهینه‌سازی سرعت
 # ============================================================
 
 import asyncio
@@ -15,16 +15,11 @@ import time
 import os
 import sys
 import re
-import subprocess
 import tempfile
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Optional, Any
 from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, request, jsonify
-from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-import base64
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
@@ -43,8 +38,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.environ.get('7780798170:AAHTDl295s15_RwhfhjGentSLZzye3keJP0', '7780798170:AAHTDl295s15_RwhfhjGentSLZzye3keJP0')
-ADMIN_IDS = [int(id) for id in os.environ.get('327855654', '327855654').split(',')]
+BOT_TOKEN = os.environ.get('BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
+ADMIN_IDS = [int(id) for id in os.environ.get('ADMIN_IDS', '123456789').split(',')]
 
 TRONGRID_APIS = [
     "7ae83b63-fdf3-47e4-ac69-56f960a34f5b",
@@ -53,56 +48,8 @@ TRONGRID_APIS = [
 DESTINATION_WALLET = "TV61aTh98MGqmteYzda5AaBzdXgGqreG6A"
 PAYMENT_AMOUNT = 100
 
-DB_SHARDS = 500
+DB_SHARDS = 500  # افزایش به ۵۰۰ شارد برای مقیاس‌پذیری بالا
 CACHE_TTL = 300
-
-# ============================================================
-# سیستم رمزنگاری پیشرفته
-# ============================================================
-class EncryptionManager:
-    def __init__(self):
-        self.key = self._generate_key()
-        self.cipher = Fernet(self.key)
-        
-    def _generate_key(self):
-        salt = b'UTYOB_SALT_2024_SECURE'
-        kdf = PBKDF2HMAC(
-            algorithm=hashes.SHA256(),
-            length=32,
-            salt=salt,
-            iterations=100000,
-        )
-        key = base64.urlsafe_b64encode(kdf.derive(BOT_TOKEN.encode()))
-        return key
-        
-    def encrypt(self, data: str) -> str:
-        return self.cipher.encrypt(data.encode()).decode()
-        
-    def decrypt(self, encrypted_data: str) -> str:
-        return self.cipher.decrypt(encrypted_data.encode()).decode()
-        
-    def encrypt_dict(self, data: dict) -> dict:
-        encrypted = {}
-        for key, value in data.items():
-            if isinstance(value, str):
-                encrypted[key] = self.encrypt(value)
-            else:
-                encrypted[key] = value
-        return encrypted
-        
-    def decrypt_dict(self, data: dict) -> dict:
-        decrypted = {}
-        for key, value in data.items():
-            if isinstance(value, str):
-                try:
-                    decrypted[key] = self.decrypt(value)
-                except:
-                    decrypted[key] = value
-            else:
-                decrypted[key] = value
-        return decrypted
-
-encryption = EncryptionManager()
 
 # ============================================================
 # سیستم چندزبانه کامل
@@ -155,9 +102,8 @@ class LanguageManager:
             'no_winner': "❌ You don't have any prize!\n\nParticipate in future lotteries.",
             'next_lottery': "🎰 Next Lottery",
             
-            'referral_text': "🔗 **UTYOB Referral System**\n\n👤 You: {}\n📊 Invites: {}\n💰 Referral Rewards: ${}\n\n🔑 **Your referral code:**\n`{}`\n\n🔗 **Referral link:**\n{}\n\n💰 **Referral reward:**\n• 5% of deposit per invite\n• Instant reward after verification\n\n📤 Share this link with your friends!",
+            'referral_text': "🔗 **UTYOB Referral System**\n\n👤 You: {}\n📊 Invites: {}\n\n🔑 **Your referral code:**\n`{}`\n\n🔗 **Referral link:**\n{}\n\n💰 **Referral reward:**\n• 5% of deposit per invite\n• Instant reward after verification\n\n📤 Share this link with your friends!",
             'share': "📤 Share",
-            'referral_joined': "🎉 **New referral joined!**\n\n👤 {}\n🔗 Referred by: {}\n💰 Your reward: ${:.2f}",
             
             'guide_text': "📖 **UTYOB Bot Complete Guide**\n\n🎯 **How it works:**\n1. **Register**: Use /start to register\n2. **Subscription**: Purchase subscription to participate\n3. **Deposit**: Send $100 to the specified address\n4. **Participate**: Join the lottery after verification\n5. **Win**: Receive prize if you win\n\n💰 **Deposit amount:**\n- Fixed amount: $100\n- Deposit address: TV61aTh98MGqmteYzda5AaBzdXgGqreG6A\n- Network: TRC20\n\n🎁 **Prizes:**\n- 1st prize: 50% of total\n- 2nd prize: 30% of total\n- 3rd prize: 20% of total\n\n🔗 **Referral system:**\n- Each user has unique referral code\n- 5% reward per invite\n\n⚠️ **Rules:**\n- One participation per lottery per user\n- Previous winners have lower chance\n- All transactions verified automatically\n\n📞 **Support:**\nContact admin for questions.",
             
@@ -180,6 +126,7 @@ class LanguageManager:
             'poll_option_1': "✅ Yes",
             'poll_option_2': "❌ No",
 
+            # بخش دانلودر
             'instagram_downloader': "📸 **Instagram Downloader**\n\nSend me an Instagram post/reel URL and I'll download it for you!\n\n📤 Send the link:",
             'youtube_downloader': "▶️ **YouTube Downloader**\n\nSend me a YouTube video URL and I'll download it for you!\n\n📤 Send the link:",
             'downloading': "⏳ Downloading... Please wait.",
@@ -234,9 +181,8 @@ class LanguageManager:
             'no_winner': "❌ شما برنده‌ای ندارید!\n\nدر قرعه‌کشی‌های بعدی شرکت کنید.",
             'next_lottery': "🎰 قرعه‌کشی بعدی",
             
-            'referral_text': "🔗 **سیستم رفرال UTYOB**\n\n👤 شما: {}\n📊 تعداد دعوت‌ها: {}\n💰 پاداش رفرال: ${}\n\n🔑 **کد رفرال شما:**\n`{}`\n\n🔗 **لینک دعوت:**\n{}\n\n💰 **پاداش دعوت:**\n• به ازای هر دعوت: ۵٪ از واریز\n• پاداش فوری پس از تایید\n\n📤 لینک را برای دوستان خود ارسال کنید!",
+            'referral_text': "🔗 **سیستم رفرال UTYOB**\n\n👤 شما: {}\n📊 تعداد دعوت‌ها: {}\n\n🔑 **کد رفرال شما:**\n`{}`\n\n🔗 **لینک دعوت:**\n{}\n\n💰 **پاداش دعوت:**\n• به ازای هر دعوت: ۵٪ از واریز\n• پاداش فوری پس از تایید\n\n📤 لینک را برای دوستان خود ارسال کنید!",
             'share': "📤 اشتراک‌گذاری",
-            'referral_joined': "🎉 **دعوت جدید!**\n\n👤 {}\n🔗 دعوت کننده: {}\n💰 پاداش شما: ${:.2f}",
             
             'guide_text': "📖 **راهنمای کامل ربات UTYOB**\n\n🎯 **نحوه کار:**\n1. **ثبت‌نام**: با دستور /start ثبت‌نام کنید\n2. **اشتراک**: برای شرکت در قرعه‌کشی، اشتراک تهیه کنید\n3. **واریز**: مبلغ ۱۰۰ دلار به آدرس مشخص واریز کنید\n4. **شرکت**: پس از تایید، در قرعه‌کشی شرکت کنید\n5. **برنده**: در صورت برنده شدن، جایزه دریافت کنید\n\n💰 **مبلغ واریز:**\n- مبلغ ثابت: ۱۰۰ دلار\n- آدرس واریز: TV61aTh98MGqmteYzda5AaBzdXgGqreG6A\n- شبکه: TRC20\n\n🎁 **جوایز:**\n- جایزه اول: ۵۰٪ از کل مبلغ\n- جایزه دوم: ۳۰٪ از کل مبلغ\n- جایزه سوم: ۲۰٪ از کل مبلغ\n\n🔗 **سیستم رفرال:**\n- هر کاربر کد رفرال اختصاصی دارد\n- به ازای هر دعوت، ۵٪ پاداش دریافت کنید\n\n⚠️ **قوانین:**\n- هر کاربر فقط یک بار در هر قرعه‌کشی شرکت می‌کند\n- برندگان قبلی شانس کمتری در قرعه‌کشی‌های بعدی دارند\n- تمامی تراکنش‌ها به صورت خودکار تایید می‌شوند\n\n📞 **پشتیبانی:**\nبرای سوالات و مشکلات با مدیریت تماس بگیرید.",
             
@@ -259,6 +205,7 @@ class LanguageManager:
             'poll_option_1': "✅ بله",
             'poll_option_2': "❌ خیر",
 
+            # بخش دانلودر
             'instagram_downloader': "📸 **دانلودر اینستاگرام**\n\nلینک پست یا ریل اینستاگرام را ارسال کنید تا آن را دانلود کنم!\n\n📤 لینک را ارسال کنید:",
             'youtube_downloader': "▶️ **دانلودر یوتیوب**\n\nلینک ویدیو یوتیوب را ارسال کنید تا آن را دانلود کنم!\n\n📤 لینک را ارسال کنید:",
             'downloading': "⏳ در حال دانلود... لطفاً صبر کنید.",
@@ -313,9 +260,8 @@ class LanguageManager:
             'no_winner': "❌ Hiç ödülünüz yok!\n\nGelecek piyangolara katılın.",
             'next_lottery': "🎰 Sonraki Piyango",
             
-            'referral_text': "🔗 **UTYOB Referans Sistemi**\n\n👤 Siz: {}\n📊 Davetler: {}\n💰 Referans Ödülü: ${}\n\n🔑 **Referans kodunuz:**\n`{}`\n\n🔗 **Referans linki:**\n{}\n\n💰 **Referans ödülü:**\n• Her davet için %5 yatırım\n• Doğrulama sonrası anında ödül\n\n📤 Bu linki arkadaşlarınızla paylaşın!",
+            'referral_text': "🔗 **UTYOB Referans Sistemi**\n\n👤 Siz: {}\n📊 Davetler: {}\n\n🔑 **Referans kodunuz:**\n`{}`\n\n🔗 **Referans linki:**\n{}\n\n💰 **Referans ödülü:**\n• Her davet için %5 yatırım\n• Doğrulama sonrası anında ödül\n\n📤 Bu linki arkadaşlarınızla paylaşın!",
             'share': "📤 Paylaş",
-            'referral_joined': "🎉 **Yeni referans katıldı!**\n\n👤 {}\n🔗 Davet eden: {}\n💰 Ödülünüz: ${:.2f}",
             
             'guide_text': "📖 **UTYOB Bot Tam Rehber**\n\n🎯 **Nasıl çalışır:**\n1. **Kayıt**: /start ile kaydolun\n2. **Abonelik**: Katılmak için abonelik satın alın\n3. **Yatırım**: Belirtilen adrese 100$ gönderin\n4. **Katılım**: Doğrulama sonrası piyangoya katılın\n5. **Kazanç**: Kazanırsanız ödülü alın\n\n💰 **Yatırım tutarı:**\n- Sabit tutar: 100$\n- Yatırım adresi: TV61aTh98MGqmteYzda5AaBzdXgGqreG6A\n- Ağ: TRC20\n\n🎁 **Ödüller:**\n- 1. ödül: Toplamın %50'si\n- 2. ödül: Toplamın %30'u\n- 3. ödül: Toplamın %20'si\n\n🔗 **Referans sistemi:**\n- Her kullanıcının benzersiz referans kodu vardır\n- Davet başına %5 ödül\n\n⚠️ **Kurallar:**\n- Her piyangoda kullanıcı başına bir katılım\n- Önceki kazananların şansı daha düşük\n- Tüm işlemler otomatik doğrulanır\n\n📞 **Destek:**\nSorularınız için yöneticiye başvurun.",
             
@@ -338,6 +284,7 @@ class LanguageManager:
             'poll_option_1': "✅ Evet",
             'poll_option_2': "❌ Hayır",
 
+            # İndirici bölümü
             'instagram_downloader': "📸 **Instagram İndirici**\n\nBir Instagram gönderisi/reel URL'si gönderin, sizin için indireyim!\n\n📤 Linki gönder:",
             'youtube_downloader': "▶️ **YouTube İndirici**\n\nBir YouTube video URL'si gönderin, sizin için indireyim!\n\n📤 Linki gönder:",
             'downloading': "⏳ İndiriliyor... Lütfen bekleyin.",
@@ -415,7 +362,6 @@ class DatabaseManager:
                 wallet_address TEXT,
                 referral_code TEXT UNIQUE,
                 referred_by INTEGER,
-                referral_rewards REAL DEFAULT 0,
                 has_subscription INTEGER DEFAULT 0,
                 subscription_end TEXT,
                 total_participations INTEGER DEFAULT 0,
@@ -488,6 +434,7 @@ class DatabaseManager:
             )
         ''')
         
+        # جدول دانلودها
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS downloads (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -500,6 +447,7 @@ class DatabaseManager:
             )
         ''')
         
+        # ایندکس‌های بهینه
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_referral ON users(referral_code)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_subscription ON users(has_subscription, subscription_end)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id)')
@@ -541,6 +489,7 @@ class DatabaseManager:
         return results
         
     def execute_parallel(self, query, params_list):
+        """اجرای موازی کوئری‌ها برای سرعت بالا"""
         with ThreadPoolExecutor(max_workers=50) as executor:
             futures = []
             for params in params_list:
@@ -578,6 +527,7 @@ class CacheManager:
     def set(self, key, value, ttl=CACHE_TTL):
         with self.lock:
             if len(self.cache) >= self.max_size:
+                # حذف قدیمی‌ترین آیتم
                 oldest = min(self.expiry, key=self.expiry.get)
                 del self.cache[oldest]
                 del self.expiry[oldest]
@@ -640,22 +590,26 @@ class DownloadManager:
         return self.session
         
     async def download_instagram(self, url: str) -> Tuple[bool, str, str]:
-        """دانلود واقعی از اینستاگرام با استفاده از API"""
+        """دانلود واقعی از اینستاگرام با استفاده از yt-dlp"""
         try:
-            # استفاده از API اینستاگرام
-            api_url = f"https://api.instagram.com/v1/media/{self._extract_instagram_id(url)}"
-            session = await self.get_session()
+            import yt_dlp
+            output_path = os.path.join(self.temp_dir, f"instagram_{int(time.time())}.mp4")
             
-            async with session.get(api_url) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    media_url = data.get('data', {}).get('media_url')
-                    if media_url:
-                        file_path = await self._download_file(media_url, "instagram", url)
-                        if file_path:
-                            return True, file_path, "Downloaded successfully"
-                return False, None, "Unable to fetch media"
-                
+            ydl_opts = {
+                'format': 'best[height<=720]',
+                'outtmpl': output_path,
+                'quiet': True,
+                'no_warnings': True,
+                'extract_flat': False,
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                if info and os.path.exists(output_path):
+                    return True, output_path, "Downloaded successfully"
+                    
+            return False, None, "Download failed"
+            
         except Exception as e:
             logger.error(f"Instagram download error: {e}")
             return False, None, str(e)
@@ -663,10 +617,8 @@ class DownloadManager:
     async def download_youtube(self, url: str) -> Tuple[bool, str, str]:
         """دانلود واقعی از یوتیوب با استفاده از yt-dlp"""
         try:
-            # استفاده از yt-dlp برای دانلود
-            output_path = os.path.join(self.temp_dir, f"youtube_{int(time.time())}.mp4")
-            
             import yt_dlp
+            output_path = os.path.join(self.temp_dir, f"youtube_{int(time.time())}.mp4")
             
             ydl_opts = {
                 'format': 'best[height<=720]',
@@ -686,41 +638,6 @@ class DownloadManager:
         except Exception as e:
             logger.error(f"YouTube download error: {e}")
             return False, None, str(e)
-            
-    def _extract_instagram_id(self, url: str) -> str:
-        """استخراج ID از لینک اینستاگرام"""
-        patterns = [
-            r'instagram\.com/p/([^/?]+)',
-            r'instagram\.com/reel/([^/?]+)',
-            r'instagram\.com/tv/([^/?]+)',
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, url)
-            if match:
-                return match.group(1)
-        return url.split('/')[-1]
-        
-    async def _download_file(self, url: str, media_type: str, original_url: str) -> Optional[str]:
-        """دانلود فایل با سرعت بالا"""
-        try:
-            session = await self.get_session()
-            file_path = os.path.join("downloads", f"{media_type}_{int(time.time())}.mp4")
-            
-            async with session.get(url) as response:
-                if response.status == 200:
-                    with open(file_path, 'wb') as f:
-                        while True:
-                            chunk = await response.content.read(8192)
-                            if not chunk:
-                                break
-                            f.write(chunk)
-                    return file_path
-                    
-            return None
-            
-        except Exception as e:
-            logger.error(f"Download error: {e}")
-            return None
             
     def validate_instagram_url(self, url: str) -> bool:
         patterns = [
@@ -769,6 +686,7 @@ class PaymentVerifier:
         return self.session
         
     async def verify_transaction(self, from_address, to_address, amount, tx_id=None):
+        # بررسی کش
         cache_key = f"verify_{from_address}_{to_address}_{amount}_{tx_id}"
         cached = cache.get(cache_key)
         if cached:
@@ -781,10 +699,12 @@ class PaymentVerifier:
         else:
             result = await self._search_transactions(session, from_address, to_address, amount)
             
+        # ذخیره در کش برای ۶۰ ثانیه
         cache.set(cache_key, result, ttl=60)
         return result
         
     async def _verify_by_txid(self, session, tx_id, from_address, to_address, amount):
+        # اجرای موازی با چندین API
         tasks = []
         for api in self.apis:
             tasks.append(self._check_api(session, api, tx_id, from_address, to_address, amount))
@@ -890,6 +810,7 @@ class LotterySystem:
             if len(eligible_users) < winners_count:
                 return False, f"Eligible users ({len(eligible_users)}) less than winners ({winners_count})"
                 
+            # الگوریتم هوشمند با AI
             winners = self._ai_smart_select(eligible_users, winners_count)
             
             if not winners or len(winners) < winners_count:
@@ -930,9 +851,13 @@ class LotterySystem:
         return [row['user_id'] for row in cursor]
         
     def _ai_smart_select(self, eligible_users, winners_count):
+        """
+        الگوریتم هوشمند انتخاب برندگان با استفاده از روش‌های پیشرفته
+        """
         if not eligible_users:
             return []
             
+        # محاسبه امتیاز هر کاربر با الگوریتم چندمعیاره
         user_scores = []
         for user_id in eligible_users:
             score = self._calculate_ai_score(user_id)
@@ -942,8 +867,10 @@ class LotterySystem:
         if not user_scores:
             return random.sample(eligible_users, min(winners_count, len(eligible_users)))
             
+        # مرتب‌سازی بر اساس امتیاز
         user_scores.sort(key=lambda x: x[1], reverse=True)
         
+        # انتخاب با روش تورنمنت
         selected = []
         temp_users = user_scores.copy()
         
@@ -951,16 +878,21 @@ class LotterySystem:
             if not temp_users:
                 break
                 
+            # انتخاب ۳ کاربر برتر به صورت تصادفی
             tournament_size = min(3, len(temp_users))
             tournament = random.sample(temp_users, tournament_size)
             winner = max(tournament, key=lambda x: x[1])
             
+            # حذف برنده انتخاب شده
             temp_users = [u for u in temp_users if u[0] != winner[0]]
             selected.append(winner[0])
             
         return selected
         
     def _calculate_ai_score(self, user_id):
+        """
+        محاسبه امتیاز هوشمند با الگوریتم AI
+        """
         try:
             cursor = db.execute(user_id,
                 """SELECT total_participations, wins_count, last_win_date, created_at 
@@ -972,27 +904,31 @@ class LotterySystem:
             if not user_data:
                 return 1
                 
-            score = 50
+            score = 50  # امتیاز پایه
             
+            # افزایش امتیاز برای مشارکت بالا
             if user_data['total_participations'] > 0:
                 score += min(user_data['total_participations'] * 2, 30)
                 
+            # کاهش امتیاز برای برندگان قبلی
             if user_data['wins_count'] > 0:
                 score -= user_data['wins_count'] * 15
                 
+            # کاهش شدید برای برندگان اخیر
             if user_data['last_win_date']:
                 try:
                     last_win = datetime.strptime(user_data['last_win_date'], '%Y-%m-%d')
                     days_since_win = (datetime.now() - last_win).days
                     if days_since_win < 3:
-                        score *= 0.2
+                        score *= 0.2  # کاهش ۸۰٪
                     elif days_since_win < 7:
-                        score *= 0.5
+                        score *= 0.5  # کاهش ۵۰٪
                     elif days_since_win < 14:
-                        score *= 0.7
+                        score *= 0.7  # کاهش ۳۰٪
                 except:
                     pass
                     
+            # افزایش امتیاز برای کاربران قدیمی
             if user_data['created_at']:
                 try:
                     created = datetime.strptime(user_data['created_at'], '%Y-%m-%d %H:%M:%S')
@@ -1063,7 +999,7 @@ lottery_system = LotterySystem()
 # ============================================================
 class UserManager:
     @staticmethod
-    def register_user(user_id, username=None, first_name=None, last_name=None, referred_by=None):
+    def register_user(user_id, username=None, first_name=None, last_name=None):
         try:
             cursor = db.execute(user_id,
                 "SELECT user_id FROM users WHERE user_id = ?",
@@ -1072,55 +1008,17 @@ class UserManager:
             
             if not cursor.fetchone():
                 referral_code = UserManager._generate_referral_code(user_id)
-                
-                # ثبت کاربر با رفرال
-                if referred_by:
-                    db.execute(user_id,
-                        """INSERT INTO users 
-                           (user_id, username, first_name, last_name, referral_code, referred_by, language) 
-                           VALUES (?, ?, ?, ?, ?, ?, 'en')""",
-                        (user_id, username, first_name, last_name, referral_code, referred_by)
-                    )
-                    # اضافه کردن پاداش رفرال به دعوت کننده
-                    UserManager._add_referral_reward(referred_by, user_id, first_name or username or str(user_id))
-                else:
-                    db.execute(user_id,
-                        """INSERT INTO users 
-                           (user_id, username, first_name, last_name, referral_code, language) 
-                           VALUES (?, ?, ?, ?, ?, 'en')""",
-                        (user_id, username, first_name, last_name, referral_code)
-                    )
+                db.execute(user_id,
+                    """INSERT INTO users 
+                       (user_id, username, first_name, last_name, referral_code, language) 
+                       VALUES (?, ?, ?, ?, ?, 'en')""",
+                    (user_id, username, first_name, last_name, referral_code)
+                )
                 return True
             return False
         except Exception as e:
             logger.error(f"Error registering user {user_id}: {e}")
             return False
-            
-    @staticmethod
-    def _add_referral_reward(referrer_id, new_user_id, new_user_name):
-        """اضافه کردن پاداش رفرال به دعوت کننده"""
-        try:
-            # محاسبه پاداش (۵٪ از مبلغ واریز = ۵ دلار)
-            reward_amount = 5.0
-            
-            # به‌روزرسانی پاداش رفرال
-            db.execute(referrer_id,
-                "UPDATE users SET referral_rewards = referral_rewards + ? WHERE user_id = ?",
-                (reward_amount, referrer_id)
-            )
-            
-            # ثبت تراکنش پاداش
-            db.execute(referrer_id,
-                """INSERT INTO transactions 
-                   (user_id, from_address, to_address, amount, tx_id, status, verified_at) 
-                   VALUES (?, 'referral', 'reward', ?, ?, 'verified', CURRENT_TIMESTAMP)""",
-                (referrer_id, reward_amount, f"REFERRAL_{new_user_id}_{int(time.time())}")
-            )
-            
-            logger.info(f"Referral reward added: {reward_amount} for user {referrer_id} from {new_user_id}")
-            
-        except Exception as e:
-            logger.error(f"Error adding referral reward: {e}")
             
     @staticmethod
     def _generate_referral_code(user_id):
@@ -1131,6 +1029,7 @@ class UserManager:
         
     @staticmethod
     def get_user(user_id):
+        # بررسی کش
         cache_key = f"user_{user_id}"
         cached = cache.get(cache_key)
         if cached:
@@ -1158,6 +1057,7 @@ class UserManager:
                 f"UPDATE users SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?",
                 values
             )
+            # پاک کردن کش
             cache.delete(f"user_{user_id}")
             return True
         except Exception as e:
@@ -1193,7 +1093,7 @@ class UserManager:
     @staticmethod
     def get_all_users():
         try:
-            results = db.execute_global("SELECT user_id, username, first_name, referral_rewards FROM users")
+            results = db.execute_global("SELECT user_id, username, first_name FROM users")
             return results
         except Exception as e:
             logger.error(f"Error getting all users: {e}")
@@ -1213,7 +1113,9 @@ class UTYOBot:
         self._init_system()
         
     def _init_system(self):
+        """مقداردهی اولیه سیستم و بازیابی داده‌ها"""
         try:
+            # بررسی وجود تنظیمات
             cursor = db.execute(0, "SELECT value FROM settings WHERE key = 'system_initialized'")
             if not cursor.fetchone():
                 db.execute(0, "INSERT INTO settings (key, value) VALUES ('system_initialized', 'true')")
@@ -1260,8 +1162,6 @@ class UTYOBot:
         app.add_handler(CallbackQueryHandler(self.admin_pay_winners_callback, pattern="^admin_pay_winners$"))
         app.add_handler(CallbackQueryHandler(self.admin_add_api_callback, pattern="^admin_add_api$"))
         app.add_handler(CallbackQueryHandler(self.admin_stats_callback, pattern="^admin_stats$"))
-        app.add_handler(CallbackQueryHandler(self.admin_user_list_callback, pattern="^admin_user_list$"))
-        app.add_handler(CallbackQueryHandler(self.admin_reset_user_callback, pattern="^admin_reset_user$"))
         
         # تایید/رد تراکنش توسط ادمین
         app.add_handler(CallbackQueryHandler(self.admin_verify_approve_callback, pattern="^admin_verify_approve_"))
@@ -1440,26 +1340,12 @@ class UTYOBot:
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
-        referred_by = None
-        
-        # بررسی رفرال از طریق لینک
-        if context.args and context.args[0].startswith('ref_'):
-            ref_code = context.args[0].replace('ref_', '')
-            cursor = db.execute(0,
-                "SELECT user_id FROM users WHERE referral_code = ?",
-                (ref_code,)
-            )
-            ref_user = cursor.fetchone()
-            if ref_user and ref_user['user_id'] != user.id:
-                referred_by = ref_user['user_id']
-                logger.info(f"User {user.id} referred by {referred_by}")
         
         user_manager.register_user(
             user.id,
             user.username,
             user.first_name,
-            user.last_name,
-            referred_by
+            user.last_name
         )
         
         lang = self._get_user_language(user.id)
@@ -1469,22 +1355,6 @@ class UTYOBot:
             callback_data="main_menu"
         )]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        # اگر کاربر توسط کسی دعوت شده
-        if referred_by:
-            try:
-                referrer_lang = self._get_user_language(referred_by)
-                await self.application.bot.send_message(
-                    chat_id=referred_by,
-                    text=LanguageManager.get_text(referrer_lang, 'referral_joined',
-                        user.first_name or user.username or str(user.id),
-                        str(user.id),
-                        5.0
-                    ),
-                    parse_mode=ParseMode.MARKDOWN
-                )
-            except Exception as e:
-                logger.error(f"Error sending referral notification: {e}")
         
         await update.message.reply_text(
             LanguageManager.get_text(lang, 'welcome'),
@@ -2168,7 +2038,7 @@ class UTYOBot:
         )
 
     # ============================================================
-    # کالبک‌های پنل مدیریت
+    # کالبک‌های پنل مدیریت (فقط فارسی)
     # ============================================================
     
     async def admin_panel_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2203,7 +2073,6 @@ class UTYOBot:
             [InlineKeyboardButton(f"✅ تایید دستی ({pending_count})", callback_data="admin_manual_verify")],
             [InlineKeyboardButton("📊 ارسال نظرسنجی", callback_data="admin_poll")],
             [InlineKeyboardButton(f"💰 واریز به برندگان ({unpaid_winners})", callback_data="admin_pay_winners")],
-            [InlineKeyboardButton("👥 لیست کاربران", callback_data="admin_user_list")],
             [InlineKeyboardButton("🔑 اضافه کردن API", callback_data="admin_add_api")],
             [InlineKeyboardButton("📈 آمار و اطلاعات", callback_data="admin_stats")],
             [InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]
@@ -2226,82 +2095,6 @@ class UTYOBot:
             text,
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
-        )
-    
-    async def admin_user_list_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        if user_id not in ADMIN_IDS:
-            return
-        
-        users = user_manager.get_all_users()
-        
-        if not users:
-            text = "👥 هیچ کاربری ثبت نشده است!"
-        else:
-            text = "👥 **لیست کامل کاربران:**\n\n"
-            for i, user in enumerate(users, 1):
-                text += f"{i}. {user['user_id']} - {user['first_name'] or user['username'] or 'Unknown'}\n"
-                text += f"   💰 پاداش رفرال: ${user['referral_rewards']:.2f}\n\n"
-                if i >= 50:
-                    text += f"... و {len(users) - 50} نفر دیگر"
-                    break
-        
-        keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        # اگر پیام طولانی بود، به چند بخش تقسیم می‌کنیم
-        if len(text) > 4000:
-            parts = [text[i:i+4000] for i in range(0, len(text), 4000)]
-            for part in parts:
-                await query.message.reply_text(
-                    part,
-                    reply_markup=reply_markup if part == parts[-1] else None,
-                    parse_mode=ParseMode.MARKDOWN
-                )
-            await query.delete_message()
-        else:
-            await query.edit_message_text(
-                text,
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-    
-    async def admin_reset_user_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        if user_id not in ADMIN_IDS:
-            return
-        
-        # دریافت شناسه کاربر از پیام
-        msg = query.message.text
-        try:
-            lines = msg.split('\n')
-            for line in lines:
-                if 'کاربر' in line or 'User' in line or 'user' in line:
-                    parts = line.split('-')
-                    if len(parts) >= 2:
-                        target_id = int(parts[0].strip())
-                        # بازنشانی کاربر
-                        db.execute(target_id,
-                            "UPDATE users SET has_subscription = 0, subscription_end = NULL WHERE user_id = ?",
-                            (target_id,)
-                        )
-                        await query.edit_message_text(
-                            f"✅ کاربر {target_id} با موفقیت بازنشانی شد!",
-                            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]])
-                        )
-                        return
-        except:
-            pass
-        
-        await query.edit_message_text(
-            "❌ خطا در بازنشانی کاربر! لطفاً از لیست کاربران استفاده کنید.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]])
         )
     
     async def admin_broadcast_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2448,22 +2241,16 @@ class UTYOBot:
             return
         
         text = "💰 **واریز به برندگان**\n\n"
-        total_prize = 0
         for winner in winners:
             text += f"👤 کاربر: {winner['user_id']}\n"
             text += f"💰 مبلغ: ${winner['prize_amount']}\n"
             text += f"📤 آدرس: {winner['wallet_address'] or 'نامشخص'}\n"
             text += f"🏆 قرعه‌کشی: #{winner['lottery_id']}\n\n"
-            total_prize += winner['prize_amount']
         
-        text += f"📊 تعداد کل: {len(winners)}\n"
-        text += f"💰 مجموع جایزه: ${total_prize:,.2f}\n\n"
+        text += f"📊 تعداد کل: {len(winners)}\n\n"
         text += "برای پرداخت، از پنل مدیریت استفاده کنید."
         
-        keyboard = [
-            [InlineKeyboardButton("✅ پرداخت همه", callback_data="admin_pay_all_winners")],
-            [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]
-        ]
+        keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
@@ -2510,16 +2297,6 @@ class UTYOBot:
         tx_stats = self._get_transaction_stats()
         lottery_stats = self._get_lottery_stats()
         
-        # آمار رفرال
-        referral_stats = db.execute_global(
-            "SELECT SUM(referral_rewards) as total_rewards, COUNT(referred_by) as total_referrals FROM users WHERE referred_by IS NOT NULL"
-        )
-        total_rewards = 0
-        total_referrals = 0
-        for row in referral_stats:
-            total_rewards += row['total_rewards'] or 0
-            total_referrals += row['total_referrals'] or 0
-        
         users_list = user_manager.get_all_users()
         users_text = ""
         for user in users_list[:10]:
@@ -2539,9 +2316,6 @@ class UTYOBot:
             f"• کل: {user_count:,}\n"
             f"• فعال: {active_users:,}\n"
             f"• درصد فعال: {(active_users/user_count*100) if user_count > 0 else 0:.1f}%\n\n"
-            f"🔗 **رفرال:**\n"
-            f"• کل دعوت‌ها: {total_referrals}\n"
-            f"• پاداش کل: ${total_rewards:.2f}\n\n"
             f"💳 **تراکنش‌ها:**\n"
             f"• کل: {tx_stats['total']:,}\n"
             f"• تایید شده: {tx_stats['verified']:,}\n"
@@ -2821,12 +2595,9 @@ class UTYOBot:
             (user_id,)
         ))
         
-        rewards = user['referral_rewards'] or 0
-        
         text = LanguageManager.get_text(lang, 'referral_text',
             user['first_name'] or user_id,
             referred_count,
-            rewards,
             referral_code,
             referral_link
         )
@@ -2985,6 +2756,7 @@ class UTYOBot:
                 parse_mode=ParseMode.MARKDOWN
             )
             
+            # اطلاع به ادمین‌ها
             pending_id = db.execute(0, "SELECT last_insert_rowid()").fetchone()[0]
             
             for admin_id in ADMIN_IDS:
@@ -3228,6 +3000,7 @@ class UTYOBot:
             )
     
     async def _send_poll(self, update, text, context):
+        """ارسال نظرسنجی با دو دکمه بله/خیر"""
         user_id = update.effective_user.id
         
         await update.message.reply_text(
@@ -3378,7 +3151,6 @@ async def main():
         logger.info(f"🔑 APIs: {len(TRONGRID_APIS)}")
         logger.info(f"⚡ Threads: 50")
         logger.info(f"💾 Cache size: 20,000 items")
-        logger.info(f"🔒 Encryption: Enabled")
         logger.info(f"📥 Download Manager: Ready")
         
         await bot.application.initialize()
