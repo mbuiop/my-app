@@ -1,5 +1,5 @@
 # ============================================================
-# ربات قرعه‌کشی هوشمند UTYOB - نسخه نهایی با دکمه‌های جدید
+# ربات قرعه‌کشی هوشمند UTYOB - نسخه نهایی با دانلودر رایگان
 # ============================================================
 
 import asyncio
@@ -15,8 +15,7 @@ import time
 import os
 import sys
 import re
-import tempfile
-import shutil
+import subprocess
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Optional, Any
 from concurrent.futures import ThreadPoolExecutor
@@ -25,17 +24,6 @@ from flask import Flask, request, jsonify
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from telegram.constants import ParseMode
-
-# کتابخانه‌های دانلودر
-try:
-    import yt_dlp
-except ImportError:
-    yt_dlp = None
-try:
-    from instaloader import Instaloader, Post
-except ImportError:
-    Instaloader = None
-    Post = None
 
 # ============================================================
 # تنظیمات اولیه
@@ -50,7 +38,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.environ.get('7780798170:AAHTDl295s15_RwhfhjGentSLZzye3keJP0', '7780798170:AAHTDl295s15_RwhfhjGentSLZzye3keJP0')
+BOT_TOKEN = os.environ.get('7780798170:AAHTDl295s15_RwhfhjGentSLZzye3keJP0', '7780798170:AAHTDl295s15_RwhfhjGentSLZzye3keJP0'
 ADMIN_IDS = [int(id) for id in os.environ.get('327855654', '327855654').split(',')]
 
 TRONGRID_APIS = [
@@ -63,8 +51,13 @@ PAYMENT_AMOUNT = 100
 DB_SHARDS = 500
 CACHE_TTL = 300
 
+# تنظیمات دانلودر
+MAX_DOWNLOADS_PER_DAY = 10
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
+DOWNLOAD_EXPIRY_HOURS = 24
+
 # ============================================================
-# سیستم چندزبانه کامل با دکمه‌های جدید
+# سیستم چندزبانه کامل با اضافات دانلودر
 # ============================================================
 class LanguageManager:
     LANGUAGES = {
@@ -79,6 +72,7 @@ class LanguageManager:
             'guide': "📖 Guide",
             'language': "🌐 Change Language",
             'admin_panel': "⚙️ Admin Panel",
+            'download': "📥 Free Downloader",
             'no_subscription': "❌ **You don't have an active subscription!**\n\nTo participate in the lottery, you must first purchase a subscription.\n\n💰 Subscription cost: $100\n📅 Validity: 1 month\n\nClick the button below to subscribe.",
             'subscribe': "🔄 Subscribe Now",
             'back': "🔙 Back",
@@ -136,18 +130,29 @@ class LanguageManager:
             'poll_option_1': "✅ Yes",
             'poll_option_2': "❌ No",
             
-            # دکمه‌های جدید
-            'download_instagram': "📸 Download Instagram",
-            'download_youtube': "🎬 Download YouTube",
-            'send_link_instagram': "📤 Please send the Instagram post/video link:\n\nExample: `https://www.instagram.com/p/ABC123/`",
-            'send_link_youtube': "📤 Please send the YouTube video link:\n\nExample: `https://www.youtube.com/watch?v=ABC123`",
-            'downloading': "⏳ Downloading... Please wait.",
-            'download_success': "✅ Download successful! Here is your file:",
-            'download_failed': "❌ Download failed! Please check the link and try again.",
-            'invalid_link': "❌ Invalid link! Please send a valid Instagram or YouTube link.",
-            'invoice_button': "📄 Create Invoice",
-            'open_invoice': "📄 Open Invoice",
-            'invoice_description': "📄 **Create Invoice**\n\nPlease click the button below to open the invoice form.\n\n⚠️ Press back button twice to exit the site.",
+            # متن‌های دانلودر
+            'download_title': "📥 **Free Downloader**\n\nDownload content from Instagram & YouTube for FREE!\n\n🎁 **Bonus:** Each download gives you +1 point for the lottery!",
+            'download_ig': "📸 Instagram Downloader",
+            'download_yt': "▶️ YouTube Downloader",
+            'download_gif': "🎬 Convert to GIF",
+            'download_compress': "📦 Compress Video",
+            'download_guide': "📤 Send the link of the content you want to download.\n\nExamples:\n• `https://www.instagram.com/p/...`\n• `https://www.youtube.com/watch?v=...`",
+            'download_instagram_text': "📸 **Instagram Downloader**\n\nSend an Instagram link:\n• Post (photo/video)\n• Reel\n• Story\n• IGTV\n\n🎁 **+1 point** for each download!",
+            'download_youtube_text': "▶️ **YouTube Downloader**\n\nSend a YouTube link:\n• Video (all qualities)\n• Audio (MP3)\n• Subtitles\n\n🎁 **+1 point** for each download!",
+            'download_gif_text': "🎬 **Convert Video to GIF**\n\nSend a video file to convert to GIF.\n\n🎁 **+1 point** for each conversion!",
+            'download_compress_text': "📦 **Compress Video**\n\nSend a video to compress.\n\n🎁 **+1 point** for each compression!",
+            'download_processing': "⏳ Processing your request...\nPlease wait.",
+            'download_complete': "✅ **Download complete!** 🎉\n\n📁 File: {}\n📦 Size: {}\n🎁 **+1 point** added to your account!",
+            'download_failed': "❌ **Download failed!**\n\n🔹 Reason: {}\n\n💡 Tips:\n• Make sure the link is valid\n• The content may be private\n• Try again later",
+            'download_limit_reached': "❌ **Daily limit reached!**\n\nYou can download up to {} files per day.\n🔄 Try again tomorrow.",
+            'download_not_supported': "❌ **Link not supported!**\n\nPlease send a link from:\n• Instagram (instagram.com)\n• YouTube (youtube.com or youtu.be)",
+            'download_quality': "🎥 **Select quality:**",
+            'download_format': "📁 **Select format:**",
+            'download_audio': "🎵 Audio (MP3)",
+            'download_video': "🎬 Video",
+            'download_subtitle': "📝 Subtitles",
+            'download_points': "🎁 **+1 point** added!\n📊 Total points: {}",
+            'download_cleanup': "🧹 Downloaded files cleaned up!",
         },
         'fa': {
             'name': 'فارسی',
@@ -160,6 +165,7 @@ class LanguageManager:
             'guide': "📖 راهنمایی",
             'language': "🌐 تغییر زبان",
             'admin_panel': "⚙️ پنل مدیریت",
+            'download': "📥 دانلودر رایگان",
             'no_subscription': "❌ **شما اشتراک فعال ندارید!**\n\nبرای شرکت در قرعه‌کشی، ابتدا باید اشتراک تهیه کنید.\n\n💰 هزینه اشتراک: ۱۰۰ دلار\n📅 مدت اعتبار: ۱ ماه\n\nبرای تهیه اشتراک، روی دکمه زیر کلیک کنید.",
             'subscribe': "🔄 خرید اشتراک",
             'back': "🔙 بازگشت",
@@ -217,18 +223,29 @@ class LanguageManager:
             'poll_option_1': "✅ بله",
             'poll_option_2': "❌ خیر",
             
-            # دکمه‌های جدید - فارسی
-            'download_instagram': "📸 دانلود اینستاگرام",
-            'download_youtube': "🎬 دانلود یوتیوب",
-            'send_link_instagram': "📤 لطفاً لینک پست یا ویدیوی اینستاگرام را ارسال کنید:\n\nمثال: `https://www.instagram.com/p/ABC123/`",
-            'send_link_youtube': "📤 لطفاً لینک ویدیوی یوتیوب را ارسال کنید:\n\nمثال: `https://www.youtube.com/watch?v=ABC123`",
-            'downloading': "⏳ در حال دانلود... لطفاً صبر کنید.",
-            'download_success': "✅ دانلود با موفقیت انجام شد! فایل شما:",
-            'download_failed': "❌ دانلود ناموفق! لطفاً لینک را بررسی کنید و مجدداً تلاش کنید.",
-            'invalid_link': "❌ لینک نامعتبر! لطفاً یک لینک معتبر از اینستاگرام یا یوتیوب ارسال کنید.",
-            'invoice_button': "📄 ساخت فاکتور",
-            'open_invoice': "📄 باز کردن فاکتور",
-            'invoice_description': "📄 **ساخت فاکتور**\n\nلطفاً روی دکمه زیر کلیک کنید تا فرم فاکتور باز شود.\n\n⚠️ برای خروج از سایت، دو بار دکمه برگشت را بزنید.",
+            # متن‌های دانلودر فارسی
+            'download_title': "📥 **دانلودر رایگان**\n\nبه‌صورت رایگان از اینستاگرام و یوتیوب دانلود کنید!\n\n🎁 **پاداش:** هر دانلود = ۱ امتیاز برای قرعه‌کشی!",
+            'download_ig': "📸 دانلود از اینستاگرام",
+            'download_yt': "▶️ دانلود از یوتیوب",
+            'download_gif': "🎬 تبدیل به GIF",
+            'download_compress': "📦 فشرده‌سازی ویدیو",
+            'download_guide': "📤 لینک محتوای مورد نظر را ارسال کنید.\n\nمثال‌ها:\n• `https://www.instagram.com/p/...`\n• `https://www.youtube.com/watch?v=...`",
+            'download_instagram_text': "📸 **دانلود از اینستاگرام**\n\nلینک اینستاگرام را ارسال کنید:\n• پست (عکس/ویدیو)\n• ریلز\n• استوری\n• IGTV\n\n🎁 **هر دانلود = ۱ امتیاز!**",
+            'download_youtube_text': "▶️ **دانلود از یوتیوب**\n\nلینک یوتیوب را ارسال کنید:\n• ویدیو (همه کیفیت‌ها)\n• صدا (MP3)\n• زیرنویس\n\n🎁 **هر دانلود = ۱ امتیاز!**",
+            'download_gif_text': "🎬 **تبدیل ویدیو به GIF**\n\nیک فایل ویدیویی برای تبدیل به GIF ارسال کنید.\n\n🎁 **هر تبدیل = ۱ امتیاز!**",
+            'download_compress_text': "📦 **فشرده‌سازی ویدیو**\n\nیک ویدیو برای فشرده‌سازی ارسال کنید.\n\n🎁 **هر فشرده‌سازی = ۱ امتیاز!**",
+            'download_processing': "⏳ در حال پردازش درخواست شما...\nلطفاً صبر کنید.",
+            'download_complete': "✅ **دانلود کامل شد!** 🎉\n\n📁 فایل: {}\n📦 حجم: {}\n🎁 **۱ امتیاز** به حساب شما اضافه شد!",
+            'download_failed': "❌ **دانلود ناموفق!**\n\n🔹 دلیل: {}\n\n💡 نکات:\n• مطمئن شوید لینک معتبر است\n• محتوا ممکن است خصوصی باشد\n• مجدداً تلاش کنید",
+            'download_limit_reached': "❌ **محدودیت روزانه تکمیل شد!**\n\nشما می‌توانید روزانه {} فایل دانلود کنید.\n🔄 فردا مجدداً تلاش کنید.",
+            'download_not_supported': "❌ **لینک پشتیبانی نمی‌شود!**\n\nلطفاً لینکی از:\n• اینستاگرام (instagram.com)\n• یوتیوب (youtube.com یا youtu.be)\nارسال کنید.",
+            'download_quality': "🎥 **کیفیت مورد نظر را انتخاب کنید:**",
+            'download_format': "📁 **فرمت مورد نظر را انتخاب کنید:**",
+            'download_audio': "🎵 صدا (MP3)",
+            'download_video': "🎬 ویدیو",
+            'download_subtitle': "📝 زیرنویس",
+            'download_points': "🎁 **۱ امتیاز** اضافه شد!\n📊 مجموع امتیازات: {}",
+            'download_cleanup': "🧹 فایل‌های دانلود شده پاکسازی شدند!",
         },
         'tr': {
             'name': 'Türkçe',
@@ -241,6 +258,7 @@ class LanguageManager:
             'guide': "📖 Rehber",
             'language': "🌐 Dil Değiştir",
             'admin_panel': "⚙️ Yönetim Paneli",
+            'download': "📥 Ücretsiz İndirici",
             'no_subscription': "❌ **Aktif aboneliğiniz yok!**\n\nPiyangoya katılmak için önce abonelik satın almalısınız.\n\n💰 Abonelik ücreti: 100$\n📅 Geçerlilik: 1 ay\n\nAbone olmak için aşağıdaki butona tıklayın.",
             'subscribe': "🔄 Abone Ol",
             'back': "🔙 Geri",
@@ -298,18 +316,29 @@ class LanguageManager:
             'poll_option_1': "✅ Evet",
             'poll_option_2': "❌ Hayır",
             
-            # دکمه‌های جدید - ترکی
-            'download_instagram': "📸 Instagram İndir",
-            'download_youtube': "🎬 YouTube İndir",
-            'send_link_instagram': "📤 Lütfen Instagram gönderi/video linkini gönderin:\n\nÖrnek: `https://www.instagram.com/p/ABC123/`",
-            'send_link_youtube': "📤 Lütfen YouTube video linkini gönderin:\n\nÖrnek: `https://www.youtube.com/watch?v=ABC123`",
-            'downloading': "⏳ İndiriliyor... Lütfen bekleyin.",
-            'download_success': "✅ İndirme başarılı! Dosyanız:",
-            'download_failed': "❌ İndirme başarısız! Lütfen linki kontrol edip tekrar deneyin.",
-            'invalid_link': "❌ Geçersiz link! Lütfen geçerli bir Instagram veya YouTube linki gönderin.",
-            'invoice_button': "📄 Fatura Oluştur",
-            'open_invoice': "📄 Faturayı Aç",
-            'invoice_description': "📄 **Fatura Oluştur**\n\nFatura formunu açmak için lütfen aşağıdaki butona tıklayın.\n\n⚠️ Siteden çıkmak için geri tuşuna iki kez basın.",
+            # Türkçe downloader texts
+            'download_title': "📥 **Ücretsiz İndirici**\n\nInstagram ve YouTube'dan ÜCRETSİZ içerik indirin!\n\n🎁 **Bonus:** Her indirme piyango için +1 puan!",
+            'download_ig': "📸 Instagram İndirici",
+            'download_yt': "▶️ YouTube İndirici",
+            'download_gif': "🎬 GIF'e Dönüştür",
+            'download_compress': "📦 Videoyu Sıkıştır",
+            'download_guide': "📤 İndirmek istediğiniz içeriğin linkini gönderin.\n\nÖrnekler:\n• `https://www.instagram.com/p/...`\n• `https://www.youtube.com/watch?v=...`",
+            'download_instagram_text': "📸 **Instagram İndirici**\n\nBir Instagram linki gönderin:\n• Gönderi (fotoğraf/video)\n• Reel\n• Hikaye\n• IGTV\n\n🎁 **Her indirme = 1 puan!**",
+            'download_youtube_text': "▶️ **YouTube İndirici**\n\nBir YouTube linki gönderin:\n• Video (tüm kaliteler)\n• Ses (MP3)\n• Altyazı\n\n🎁 **Her indirme = 1 puan!**",
+            'download_gif_text': "🎬 **Videoyu GIF'e Dönüştür**\n\nGIF'e dönüştürmek için bir video dosyası gönderin.\n\n🎁 **Her dönüşüm = 1 puan!**",
+            'download_compress_text': "📦 **Videoyu Sıkıştır**\n\nSıkıştırmak için bir video gönderin.\n\n🎁 **Her sıkıştırma = 1 puan!**",
+            'download_processing': "⏳ İsteğiniz işleniyor...\nLütfen bekleyin.",
+            'download_complete': "✅ **İndirme tamamlandı!** 🎉\n\n📁 Dosya: {}\n📦 Boyut: {}\n🎁 **1 puan** hesabınıza eklendi!",
+            'download_failed': "❌ **İndirme başarısız!**\n\n🔹 Sebep: {}\n\n💡 İpuçları:\n• Linkin geçerli olduğundan emin olun\n• İçerik özel olabilir\n• Tekrar deneyin",
+            'download_limit_reached': "❌ **Günlük limit doldu!**\n\nGünde {} dosya indirebilirsiniz.\n🔄 Yarın tekrar deneyin.",
+            'download_not_supported': "❌ **Link desteklenmiyor!**\n\nLütfen şunlardan bir link gönderin:\n• Instagram (instagram.com)\n• YouTube (youtube.com veya youtu.be)",
+            'download_quality': "🎥 **Kalite seçin:**",
+            'download_format': "📁 **Format seçin:**",
+            'download_audio': "🎵 Ses (MP3)",
+            'download_video': "🎬 Video",
+            'download_subtitle': "📝 Altyazı",
+            'download_points': "🎁 **1 puan** eklendi!\n📊 Toplam puan: {}",
+            'download_cleanup': "🧹 İndirilen dosyalar temizlendi!",
         }
     }
     
@@ -344,8 +373,422 @@ class LanguageManager:
 
 
 # ============================================================
-# دیتابیس با ۵۰۰ شارد
+# سیستم دانلودر (Instagram & YouTube)
 # ============================================================
+
+class DownloaderSystem:
+    def __init__(self):
+        self.downloads_dir = "downloads"
+        os.makedirs(self.downloads_dir, exist_ok=True)
+        self.user_downloads = {}  # user_id -> {'count': int, 'date': str}
+        self.active_downloads = {}
+        self.max_file_size = MAX_FILE_SIZE
+        self.max_downloads_per_day = MAX_DOWNLOADS_PER_DAY
+        self.expiry_hours = DOWNLOAD_EXPIRY_HOURS
+        
+        # بررسی نصب FFmpeg
+        try:
+            subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
+            self.ffmpeg_available = True
+        except:
+            self.ffmpeg_available = False
+            logger.warning("⚠️ FFmpeg not installed! GIF conversion and compression will be disabled.")
+
+    def is_instagram_link(self, url: str) -> bool:
+        """بررسی لینک اینستاگرام"""
+        patterns = [
+            r'instagram\.com/p/',
+            r'instagram\.com/reel/',
+            r'instagram\.com/stories/',
+            r'instagram\.com/tv/',
+            r'instagram\.com/s/',
+            r'instagr\.am/',
+        ]
+        return any(re.search(pattern, url, re.IGNORECASE) for pattern in patterns)
+
+    def is_youtube_link(self, url: str) -> bool:
+        """بررسی لینک یوتیوب"""
+        patterns = [
+            r'youtube\.com/watch\?v=',
+            r'youtu\.be/',
+            r'youtube\.com/shorts/',
+            r'youtube\.com/playlist\?',
+            r'youtube\.com/embed/',
+            r'm\.youtube\.com/watch\?v=',
+            r'youtube\.com/v/',
+            r'youtube\.com/e/',
+        ]
+        return any(re.search(pattern, url, re.IGNORECASE) for pattern in patterns)
+
+    def extract_video_id(self, url: str) -> Optional[str]:
+        """استخراج ID ویدیو از لینک یوتیوب"""
+        patterns = [
+            r'(?:v=|\/)([0-9A-Za-z_-]{11})(?:[?&]|$)',
+            r'(?:embed\/)([0-9A-Za-z_-]{11})',
+            r'(?:youtu\.be\/)([0-9A-Za-z_-]{11})',
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, url)
+            if match:
+                return match.group(1)
+        return None
+
+    def get_user_dir(self, user_id: int) -> str:
+        """دریافت پوشه کاربر"""
+        user_dir = f"{self.downloads_dir}/user_{user_id}"
+        os.makedirs(user_dir, exist_ok=True)
+        return user_dir
+
+    def get_file_size_readable(self, filepath: str) -> str:
+        """دریافت حجم فایل به صورت خوانا"""
+        try:
+            size = os.path.getsize(filepath)
+            for unit in ['B', 'KB', 'MB', 'GB']:
+                if size < 1024.0:
+                    return f"{size:.2f} {unit}"
+                size /= 1024.0
+            return f"{size:.2f} TB"
+        except:
+            return "Unknown"
+
+    def check_download_limit(self, user_id: int) -> bool:
+        """بررسی محدودیت دانلود روزانه"""
+        today = datetime.now().strftime('%Y-%m-%d')
+        if user_id in self.user_downloads:
+            if self.user_downloads[user_id]['date'] == today:
+                return self.user_downloads[user_id]['count'] < self.max_downloads_per_day
+        return True
+
+    def increment_download_count(self, user_id: int):
+        """افزایش شمارش دانلود"""
+        today = datetime.now().strftime('%Y-%m-%d')
+        if user_id not in self.user_downloads:
+            self.user_downloads[user_id] = {'count': 0, 'date': today}
+        elif self.user_downloads[user_id]['date'] != today:
+            self.user_downloads[user_id] = {'count': 0, 'date': today}
+        self.user_downloads[user_id]['count'] += 1
+
+    async def download_instagram(self, url: str, user_id: int) -> Dict:
+        """دانلود محتوای اینستاگرام با استفاده از yt-dlp"""
+        try:
+            if not self.check_download_limit(user_id):
+                return {'success': False, 'error': 'limit_reached', 'message': 'Daily limit reached'}
+
+            user_dir = self.get_user_dir(user_id)
+            
+            ydl_opts = {
+                'outtmpl': f'{user_dir}/instagram_%(id)s.%(ext)s',
+                'quiet': True,
+                'no_warnings': True,
+                'restrictfilenames': True,
+                'geo_bypass': True,
+                'socket_timeout': 30,
+                'retries': 3,
+                'max_filesize': self.max_file_size,
+                'noplaylist': True,
+                'extract_flat': False,
+            }
+
+            loop = asyncio.get_event_loop()
+            
+            def download():
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=True)
+                    filename = ydl.prepare_filename(info)
+                    # اصلاح پسوند فایل
+                    if not os.path.exists(filename):
+                        # تلاش برای پیدا کردن فایل دانلود شده
+                        for f in os.listdir(user_dir):
+                            if f.startswith(f"instagram_{info.get('id', '')}"):
+                                filename = os.path.join(user_dir, f)
+                                break
+                    return filename, info
+
+            filename, info = await loop.run_in_executor(None, download)
+
+            if os.path.exists(filename):
+                file_size = os.path.getsize(filename)
+                if file_size > self.max_file_size:
+                    os.remove(filename)
+                    return {'success': False, 'error': 'file_too_large', 'message': f'File too large ({self.get_file_size_readable(filename)})'}
+
+                self.increment_download_count(user_id)
+                
+                return {
+                    'success': True,
+                    'file': filename,
+                    'title': info.get('title', 'Instagram Content'),
+                    'size': file_size,
+                    'type': 'video' if info.get('is_video', False) else 'photo'
+                }
+
+            return {'success': False, 'error': 'download_failed', 'message': 'File not found after download'}
+
+        except yt_dlp.utils.DownloadError as e:
+            logger.error(f"yt-dlp download error: {e}")
+            return {'success': False, 'error': 'download_error', 'message': str(e)}
+        except Exception as e:
+            logger.error(f"Instagram download error: {e}")
+            return {'success': False, 'error': 'error', 'message': str(e)}
+
+    async def download_youtube(self, url: str, user_id: int, quality: str = "720p", format_type: str = "video") -> Dict:
+        """دانلود محتوای یوتیوب"""
+        try:
+            if not self.check_download_limit(user_id):
+                return {'success': False, 'error': 'limit_reached', 'message': 'Daily limit reached'}
+
+            user_dir = self.get_user_dir(user_id)
+            video_id = self.extract_video_id(url)
+            
+            quality_map = {
+                '1080p': 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]',
+                '720p': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]',
+                '480p': 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]',
+                '360p': 'bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/best[height<=360]',
+                'audio': 'bestaudio/best',
+            }
+
+            ydl_opts = {
+                'outtmpl': f'{user_dir}/%(title)s_%(id)s.%(ext)s',
+                'quiet': True,
+                'no_warnings': True,
+                'noplaylist': True,
+                'extract_flat': False,
+                'max_filesize': self.max_file_size,
+                'restrictfilenames': True,
+                'geo_bypass': True,
+                'socket_timeout': 30,
+                'retries': 3,
+                'http_chunk_size': 1048576,
+                'ignoreerrors': True,
+            }
+
+            if format_type == "audio":
+                ydl_opts.update({
+                    'format': 'bestaudio/best',
+                    'postprocessors': [{
+                        'key': 'FFmpegExtractAudio',
+                        'preferredcodec': 'mp3',
+                        'preferredquality': '192',
+                    }],
+                })
+            elif format_type == "video":
+                ydl_opts['format'] = quality_map.get(quality, 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best')
+            elif format_type == "subtitle":
+                ydl_opts.update({
+                    'writesubtitles': True,
+                    'writeautomaticsub': True,
+                    'subtitleslangs': ['en', 'fa', 'tr'],
+                    'skip_download': True,
+                })
+
+            loop = asyncio.get_event_loop()
+
+            def download():
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=True)
+                    
+                    if format_type == "subtitle":
+                        return None, info
+                        
+                    filename = ydl.prepare_filename(info)
+                    if not os.path.exists(filename):
+                        # بررسی پسوندهای مختلف
+                        base_name = filename.rsplit('.', 1)[0] if '.' in filename else filename
+                        for ext in ['.mp4', '.mkv', '.webm', '.mp3', '.m4a', '.mkv']:
+                            test_file = base_name + ext
+                            if os.path.exists(test_file):
+                                filename = test_file
+                                break
+                    return filename, info
+
+            filename, info = await loop.run_in_executor(None, download)
+
+            if format_type == "subtitle":
+                subs = info.get('subtitles', {})
+                auto_subs = info.get('automatic_captions', {})
+                return {
+                    'success': True,
+                    'subtitles': subs,
+                    'auto_subtitles': auto_subs,
+                    'title': info.get('title', 'Unknown'),
+                    'type': 'subtitle'
+                }
+
+            if os.path.exists(filename):
+                file_size = os.path.getsize(filename)
+                if file_size > self.max_file_size:
+                    os.remove(filename)
+                    return {'success': False, 'error': 'file_too_large', 'message': f'File too large ({self.get_file_size_readable(filename)})'}
+
+                self.increment_download_count(user_id)
+                
+                return {
+                    'success': True,
+                    'file': filename,
+                    'title': info.get('title', 'YouTube Video'),
+                    'size': file_size,
+                    'duration': info.get('duration', 0),
+                    'thumbnail': info.get('thumbnail', ''),
+                    'type': format_type,
+                    'quality': quality if format_type == 'video' else 'audio'
+                }
+
+            return {'success': False, 'error': 'download_failed', 'message': 'File not found after download'}
+
+        except yt_dlp.utils.DownloadError as e:
+            logger.error(f"yt-dlp download error: {e}")
+            return {'success': False, 'error': 'download_error', 'message': str(e)}
+        except Exception as e:
+            logger.error(f"YouTube download error: {e}")
+            return {'success': False, 'error': 'error', 'message': str(e)}
+
+    async def convert_to_gif(self, video_path: str, user_id: int, start_time: int = 0, duration: int = 5) -> Dict:
+        """تبدیل ویدیو به GIF"""
+        if not self.ffmpeg_available:
+            return {'success': False, 'error': 'ffmpeg_not_available', 'message': 'FFmpeg is not installed'}
+
+        try:
+            if not os.path.exists(video_path):
+                return {'success': False, 'error': 'file_not_found', 'message': 'Video file not found'}
+
+            user_dir = self.get_user_dir(user_id)
+            output_path = f"{user_dir}/gif_{int(time.time())}.gif"
+            
+            cmd = [
+                'ffmpeg',
+                '-i', video_path,
+                '-ss', str(start_time),
+                '-t', str(duration),
+                '-vf', 'fps=10,scale=320:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse',
+                '-loop', '0',
+                '-y',
+                output_path
+            ]
+
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, subprocess.run, cmd, {'capture_output': True, 'text': True})
+
+            if result.returncode == 0 and os.path.exists(output_path):
+                file_size = os.path.getsize(output_path)
+                return {
+                    'success': True,
+                    'file': output_path,
+                    'size': file_size,
+                    'duration': duration
+                }
+            
+            return {'success': False, 'error': 'conversion_failed', 'message': 'GIF conversion failed'}
+
+        except Exception as e:
+            logger.error(f"GIF conversion error: {e}")
+            return {'success': False, 'error': 'error', 'message': str(e)}
+
+    async def compress_video(self, video_path: str, user_id: int, quality: str = "medium") -> Dict:
+        """فشرده‌سازی ویدیو"""
+        if not self.ffmpeg_available:
+            return {'success': False, 'error': 'ffmpeg_not_available', 'message': 'FFmpeg is not installed'}
+
+        try:
+            if not os.path.exists(video_path):
+                return {'success': False, 'error': 'file_not_found', 'message': 'Video file not found'}
+
+            quality_settings = {
+                'low': ('scale=480:-2', '28'),
+                'medium': ('scale=720:-2', '23'),
+                'high': ('scale=1080:-2', '18'),
+            }
+
+            setting = quality_settings.get(quality, quality_settings['medium'])
+            
+            user_dir = self.get_user_dir(user_id)
+            output_path = f"{user_dir}/compressed_{int(time.time())}.mp4"
+
+            cmd = [
+                'ffmpeg',
+                '-i', video_path,
+                '-vf', setting[0],
+                '-c:v', 'libx264',
+                '-crf', setting[1],
+                '-preset', 'fast',
+                '-c:a', 'aac',
+                '-b:a', '128k',
+                '-y',
+                output_path
+            ]
+
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, subprocess.run, cmd, {'capture_output': True, 'text': True})
+
+            if result.returncode == 0 and os.path.exists(output_path):
+                original_size = os.path.getsize(video_path)
+                compressed_size = os.path.getsize(output_path)
+                saved_percent = round((1 - compressed_size/original_size) * 100, 2) if original_size > 0 else 0
+                
+                return {
+                    'success': True,
+                    'file': output_path,
+                    'original_size': original_size,
+                    'compressed_size': compressed_size,
+                    'saved_percent': saved_percent
+                }
+            
+            return {'success': False, 'error': 'compression_failed', 'message': 'Video compression failed'}
+
+        except Exception as e:
+            logger.error(f"Compression error: {e}")
+            return {'success': False, 'error': 'error', 'message': str(e)}
+
+    def cleanup_user_files(self, user_id: int, older_than_hours: int = None) -> int:
+        """پاکسازی فایل‌های قدیمی کاربر"""
+        try:
+            if older_than_hours is None:
+                older_than_hours = self.expiry_hours
+                
+            user_dir = self.get_user_dir(user_id)
+            if not os.path.exists(user_dir):
+                return 0
+
+            current_time = time.time()
+            deleted = 0
+            
+            for filename in os.listdir(user_dir):
+                filepath = os.path.join(user_dir, filename)
+                if os.path.isfile(filepath):
+                    file_age = current_time - os.path.getmtime(filepath)
+                    if file_age > (older_than_hours * 3600):
+                        os.remove(filepath)
+                        deleted += 1
+            
+            return deleted
+        except Exception as e:
+            logger.error(f"Cleanup error for user {user_id}: {e}")
+            return 0
+
+    def cleanup_all_users(self, older_than_hours: int = None) -> int:
+        """پاکسازی فایل‌های همه کاربران"""
+        try:
+            total_deleted = 0
+            if not os.path.exists(self.downloads_dir):
+                return 0
+                
+            for user_dir in os.listdir(self.downloads_dir):
+                if user_dir.startswith('user_'):
+                    try:
+                        user_id = int(user_dir.split('_')[1])
+                        total_deleted += self.cleanup_user_files(user_id, older_than_hours)
+                    except:
+                        continue
+            return total_deleted
+        except Exception as e:
+            logger.error(f"Global cleanup error: {e}")
+            return 0
+
+
+# ============================================================
+# دیتابیس با ۵۰۰ شارد برای مقیاس‌پذیری بالا
+# ============================================================
+
 class DatabaseManager:
     def __init__(self, num_shards=DB_SHARDS):
         self.num_shards = num_shards
@@ -515,9 +958,11 @@ class DatabaseManager:
 
 db = DatabaseManager()
 
+
 # ============================================================
-# سیستم کش
+# سیستم کش پیشرفته با TTL و LRU
 # ============================================================
+
 class CacheManager:
     def __init__(self, max_size=10000):
         self.cache = {}
@@ -572,9 +1017,11 @@ class CacheManager:
 
 cache = CacheManager(max_size=20000)
 
+
 # ============================================================
-# سیستم تایید پرداخت
+# سیستم تایید پرداخت با چندین API و کش
 # ============================================================
+
 class PaymentVerifier:
     def __init__(self):
         self.apis = TRONGRID_APIS.copy()
@@ -691,9 +1138,11 @@ class PaymentVerifier:
 
 payment_verifier = PaymentVerifier()
 
+
 # ============================================================
-# سیستم قرعه‌کشی
+# سیستم قرعه‌کشی با الگوریتم هوش مصنوعی
 # ============================================================
+
 class LotterySystem:
     def __init__(self):
         self.current_lottery = None
@@ -882,9 +1331,11 @@ class LotterySystem:
 
 lottery_system = LotterySystem()
 
+
 # ============================================================
-# سیستم مدیریت کاربران
+# سیستم مدیریت کاربران با پایداری بالا
 # ============================================================
+
 class UserManager:
     @staticmethod
     def register_user(user_id, username=None, first_name=None, last_name=None):
@@ -986,104 +1437,17 @@ class UserManager:
 
 user_manager = UserManager()
 
-# ============================================================
-# مدیریت دانلود از اینستاگرام و یوتیوب
-# ============================================================
-class DownloadManager:
-    @staticmethod
-    async def download_instagram(url: str) -> Tuple[bool, Optional[bytes], Optional[str]]:
-        if Instaloader is None or Post is None:
-            return False, None, "Instaloader not installed"
-            
-        try:
-            temp_dir = tempfile.mkdtemp()
-            
-            loader = Instaloader(
-                download_pictures=True,
-                download_videos=True,
-                download_video_thumbnails=False,
-                compress_json=False,
-                save_metadata=False,
-                post_metadata_txt_pattern="",
-                max_connection_attempts=3,
-                dirname_pattern=temp_dir
-            )
-            
-            shortcode = re.search(r'(?:p|reel|tv)/([^/?]+)', url)
-            if not shortcode:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-                return False, None, "Invalid Instagram URL"
-            
-            post = Post.from_shortcode(loader.context, shortcode.group(1))
-            loader.download_post(post, target=f"{temp_dir}/post")
-            
-            files = os.listdir(temp_dir)
-            if not files:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-                return False, None, "No media found"
-            
-            media_file = None
-            for f in files:
-                if f.endswith(('.jpg', '.jpeg', '.png', '.mp4', '.mov')):
-                    media_file = os.path.join(temp_dir, f)
-                    break
-            
-            if not media_file:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-                return False, None, "No media file found"
-            
-            with open(media_file, 'rb') as f:
-                file_data = f.read()
-            
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            return True, file_data, os.path.basename(media_file)
-            
-        except Exception as e:
-            logger.error(f"Instagram download error: {e}")
-            return False, None, str(e)
-    
-    @staticmethod
-    async def download_youtube(url: str) -> Tuple[bool, Optional[bytes], Optional[str]]:
-        if yt_dlp is None:
-            return False, None, "yt-dlp not installed"
-            
-        try:
-            temp_dir = tempfile.mkdtemp()
-            output_path = os.path.join(temp_dir, 'video.mp4')
-            
-            ydl_opts = {
-                'outtmpl': output_path,
-                'format': 'best[height<=720]',
-                'quiet': True,
-                'no_warnings': True,
-                'extract_flat': False,
-            }
-            
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
-            
-            if not os.path.exists(output_path):
-                shutil.rmtree(temp_dir, ignore_errors=True)
-                return False, None, "Download failed"
-            
-            with open(output_path, 'rb') as f:
-                file_data = f.read()
-            
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            return True, file_data, 'video.mp4'
-            
-        except Exception as e:
-            logger.error(f"YouTube download error: {e}")
-            return False, None, str(e)
 
 # ============================================================
-# کلاس اصلی ربات با دکمه‌های جدید
+# کلاس اصلی ربات با سرعت بالا و دانلودر
 # ============================================================
+
 class UTYOBot:
     def __init__(self):
         self.application = Application.builder().token(BOT_TOKEN).build()
         self.pending_verifications = {}
         self.executor = ThreadPoolExecutor(max_workers=50)
+        self.downloader = DownloaderSystem()
         self._setup_handlers()
         self._init_system()
         
@@ -1101,28 +1465,38 @@ class UTYOBot:
     def _setup_handlers(self):
         app = self.application
         
+        # دستورات عمومی
         app.add_handler(CommandHandler("start", self.start_command))
         app.add_handler(CommandHandler("help", self.help_command))
         app.add_handler(CommandHandler("referral", self.referral_command))
         app.add_handler(CommandHandler("language", self.language_command))
+        app.add_handler(CommandHandler("download", self.download_command))
         
+        # دکمه‌های منو
         app.add_handler(CallbackQueryHandler(self.main_menu_callback, pattern="^main_menu$"))
         app.add_handler(CallbackQueryHandler(self.lottery_callback, pattern="^lottery$"))
         app.add_handler(CallbackQueryHandler(self.referral_callback, pattern="^referral$"))
         app.add_handler(CallbackQueryHandler(self.guide_callback, pattern="^guide$"))
         app.add_handler(CallbackQueryHandler(self.language_callback, pattern="^language$"))
+        app.add_handler(CallbackQueryHandler(self.download_callback, pattern="^download$"))
         
-        # دکمه‌های جدید
-        app.add_handler(CallbackQueryHandler(self.download_instagram_callback, pattern="^download_instagram$"))
-        app.add_handler(CallbackQueryHandler(self.download_youtube_callback, pattern="^download_youtube$"))
-        app.add_handler(CallbackQueryHandler(self.create_invoice_callback, pattern="^create_invoice$"))
+        # دکمه‌های دانلودر
+        app.add_handler(CallbackQueryHandler(self.download_ig_callback, pattern="^download_ig$"))
+        app.add_handler(CallbackQueryHandler(self.download_yt_callback, pattern="^download_yt$"))
+        app.add_handler(CallbackQueryHandler(self.download_gif_callback, pattern="^download_gif$"))
+        app.add_handler(CallbackQueryHandler(self.download_compress_callback, pattern="^download_compress$"))
+        app.add_handler(CallbackQueryHandler(self.download_quality_callback, pattern="^download_quality_"))
+        app.add_handler(CallbackQueryHandler(self.download_format_callback, pattern="^download_format_"))
         
+        # دکمه‌های اشتراک
         app.add_handler(CallbackQueryHandler(self.subscribe_callback, pattern="^subscribe$"))
         app.add_handler(CallbackQueryHandler(self.confirm_subscribe_callback, pattern="^confirm_subscribe$"))
         
+        # دکمه‌های قرعه‌کشی
         app.add_handler(CallbackQueryHandler(self.join_lottery_callback, pattern="^join_lottery$"))
         app.add_handler(CallbackQueryHandler(self.confirm_payment_callback, pattern="^confirm_payment$"))
         
+        # دکمه‌های پنل مدیریت
         app.add_handler(CallbackQueryHandler(self.admin_panel_callback, pattern="^admin_panel$"))
         app.add_handler(CallbackQueryHandler(self.admin_broadcast_callback, pattern="^admin_broadcast$"))
         app.add_handler(CallbackQueryHandler(self.admin_start_lottery_callback, pattern="^admin_start_lottery$"))
@@ -1132,20 +1506,26 @@ class UTYOBot:
         app.add_handler(CallbackQueryHandler(self.admin_add_api_callback, pattern="^admin_add_api$"))
         app.add_handler(CallbackQueryHandler(self.admin_stats_callback, pattern="^admin_stats$"))
         
+        # تایید/رد تراکنش توسط ادمین
         app.add_handler(CallbackQueryHandler(self.admin_verify_approve_callback, pattern="^admin_verify_approve_"))
         app.add_handler(CallbackQueryHandler(self.admin_verify_reject_callback, pattern="^admin_verify_reject_"))
         
+        # مراحل قرعه‌کشی
         app.add_handler(CallbackQueryHandler(self.start_lottery_confirm_callback, pattern="^start_lottery_confirm$"))
         app.add_handler(CallbackQueryHandler(self.start_lottery_final_callback, pattern="^start_lottery_final$"))
         
+        # برداشت جایزه
         app.add_handler(CallbackQueryHandler(self.withdraw_prize_callback, pattern="^withdraw_prize$"))
         app.add_handler(CallbackQueryHandler(self.confirm_withdraw_callback, pattern="^confirm_withdraw$"))
         
+        # تغییر زبان
         app.add_handler(CallbackQueryHandler(self.set_language_callback, pattern="^set_lang_"))
         
+        # مدیریت پیام‌ها
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         app.add_handler(MessageHandler(filters.PHOTO, self.handle_photo))
         
+        # مدیریت خطاها
         app.add_error_handler(self.error_handler)
 
     # ============================================================
@@ -1298,6 +1678,480 @@ class UTYOBot:
         return result['prize_amount'] if result else 0
 
     # ============================================================
+    # توابع دانلودر
+    # ============================================================
+    
+    async def download_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """دستور /download - نمایش منوی دانلودر"""
+        user_id = update.effective_user.id
+        lang = self._get_user_language(user_id)
+        
+        keyboard = [
+            [InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'download_ig'),
+                callback_data="download_ig"
+            )],
+            [InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'download_yt'),
+                callback_data="download_yt"
+            )],
+            [
+                InlineKeyboardButton(
+                    LanguageManager.get_text(lang, 'download_gif'),
+                    callback_data="download_gif"
+                ),
+                InlineKeyboardButton(
+                    LanguageManager.get_text(lang, 'download_compress'),
+                    callback_data="download_compress"
+                )
+            ],
+            [InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'back'),
+                callback_data="main_menu"
+            )]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        text = LanguageManager.get_text(lang, 'download_title')
+        
+        if update.callback_query:
+            await update.callback_query.edit_message_text(
+                text,
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN
+            )
+        else:
+            await update.message.reply_text(
+                text,
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN
+            )
+    
+    async def download_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """کالبک دکمه دانلودر در منوی اصلی"""
+        query = update.callback_query
+        await query.answer()
+        await self.download_command(update, context)
+    
+    async def download_ig_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """کالبک دانلود از اینستاگرام"""
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        lang = self._get_user_language(user_id)
+        
+        context.user_data['download_mode'] = 'instagram'
+        
+        keyboard = [[InlineKeyboardButton(
+            LanguageManager.get_text(lang, 'back'),
+            callback_data="download"
+        )]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            LanguageManager.get_text(lang, 'download_instagram_text'),
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+    
+    async def download_yt_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """کالبک دانلود از یوتیوب"""
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        lang = self._get_user_language(user_id)
+        
+        context.user_data['download_mode'] = 'youtube'
+        context.user_data['download_step'] = 'quality'
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("🎥 1080p", callback_data="download_quality_1080p"),
+                InlineKeyboardButton("🎥 720p", callback_data="download_quality_720p")
+            ],
+            [
+                InlineKeyboardButton("🎥 480p", callback_data="download_quality_480p"),
+                InlineKeyboardButton("🎥 360p", callback_data="download_quality_360p")
+            ],
+            [
+                InlineKeyboardButton(LanguageManager.get_text(lang, 'download_audio'), callback_data="download_quality_audio"),
+                InlineKeyboardButton(LanguageManager.get_text(lang, 'download_subtitle'), callback_data="download_quality_subtitle")
+            ],
+            [InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'back'),
+                callback_data="download"
+            )]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            LanguageManager.get_text(lang, 'download_quality'),
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+    
+    async def download_quality_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """انتخاب کیفیت دانلود یوتیوب"""
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        lang = self._get_user_language(user_id)
+        
+        quality = query.data.replace('download_quality_', '')
+        context.user_data['download_quality'] = quality
+        context.user_data['download_step'] = 'format'
+        
+        if quality == 'subtitle':
+            context.user_data['download_format'] = 'subtitle'
+            context.user_data['download_step'] = 'link'
+            await query.edit_message_text(
+                LanguageManager.get_text(lang, 'download_guide'),
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+        
+        keyboard = [
+            [
+                InlineKeyboardButton(LanguageManager.get_text(lang, 'download_video'), callback_data="download_format_video"),
+                InlineKeyboardButton(LanguageManager.get_text(lang, 'download_audio'), callback_data="download_format_audio")
+            ],
+            [InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'back'),
+                callback_data="download_yt"
+            )]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            LanguageManager.get_text(lang, 'download_format'),
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+    
+    async def download_format_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """انتخاب فرمت دانلود یوتیوب"""
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        lang = self._get_user_language(user_id)
+        
+        format_type = query.data.replace('download_format_', '')
+        context.user_data['download_format'] = format_type
+        context.user_data['download_step'] = 'link'
+        
+        await query.edit_message_text(
+            LanguageManager.get_text(lang, 'download_guide'),
+            parse_mode=ParseMode.MARKDOWN
+        )
+    
+    async def download_gif_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """کالبک تبدیل به GIF"""
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        lang = self._get_user_language(user_id)
+        
+        context.user_data['download_mode'] = 'gif'
+        
+        keyboard = [[InlineKeyboardButton(
+            LanguageManager.get_text(lang, 'back'),
+            callback_data="download"
+        )]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            LanguageManager.get_text(lang, 'download_gif_text'),
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+    
+    async def download_compress_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """کالبک فشرده‌سازی ویدیو"""
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        lang = self._get_user_language(user_id)
+        
+        context.user_data['download_mode'] = 'compress'
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("📦 Low", callback_data="download_compress_low"),
+                InlineKeyboardButton("📦 Medium", callback_data="download_compress_medium")
+            ],
+            [InlineKeyboardButton("📦 High", callback_data="download_compress_high")],
+            [InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'back'),
+                callback_data="download"
+            )]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            LanguageManager.get_text(lang, 'download_compress_text') + "\n\n" + "🎯 **Select compression quality:**",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+    
+    async def download_compress_quality_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """انتخاب کیفیت فشرده‌سازی"""
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        lang = self._get_user_language(user_id)
+        
+        quality = query.data.replace('download_compress_', '')
+        context.user_data['compress_quality'] = quality
+        context.user_data['download_mode'] = 'compress_ready'
+        
+        keyboard = [[InlineKeyboardButton(
+            LanguageManager.get_text(lang, 'back'),
+            callback_data="download"
+        )]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            "📦 **Send the video you want to compress.**\n\n"
+            f"🎯 Quality: {quality.upper()}\n\n"
+            "📤 Send a video file.",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+    
+    async def _handle_download_link(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """پردازش لینک دانلود"""
+        user_id = update.effective_user.id
+        url = update.message.text.strip()
+        lang = self._get_user_language(user_id)
+        
+        # بررسی لینک اینستاگرام
+        if self.downloader.is_instagram_link(url):
+            await update.message.reply_text(
+                LanguageManager.get_text(lang, 'download_processing')
+            )
+            
+            result = await self.downloader.download_instagram(url, user_id)
+            
+            if result['success']:
+                try:
+                    file_size = self.downloader.get_file_size_readable(result['file'])
+                    
+                    if result['type'] == 'video':
+                        await update.message.reply_video(
+                            video=open(result['file'], 'rb'),
+                            caption=LanguageManager.get_text(lang, 'download_complete', 
+                                result['title'][:50], file_size),
+                            supports_streaming=True
+                        )
+                    else:
+                        await update.message.reply_photo(
+                            photo=open(result['file'], 'rb'),
+                            caption=LanguageManager.get_text(lang, 'download_complete', 
+                                result['title'][:50], file_size)
+                        )
+                    
+                    os.remove(result['file'])
+                    
+                    # افزودن امتیاز
+                    user = user_manager.get_user(user_id)
+                    new_points = (user['total_participations'] or 0) + 1
+                    user_manager.update_user(user_id, total_participations=new_points)
+                    
+                    await update.message.reply_text(
+                        LanguageManager.get_text(lang, 'download_points', new_points)
+                    )
+                    
+                except Exception as e:
+                    logger.error(f"Error sending file: {e}")
+                    await update.message.reply_text(
+                        LanguageManager.get_text(lang, 'download_failed', str(e))
+                    )
+            else:
+                await update.message.reply_text(
+                    LanguageManager.get_text(lang, 'download_failed', result.get('message', 'Unknown error'))
+                )
+            return
+        
+        # بررسی لینک یوتیوب
+        if self.downloader.is_youtube_link(url):
+            await update.message.reply_text(
+                LanguageManager.get_text(lang, 'download_processing')
+            )
+            
+            quality = context.user_data.get('download_quality', '720p')
+            format_type = context.user_data.get('download_format', 'video')
+            
+            result = await self.downloader.download_youtube(url, user_id, quality, format_type)
+            
+            if result['success']:
+                try:
+                    if format_type == 'subtitle':
+                        subs_text = "📝 **Subtitles found:**\n\n"
+                        for lang_code, subs in result.get('subtitles', {}).items():
+                            subs_text += f"• {lang_code}: {len(subs)} subtitle(s)\n"
+                        for lang_code, subs in result.get('auto_subtitles', {}).items():
+                            subs_text += f"• {lang_code} (auto): {len(subs)} subtitle(s)\n"
+                        
+                        await update.message.reply_text(subs_text[:4000])
+                        
+                        user = user_manager.get_user(user_id)
+                        new_points = (user['total_participations'] or 0) + 1
+                        user_manager.update_user(user_id, total_participations=new_points)
+                        
+                        await update.message.reply_text(
+                            LanguageManager.get_text(lang, 'download_points', new_points)
+                        )
+                    else:
+                        file_size = self.downloader.get_file_size_readable(result['file'])
+                        
+                        if format_type == 'audio':
+                            await update.message.reply_audio(
+                                audio=open(result['file'], 'rb'),
+                                caption=LanguageManager.get_text(lang, 'download_complete', 
+                                    result['title'][:50], file_size),
+                                performer="YouTube",
+                                title=result['title'][:50]
+                            )
+                        else:
+                            await update.message.reply_video(
+                                video=open(result['file'], 'rb'),
+                                caption=LanguageManager.get_text(lang, 'download_complete', 
+                                    result['title'][:50], file_size),
+                                supports_streaming=True
+                            )
+                        
+                        os.remove(result['file'])
+                        
+                        user = user_manager.get_user(user_id)
+                        new_points = (user['total_participations'] or 0) + 1
+                        user_manager.update_user(user_id, total_participations=new_points)
+                        
+                        await update.message.reply_text(
+                            LanguageManager.get_text(lang, 'download_points', new_points)
+                        )
+                    
+                except Exception as e:
+                    logger.error(f"Error sending file: {e}")
+                    await update.message.reply_text(
+                        LanguageManager.get_text(lang, 'download_failed', str(e))
+                    )
+            else:
+                await update.message.reply_text(
+                    LanguageManager.get_text(lang, 'download_failed', result.get('message', 'Unknown error'))
+                )
+            return
+        
+        await update.message.reply_text(
+            LanguageManager.get_text(lang, 'download_not_supported')
+        )
+    
+    async def _handle_download_file(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """پردازش فایل برای GIF یا فشرده‌سازی"""
+        user_id = update.effective_user.id
+        lang = self._get_user_language(user_id)
+        
+        mode = context.user_data.get('download_mode')
+        
+        if mode == 'gif':
+            await update.message.reply_text(
+                LanguageManager.get_text(lang, 'download_processing')
+            )
+            
+            # دریافت فایل ویدیو
+            if update.message.video:
+                video_file = await update.message.video.get_file()
+                temp_path = f"downloads/temp_{user_id}_{int(time.time())}.mp4"
+                await video_file.download_to_drive(temp_path)
+                
+                result = await self.downloader.convert_to_gif(temp_path, user_id)
+                
+                if result['success']:
+                    try:
+                        await update.message.reply_document(
+                            document=open(result['file'], 'rb'),
+                            caption=LanguageManager.get_text(lang, 'download_complete',
+                                "GIF", self.downloader.get_file_size_readable(result['file']))
+                        )
+                        os.remove(result['file'])
+                        
+                        user = user_manager.get_user(user_id)
+                        new_points = (user['total_participations'] or 0) + 1
+                        user_manager.update_user(user_id, total_participations=new_points)
+                        
+                        await update.message.reply_text(
+                            LanguageManager.get_text(lang, 'download_points', new_points)
+                        )
+                    except Exception as e:
+                        await update.message.reply_text(
+                            LanguageManager.get_text(lang, 'download_failed', str(e))
+                        )
+                else:
+                    await update.message.reply_text(
+                        LanguageManager.get_text(lang, 'download_failed', result.get('message', 'Unknown error'))
+                    )
+                
+                # پاکسازی فایل موقت
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                return
+        
+        elif mode == 'compress_ready':
+            await update.message.reply_text(
+                LanguageManager.get_text(lang, 'download_processing')
+            )
+            
+            if update.message.video:
+                video_file = await update.message.video.get_file()
+                temp_path = f"downloads/temp_{user_id}_{int(time.time())}.mp4"
+                await video_file.download_to_drive(temp_path)
+                
+                quality = context.user_data.get('compress_quality', 'medium')
+                result = await self.downloader.compress_video(temp_path, user_id, quality)
+                
+                if result['success']:
+                    try:
+                        saved_text = f" (Saved: {result['saved_percent']}%)" if result.get('saved_percent') else ""
+                        await update.message.reply_video(
+                            video=open(result['file'], 'rb'),
+                            caption=LanguageManager.get_text(lang, 'download_complete',
+                                "Compressed Video", self.downloader.get_file_size_readable(result['file'])) + saved_text,
+                            supports_streaming=True
+                        )
+                        os.remove(result['file'])
+                        
+                        user = user_manager.get_user(user_id)
+                        new_points = (user['total_participations'] or 0) + 1
+                        user_manager.update_user(user_id, total_participations=new_points)
+                        
+                        await update.message.reply_text(
+                            LanguageManager.get_text(lang, 'download_points', new_points)
+                        )
+                    except Exception as e:
+                        await update.message.reply_text(
+                            LanguageManager.get_text(lang, 'download_failed', str(e))
+                        )
+                else:
+                    await update.message.reply_text(
+                        LanguageManager.get_text(lang, 'download_failed', result.get('message', 'Unknown error'))
+                    )
+                
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                return
+        
+        await update.message.reply_text(
+            "❌ Please use the download menu to select an option first.",
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+    # ============================================================
     # دستورات عمومی
     # ============================================================
     
@@ -1350,7 +2204,7 @@ class UTYOBot:
         await self._show_language_selector(update, user_id)
 
     # ============================================================
-    # کالبک‌های منوی اصلی با دکمه‌های جدید
+    # کالبک‌های منوی اصلی
     # ============================================================
     
     async def main_menu_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1373,18 +2227,9 @@ class UTYOBot:
                 LanguageManager.get_text(lang, 'guide'),
                 callback_data="guide"
             )],
-            # دکمه‌های جدید
             [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'download_instagram'),
-                callback_data="download_instagram"
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'download_youtube'),
-                callback_data="download_youtube"
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'invoice_button'),
-                callback_data="create_invoice"
+                LanguageManager.get_text(lang, 'download'),
+                callback_data="download"
             )],
             [InlineKeyboardButton(
                 LanguageManager.get_text(lang, 'language'),
@@ -1405,11 +2250,7 @@ class UTYOBot:
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
-
-    # ============================================================
-    # کالبک‌های دکمه‌های منو
-    # ============================================================
-
+    
     async def lottery_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -1452,20 +2293,20 @@ class UTYOBot:
         
         await query.edit_message_text(
             f"🎰 **UTYOB {LanguageManager.get_text(lang, 'lottery')}**\n\n"
-            f"👤 User: {user['first_name'] or user_id}\n\n"
-            f"💰 Prize: Up to $10,000\n"
-            f"🎯 Fair: Yes",
+            f"👤 {LanguageManager.get_text(lang, 'user', lang=lang)}: {user['first_name'] or user_id}\n\n"
+            f"💰 {LanguageManager.get_text(lang, 'prize', lang=lang)}: Up to $10,000\n"
+            f"🎯 {LanguageManager.get_text(lang, 'fair', lang=lang)}: Yes",
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
-
+    
     async def referral_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
         
         user_id = query.from_user.id
         await self._show_referral(update, user_id)
-
+    
     async def guide_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -1484,89 +2325,38 @@ class UTYOBot:
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
-
+    
     async def language_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
         
         user_id = query.from_user.id
         await self._show_language_selector(update, user_id)
-
-    # ============================================================
-    # کالبک‌های دانلودر
-    # ============================================================
     
-    async def download_instagram_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def set_language_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
         
         user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
+        lang_code = query.data.replace('set_lang_', '')
         
-        context.user_data['download_type'] = 'instagram'
-        
-        keyboard = [[InlineKeyboardButton(
-            LanguageManager.get_text(lang, 'back'),
-            callback_data="main_menu"
-        )]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            LanguageManager.get_text(lang, 'send_link_instagram'),
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-
-    async def download_youtube_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        
-        context.user_data['download_type'] = 'youtube'
-        
-        keyboard = [[InlineKeyboardButton(
-            LanguageManager.get_text(lang, 'back'),
-            callback_data="main_menu"
-        )]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            LanguageManager.get_text(lang, 'send_link_youtube'),
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-
-    async def create_invoice_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        
-        invoice_url = "https://mbuiop.github.io/Tablikgram/"
-        
-        keyboard = [
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'open_invoice'),
-                url=invoice_url
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'back'),
+        if self._set_user_language(user_id, lang_code):
+            lang = self._get_user_language(user_id)
+            
+            keyboard = [[InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'main_menu_btn'),
                 callback_data="main_menu"
-            )]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            LanguageManager.get_text(lang, 'invoice_description'),
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
+            )]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                f"✅ Language changed to {LanguageManager.get_language_name(lang_code)}!\n\n"
+                f"🌐 زبان به {LanguageManager.get_language_name(lang_code)} تغییر یافت!",
+                reply_markup=reply_markup
+            )
 
     # ============================================================
-    # کالبک‌های اشتراک
+    # کالبک‌های اشتراک (همانند کد قبلی)
     # ============================================================
     
     async def subscribe_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1696,7 +2486,7 @@ class UTYOBot:
             )
 
     # ============================================================
-    # کالبک‌های شرکت در قرعه‌کشی
+    # کالبک‌های شرکت در قرعه‌کشی (همانند کد قبلی)
     # ============================================================
     
     async def join_lottery_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1814,7 +2604,7 @@ class UTYOBot:
             )
 
     # ============================================================
-    # کالبک‌های تایید/رد توسط ادمین
+    # کالبک‌های تایید/رد توسط ادمین (همانند کد قبلی)
     # ============================================================
     
     async def admin_verify_approve_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1952,7 +2742,7 @@ class UTYOBot:
         )
 
     # ============================================================
-    # کالبک‌های پنل مدیریت
+    # کالبک‌های پنل مدیریت (همانند کد قبلی - خلاصه شده)
     # ============================================================
     
     async def admin_panel_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1989,6 +2779,7 @@ class UTYOBot:
             [InlineKeyboardButton(f"💰 واریز به برندگان ({unpaid_winners})", callback_data="admin_pay_winners")],
             [InlineKeyboardButton("🔑 اضافه کردن API", callback_data="admin_add_api")],
             [InlineKeyboardButton("📈 آمار و اطلاعات", callback_data="admin_stats")],
+            [InlineKeyboardButton("🧹 پاکسازی فایل‌های دانلود", callback_data="admin_cleanup_downloads")],
             [InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -2000,7 +2791,8 @@ class UTYOBot:
             f"✅ اشتراک فعال: {active_users:,}\n"
             f"⏳ در انتظار تایید: {pending_count}\n"
             f"💰 برندگان پرداخت نشده: {unpaid_winners}\n"
-            f"🔑 کلیدهای API: {len(payment_verifier.apis)}\n\n"
+            f"🔑 کلیدهای API: {len(payment_verifier.apis)}\n"
+            f"📥 فایل‌های دانلود: {len(os.listdir('downloads')) if os.path.exists('downloads') else 0}\n\n"
             f"👥 **لیست کاربران:**\n{users_text}\n\n"
             f"انتخاب کنید:"
         )
@@ -2011,6 +2803,27 @@ class UTYOBot:
             parse_mode=ParseMode.MARKDOWN
         )
     
+    async def admin_cleanup_downloads_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """پاکسازی فایل‌های دانلود"""
+        query = update.callback_query        await query.answer()
+        
+        user_id = query.from_user.id
+        if user_id not in ADMIN_IDS:
+            return
+        
+        deleted = self.downloader.cleanup_all_users()
+        
+        keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f"✅ **پاکسازی فایل‌های دانلود کامل شد!**\n\n"
+            f"🧹 فایل‌های حذف شده: {deleted}",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+    
+    # بقیه توابع مدیریت (همانند کد قبلی - خلاصه شده)
     async def admin_broadcast_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -2068,6 +2881,99 @@ class UTYOBot:
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
+    
+    async def start_lottery_confirm_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        if user_id not in ADMIN_IDS:
+            return
+        
+        context.user_data['lottery_step'] = 2
+        
+        keyboard = [[InlineKeyboardButton("🔙 انصراف", callback_data="admin_panel")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            "🎯 **تعداد برندگان**\n\n"
+            "لطفاً تعداد برندگان این قرعه‌کشی را وارد کنید:\n"
+            "(حداکثر ۱۰۰ نفر)\n\n"
+            "مثال: `5`",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+    
+    async def start_lottery_final_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        if user_id not in ADMIN_IDS:
+            return
+        
+        winners_count = context.user_data.get('lottery_winners', 1)
+        prize_per_winner = context.user_data.get('lottery_prize', 100)
+        
+        success, result = lottery_system.start_lottery(winners_count, prize_per_winner)
+        
+        if success:
+            for winner_id in result['winners']:
+                winner_lang = self._get_user_language(winner_id)
+                keyboard = [
+                    [InlineKeyboardButton(
+                        LanguageManager.get_text(winner_lang, 'withdraw_prize'),
+                        callback_data="withdraw_prize"
+                    )],
+                    [InlineKeyboardButton(
+                        LanguageManager.get_text(winner_lang, 'next_lottery'),
+                        callback_data="main_menu"
+                    )]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                try:
+                    await self.application.bot.send_message(
+                        chat_id=winner_id,
+                        text=LanguageManager.get_text(winner_lang, 'winner_message',
+                            prize_per_winner, result['lottery_id']
+                        ),
+                        reply_markup=reply_markup,
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                except Exception as e:
+                    logger.error(f"Error sending to {winner_id}: {e}")
+            
+            winners_list = "\n".join([f"• کاربر {uid}" for uid in result['winners']])
+            
+            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                f"✅ **قرعه‌کشی با موفقیت انجام شد!** 🎉\n\n"
+                f"📊 **جزئیات:**\n"
+                f"• شماره قرعه‌کشی: {result['lottery_id']}\n"
+                f"• تعداد برندگان: {winners_count}\n"
+                f"• جایزه هر نفر: ${prize_per_winner:,}\n"
+                f"• کل جایزه: ${winners_count * prize_per_winner:,}\n\n"
+                f"👥 **برندگان:**\n{winners_list}\n\n"
+                f"✅ پیام‌های تبریک به برندگان ارسال شد.",
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN
+            )
+        else:
+            keyboard = [
+                [InlineKeyboardButton("🔄 تلاش مجدد", callback_data="admin_start_lottery")],
+                [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                f"❌ **خطا در اجرای قرعه‌کشی**\n\n"
+                f"🔹 دلیل: {result}",
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN
+            )
     
     async def admin_manual_verify_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
@@ -2243,7 +3149,8 @@ class UTYOBot:
             f"• نرخ برخورد: {cache_stats['hit_rate']:.1f}%\n"
             f"• API‌ها: {len(payment_verifier.apis)}\n"
             f"• شاردها: {DB_SHARDS}\n"
-            f"• رشته‌های اجرایی: ۵۰\n\n"
+            f"• رشته‌های اجرایی: ۵۰\n"
+            f"📥 فایل‌های دانلود: {len(os.listdir('downloads')) if os.path.exists('downloads') else 0}\n\n"
             f"👥 **لیست کاربران:**\n{users_text}"
         )
         
@@ -2254,102 +3161,7 @@ class UTYOBot:
         )
 
     # ============================================================
-    # کالبک‌های مراحل قرعه‌کشی
-    # ============================================================
-    
-    async def start_lottery_confirm_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        if user_id not in ADMIN_IDS:
-            return
-        
-        context.user_data['lottery_step'] = 2
-        
-        keyboard = [[InlineKeyboardButton("🔙 انصراف", callback_data="admin_panel")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            "🎯 **تعداد برندگان**\n\n"
-            "لطفاً تعداد برندگان این قرعه‌کشی را وارد کنید:\n"
-            "(حداکثر ۱۰۰ نفر)\n\n"
-            "مثال: `5`",
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    async def start_lottery_final_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        if user_id not in ADMIN_IDS:
-            return
-        
-        winners_count = context.user_data.get('lottery_winners', 1)
-        prize_per_winner = context.user_data.get('lottery_prize', 100)
-        
-        success, result = lottery_system.start_lottery(winners_count, prize_per_winner)
-        
-        if success:
-            for winner_id in result['winners']:
-                winner_lang = self._get_user_language(winner_id)
-                keyboard = [
-                    [InlineKeyboardButton(
-                        LanguageManager.get_text(winner_lang, 'withdraw_prize'),
-                        callback_data="withdraw_prize"
-                    )],
-                    [InlineKeyboardButton(
-                        LanguageManager.get_text(winner_lang, 'next_lottery'),
-                        callback_data="main_menu"
-                    )]
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                
-                try:
-                    await self.application.bot.send_message(
-                        chat_id=winner_id,
-                        text=f"🎉 **تبریک! شما برنده قرعه‌کشی شدید!**\n\n💰 مبلغ جایزه: ${prize_per_winner:,}\n🏆 شماره قرعه‌کشی: {result['lottery_id']}\n\nبرای برداشت جایزه خود روی دکمه زیر کلیک کنید:",
-                        reply_markup=reply_markup,
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-                except Exception as e:
-                    logger.error(f"Error sending to {winner_id}: {e}")
-            
-            winners_list = "\n".join([f"• کاربر {uid}" for uid in result['winners']])
-            
-            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                f"✅ **قرعه‌کشی با موفقیت انجام شد!** 🎉\n\n"
-                f"📊 **جزئیات:**\n"
-                f"• شماره قرعه‌کشی: {result['lottery_id']}\n"
-                f"• تعداد برندگان: {winners_count}\n"
-                f"• جایزه هر نفر: ${prize_per_winner:,}\n"
-                f"• کل جایزه: ${winners_count * prize_per_winner:,}\n\n"
-                f"👥 **برندگان:**\n{winners_list}\n\n"
-                f"✅ پیام‌های تبریک به برندگان ارسال شد.",
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-        else:
-            keyboard = [
-                [InlineKeyboardButton("🔄 تلاش مجدد", callback_data="admin_start_lottery")],
-                [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                f"❌ **خطا در اجرای قرعه‌کشی**\n\n"
-                f"🔹 دلیل: {result}",
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-
-    # ============================================================
-    # کالبک‌های برداشت جایزه
+    # کالبک‌های برداشت جایزه (همانند کد قبلی)
     # ============================================================
     
     async def withdraw_prize_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2584,83 +3396,13 @@ class UTYOBot:
                 )
 
     # ============================================================
-    # مدیریت پیام‌ها با پشتیبانی از دانلودر
+    # مدیریت پیام‌ها
     # ============================================================
     
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         text = update.message.text
         lang = self._get_user_language(user_id)
-        
-        # مدیریت دانلود
-        download_type = context.user_data.get('download_type')
-        if download_type:
-            link = text.strip()
-            
-            is_valid = False
-            if download_type == 'instagram':
-                is_valid = re.match(r'https?://(www\.)?instagram\.com/(p|reel|tv)/[^/?]+', link) is not None
-            elif download_type == 'youtube':
-                is_valid = re.match(r'https?://(www\.)?(youtube\.com|youtu\.be)/.+', link) is not None
-            
-            if not is_valid:
-                await update.message.reply_text(
-                    LanguageManager.get_text(lang, 'invalid_link'),
-                    parse_mode=ParseMode.MARKDOWN
-                )
-                return
-            
-            status_msg = await update.message.reply_text(
-                LanguageManager.get_text(lang, 'downloading'),
-                parse_mode=ParseMode.MARKDOWN
-            )
-            
-            if download_type == 'instagram':
-                success, file_data, filename = await DownloadManager.download_instagram(link)
-            else:
-                success, file_data, filename = await DownloadManager.download_youtube(link)
-            
-            if success and file_data:
-                try:
-                    if filename and filename.endswith(('.jpg', '.jpeg', '.png')):
-                        await update.message.reply_photo(
-                            photo=file_data,
-                            caption=f"✅ {LanguageManager.get_text(lang, 'download_success')}"
-                        )
-                    else:
-                        await update.message.reply_video(
-                            video=file_data,
-                            caption=f"✅ {LanguageManager.get_text(lang, 'download_success')}"
-                        )
-                except Exception:
-                    await update.message.reply_document(
-                        document=file_data,
-                        filename=filename or 'download',
-                        caption=f"✅ {LanguageManager.get_text(lang, 'download_success')}"
-                    )
-                
-                await status_msg.delete()
-                context.user_data['download_type'] = None
-                
-                keyboard = [[InlineKeyboardButton(
-                    LanguageManager.get_text(lang, 'main_menu_btn'),
-                    callback_data="main_menu"
-                )]]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                await update.message.reply_text(
-                    LanguageManager.get_text(lang, 'main_menu'),
-                    reply_markup=reply_markup,
-                    parse_mode=ParseMode.MARKDOWN
-                )
-            else:
-                await status_msg.delete()
-                await update.message.reply_text(
-                    LanguageManager.get_text(lang, 'download_failed'),
-                    parse_mode=ParseMode.MARKDOWN
-                )
-                context.user_data['download_type'] = None
-            
-            return
         
         # بررسی اقدامات ادمین
         admin_action = context.user_data.get('admin_action')
@@ -2681,7 +3423,13 @@ class UTYOBot:
             await self._send_poll(update, text, context)
             return
         
-        # دریافت هش تراکنش
+        # بررسی حالت دانلودر
+        download_mode = context.user_data.get('download_mode')
+        if download_mode in ['instagram', 'youtube']:
+            await self._handle_download_link(update, context)
+            return
+        
+        # دریافت هش تراکنش برای تایید دستی
         if context.user_data.get('waiting_for_tx_hash'):
             tx_hash = text.strip()
             
@@ -2807,7 +3555,7 @@ class UTYOBot:
             )
             return
         
-        # مرحله برداشت
+        # مرحله برداشت: دریافت آدرس کیف پول
         if context.user_data.get('withdraw_pending'):
             wallet_address = text.strip()
             
@@ -3055,6 +3803,12 @@ class UTYOBot:
         user_id = update.effective_user.id
         lang = self._get_user_language(user_id)
         
+        # بررسی حالت دانلودر برای پردازش فایل
+        download_mode = context.user_data.get('download_mode')
+        if download_mode in ['gif', 'compress_ready']:
+            await self._handle_download_file(update, context)
+            return
+        
         keyboard = [[InlineKeyboardButton(
             LanguageManager.get_text(lang, 'main_menu_btn'),
             callback_data="main_menu"
@@ -3089,6 +3843,24 @@ class UTYOBot:
         except:
             pass
 
+
+# ============================================================
+# تابع پاکسازی خودکار فایل‌های دانلود (اجرا در پس‌زمینه)
+# ============================================================
+
+async def cleanup_scheduler():
+    """پاکسازی خودکار فایل‌های دانلود هر ۶ ساعت"""
+    downloader = DownloaderSystem()
+    while True:
+        try:
+            deleted = downloader.cleanup_all_users()
+            if deleted > 0:
+                logger.info(f"🧹 Cleaned up {deleted} old download files")
+        except Exception as e:
+            logger.error(f"Cleanup scheduler error: {e}")
+        await asyncio.sleep(21600)  # 6 hours
+
+
 # ============================================================
 # اجرای ربات
 # ============================================================
@@ -3103,6 +3875,10 @@ async def main():
         logger.info(f"🔑 APIs: {len(TRONGRID_APIS)}")
         logger.info(f"⚡ Threads: 50")
         logger.info(f"💾 Cache size: 20,000 items")
+        logger.info(f"📥 Downloads dir: downloads/")
+        
+        # شروع تسک پاکسازی خودکار
+        asyncio.create_task(cleanup_scheduler())
         
         await bot.application.initialize()
         await bot.application.start()
@@ -3118,6 +3894,7 @@ async def main():
     except Exception as e:
         logger.error(f"❌ Error: {e}")
         raise
+
 
 if __name__ == '__main__':
     try:
