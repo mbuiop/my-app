@@ -20,7 +20,6 @@ import traceback
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Optional, Any
 from concurrent.futures import ThreadPoolExecutor
-from flask import Flask, request, jsonify
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
@@ -30,7 +29,7 @@ from telegram.constants import ParseMode
 # تنظیمات اولیه
 # ============================================================
 logging.basicConfig(
-    level=logging.DEBUG,  # تغییر به DEBUG برای مشاهده همه خطاها
+    level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('bot.log'),
@@ -39,7 +38,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# تنظیمات لاگینگ برای کتابخانه‌های دیگر
 logging.getLogger('httpx').setLevel(logging.WARNING)
 logging.getLogger('httpcore').setLevel(logging.WARNING)
 
@@ -56,9 +54,8 @@ PAYMENT_AMOUNT = 100
 DB_SHARDS = 500
 CACHE_TTL = 300
 
-# تنظیمات دانلودر
 MAX_DOWNLOADS_PER_DAY = 10
-MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
+MAX_FILE_SIZE = 50 * 1024 * 1024
 DOWNLOAD_EXPIRY_HOURS = 24
 
 # ============================================================
@@ -147,6 +144,7 @@ class LanguageManager:
             'download_subtitle': "📝 Subtitles",
             'download_points': "🎁 **+1 point** added!\n📊 Total points: {}",
             'download_cleanup': "🧹 Downloaded files cleaned up!",
+            'winner_message': "🎉 **Congratulations!** 🎉\n\nYou are a winner in lottery #{}\n💰 Prize: ${:,}\n\nClick the button below to withdraw your prize:",
         },
         'fa': {
             'name': 'فارسی',
@@ -229,6 +227,7 @@ class LanguageManager:
             'download_subtitle': "📝 زیرنویس",
             'download_points': "🎁 **۱ امتیاز** اضافه شد!\n📊 مجموع امتیازات: {}",
             'download_cleanup': "🧹 فایل‌های دانلود شده پاکسازی شدند!",
+            'winner_message': "🎉 **تبریک!** 🎉\n\nشما برنده قرعه‌کشی #{}\n💰 جایزه: ${:,}\n\nبرای برداشت جایزه، روی دکمه زیر کلیک کنید:",
         },
         'tr': {
             'name': 'Türkçe',
@@ -311,6 +310,7 @@ class LanguageManager:
             'download_subtitle': "📝 Altyazı",
             'download_points': "🎁 **1 puan** eklendi!\n📊 Toplam puan: {}",
             'download_cleanup': "🧹 İndirilen dosyalar temizlendi!",
+            'winner_message': "🎉 **Tebrikler!** 🎉\n\n#{}\n💰 Ödül: ${:,}\n\nÖdülünüzü çekmek için aşağıdaki butona tıklayın:",
         }
     }
     
@@ -343,400 +343,9 @@ class LanguageManager:
     def get_language_emoji(cls, lang_code: str) -> str:
         return cls.LANGUAGES.get(lang_code, {}).get('emoji', '🇬🇧')
 
-
-# ============================================================
-# سیستم دانلودر
-# ============================================================
-
-class DownloaderSystem:
-    def __init__(self):
-        self.downloads_dir = "downloads"
-        os.makedirs(self.downloads_dir, exist_ok=True)
-        self.user_downloads = {}
-        self.active_downloads = {}
-        self.max_file_size = MAX_FILE_SIZE
-        self.max_downloads_per_day = MAX_DOWNLOADS_PER_DAY
-        self.expiry_hours = DOWNLOAD_EXPIRY_HOURS
-        
-        try:
-            subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
-            self.ffmpeg_available = True
-        except:
-            self.ffmpeg_available = False
-            logger.warning("⚠️ FFmpeg not installed! GIF conversion and compression will be disabled.")
-
-    def is_instagram_link(self, url: str) -> bool:
-        patterns = [
-            r'instagram\.com/p/',
-            r'instagram\.com/reel/',
-            r'instagram\.com/stories/',
-            r'instagram\.com/tv/',
-            r'instagram\.com/s/',
-            r'instagr\.am/',
-        ]
-        return any(re.search(pattern, url, re.IGNORECASE) for pattern in patterns)
-
-    def is_youtube_link(self, url: str) -> bool:
-        patterns = [
-            r'youtube\.com/watch\?v=',
-            r'youtu\.be/',
-            r'youtube\.com/shorts/',
-            r'youtube\.com/playlist\?',
-            r'youtube\.com/embed/',
-            r'm\.youtube\.com/watch\?v=',
-            r'youtube\.com/v/',
-            r'youtube\.com/e/',
-        ]
-        return any(re.search(pattern, url, re.IGNORECASE) for pattern in patterns)
-
-    def extract_video_id(self, url: str) -> Optional[str]:
-        patterns = [
-            r'(?:v=|\/)([0-9A-Za-z_-]{11})(?:[?&]|$)',
-            r'(?:embed\/)([0-9A-Za-z_-]{11})',
-            r'(?:youtu\.be\/)([0-9A-Za-z_-]{11})',
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, url)
-            if match:
-                return match.group(1)
-        return None
-
-    def get_user_dir(self, user_id: int) -> str:
-        user_dir = f"{self.downloads_dir}/user_{user_id}"
-        os.makedirs(user_dir, exist_ok=True)
-        return user_dir
-
-    def get_file_size_readable(self, filepath: str) -> str:
-        try:
-            size = os.path.getsize(filepath)
-            for unit in ['B', 'KB', 'MB', 'GB']:
-                if size < 1024.0:
-                    return f"{size:.2f} {unit}"
-                size /= 1024.0
-            return f"{size:.2f} TB"
-        except:
-            return "Unknown"
-
-    def check_download_limit(self, user_id: int) -> bool:
-        today = datetime.now().strftime('%Y-%m-%d')
-        if user_id in self.user_downloads:
-            if self.user_downloads[user_id]['date'] == today:
-                return self.user_downloads[user_id]['count'] < self.max_downloads_per_day
-        return True
-
-    def increment_download_count(self, user_id: int):
-        today = datetime.now().strftime('%Y-%m-%d')
-        if user_id not in self.user_downloads:
-            self.user_downloads[user_id] = {'count': 0, 'date': today}
-        elif self.user_downloads[user_id]['date'] != today:
-            self.user_downloads[user_id] = {'count': 0, 'date': today}
-        self.user_downloads[user_id]['count'] += 1
-
-    async def download_instagram(self, url: str, user_id: int) -> Dict:
-        try:
-            if not self.check_download_limit(user_id):
-                return {'success': False, 'error': 'limit_reached', 'message': 'Daily limit reached'}
-
-            user_dir = self.get_user_dir(user_id)
-            
-            ydl_opts = {
-                'outtmpl': f'{user_dir}/instagram_%(id)s.%(ext)s',
-                'quiet': True,
-                'no_warnings': True,
-                'restrictfilenames': True,
-                'geo_bypass': True,
-                'socket_timeout': 30,
-                'retries': 3,
-                'max_filesize': self.max_file_size,
-                'noplaylist': True,
-                'extract_flat': False,
-            }
-
-            loop = asyncio.get_event_loop()
-            
-            def download():
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(url, download=True)
-                    filename = ydl.prepare_filename(info)
-                    if not os.path.exists(filename):
-                        for f in os.listdir(user_dir):
-                            if f.startswith(f"instagram_{info.get('id', '')}"):
-                                filename = os.path.join(user_dir, f)
-                                break
-                    return filename, info
-
-            filename, info = await loop.run_in_executor(None, download)
-
-            if os.path.exists(filename):
-                file_size = os.path.getsize(filename)
-                if file_size > self.max_file_size:
-                    os.remove(filename)
-                    return {'success': False, 'error': 'file_too_large', 'message': f'File too large ({self.get_file_size_readable(filename)})'}
-
-                self.increment_download_count(user_id)
-                
-                return {
-                    'success': True,
-                    'file': filename,
-                    'title': info.get('title', 'Instagram Content'),
-                    'size': file_size,
-                    'type': 'video' if info.get('is_video', False) else 'photo'
-                }
-
-            return {'success': False, 'error': 'download_failed', 'message': 'File not found after download'}
-
-        except Exception as e:
-            logger.error(f"Instagram download error: {e}")
-            return {'success': False, 'error': 'error', 'message': str(e)}
-
-    async def download_youtube(self, url: str, user_id: int, quality: str = "720p", format_type: str = "video") -> Dict:
-        try:
-            if not self.check_download_limit(user_id):
-                return {'success': False, 'error': 'limit_reached', 'message': 'Daily limit reached'}
-
-            user_dir = self.get_user_dir(user_id)
-            
-            quality_map = {
-                '1080p': 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]',
-                '720p': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]',
-                '480p': 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]',
-                '360p': 'bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/best[height<=360]',
-                'audio': 'bestaudio/best',
-            }
-
-            ydl_opts = {
-                'outtmpl': f'{user_dir}/%(title)s_%(id)s.%(ext)s',
-                'quiet': True,
-                'no_warnings': True,
-                'noplaylist': True,
-                'extract_flat': False,
-                'max_filesize': self.max_file_size,
-                'restrictfilenames': True,
-                'geo_bypass': True,
-                'socket_timeout': 30,
-                'retries': 3,
-                'http_chunk_size': 1048576,
-                'ignoreerrors': True,
-            }
-
-            if format_type == "audio":
-                ydl_opts.update({
-                    'format': 'bestaudio/best',
-                    'postprocessors': [{
-                        'key': 'FFmpegExtractAudio',
-                        'preferredcodec': 'mp3',
-                        'preferredquality': '192',
-                    }],
-                })
-            elif format_type == "video":
-                ydl_opts['format'] = quality_map.get(quality, 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best')
-            elif format_type == "subtitle":
-                ydl_opts.update({
-                    'writesubtitles': True,
-                    'writeautomaticsub': True,
-                    'subtitleslangs': ['en', 'fa', 'tr'],
-                    'skip_download': True,
-                })
-
-            loop = asyncio.get_event_loop()
-
-            def download():
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(url, download=True)
-                    
-                    if format_type == "subtitle":
-                        return None, info
-                        
-                    filename = ydl.prepare_filename(info)
-                    if not os.path.exists(filename):
-                        base_name = filename.rsplit('.', 1)[0] if '.' in filename else filename
-                        for ext in ['.mp4', '.mkv', '.webm', '.mp3', '.m4a', '.mkv']:
-                            test_file = base_name + ext
-                            if os.path.exists(test_file):
-                                filename = test_file
-                                break
-                    return filename, info
-
-            filename, info = await loop.run_in_executor(None, download)
-
-            if format_type == "subtitle":
-                subs = info.get('subtitles', {})
-                auto_subs = info.get('automatic_captions', {})
-                return {
-                    'success': True,
-                    'subtitles': subs,
-                    'auto_subtitles': auto_subs,
-                    'title': info.get('title', 'Unknown'),
-                    'type': 'subtitle'
-                }
-
-            if os.path.exists(filename):
-                file_size = os.path.getsize(filename)
-                if file_size > self.max_file_size:
-                    os.remove(filename)
-                    return {'success': False, 'error': 'file_too_large', 'message': f'File too large ({self.get_file_size_readable(filename)})'}
-
-                self.increment_download_count(user_id)
-                
-                return {
-                    'success': True,
-                    'file': filename,
-                    'title': info.get('title', 'YouTube Video'),
-                    'size': file_size,
-                    'duration': info.get('duration', 0),
-                    'thumbnail': info.get('thumbnail', ''),
-                    'type': format_type,
-                    'quality': quality if format_type == 'video' else 'audio'
-                }
-
-            return {'success': False, 'error': 'download_failed', 'message': 'File not found after download'}
-
-        except Exception as e:
-            logger.error(f"YouTube download error: {e}")
-            return {'success': False, 'error': 'error', 'message': str(e)}
-
-    async def convert_to_gif(self, video_path: str, user_id: int, start_time: int = 0, duration: int = 5) -> Dict:
-        if not self.ffmpeg_available:
-            return {'success': False, 'error': 'ffmpeg_not_available', 'message': 'FFmpeg is not installed'}
-
-        try:
-            if not os.path.exists(video_path):
-                return {'success': False, 'error': 'file_not_found', 'message': 'Video file not found'}
-
-            user_dir = self.get_user_dir(user_id)
-            output_path = f"{user_dir}/gif_{int(time.time())}.gif"
-            
-            cmd = [
-                'ffmpeg',
-                '-i', video_path,
-                '-ss', str(start_time),
-                '-t', str(duration),
-                '-vf', 'fps=10,scale=320:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse',
-                '-loop', '0',
-                '-y',
-                output_path
-            ]
-
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, subprocess.run, cmd, {'capture_output': True, 'text': True})
-
-            if result.returncode == 0 and os.path.exists(output_path):
-                file_size = os.path.getsize(output_path)
-                return {
-                    'success': True,
-                    'file': output_path,
-                    'size': file_size,
-                    'duration': duration
-                }
-            
-            return {'success': False, 'error': 'conversion_failed', 'message': 'GIF conversion failed'}
-
-        except Exception as e:
-            logger.error(f"GIF conversion error: {e}")
-            return {'success': False, 'error': 'error', 'message': str(e)}
-
-    async def compress_video(self, video_path: str, user_id: int, quality: str = "medium") -> Dict:
-        if not self.ffmpeg_available:
-            return {'success': False, 'error': 'ffmpeg_not_available', 'message': 'FFmpeg is not installed'}
-
-        try:
-            if not os.path.exists(video_path):
-                return {'success': False, 'error': 'file_not_found', 'message': 'Video file not found'}
-
-            quality_settings = {
-                'low': ('scale=480:-2', '28'),
-                'medium': ('scale=720:-2', '23'),
-                'high': ('scale=1080:-2', '18'),
-            }
-
-            setting = quality_settings.get(quality, quality_settings['medium'])
-            
-            user_dir = self.get_user_dir(user_id)
-            output_path = f"{user_dir}/compressed_{int(time.time())}.mp4"
-
-            cmd = [
-                'ffmpeg',
-                '-i', video_path,
-                '-vf', setting[0],
-                '-c:v', 'libx264',
-                '-crf', setting[1],
-                '-preset', 'fast',
-                '-c:a', 'aac',
-                '-b:a', '128k',
-                '-y',
-                output_path
-            ]
-
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, subprocess.run, cmd, {'capture_output': True, 'text': True})
-
-            if result.returncode == 0 and os.path.exists(output_path):
-                original_size = os.path.getsize(video_path)
-                compressed_size = os.path.getsize(output_path)
-                saved_percent = round((1 - compressed_size/original_size) * 100, 2) if original_size > 0 else 0
-                
-                return {
-                    'success': True,
-                    'file': output_path,
-                    'original_size': original_size,
-                    'compressed_size': compressed_size,
-                    'saved_percent': saved_percent
-                }
-            
-            return {'success': False, 'error': 'compression_failed', 'message': 'Video compression failed'}
-
-        except Exception as e:
-            logger.error(f"Compression error: {e}")
-            return {'success': False, 'error': 'error', 'message': str(e)}
-
-    def cleanup_user_files(self, user_id: int, older_than_hours: int = None) -> int:
-        try:
-            if older_than_hours is None:
-                older_than_hours = self.expiry_hours
-                
-            user_dir = self.get_user_dir(user_id)
-            if not os.path.exists(user_dir):
-                return 0
-
-            current_time = time.time()
-            deleted = 0
-            
-            for filename in os.listdir(user_dir):
-                filepath = os.path.join(user_dir, filename)
-                if os.path.isfile(filepath):
-                    file_age = current_time - os.path.getmtime(filepath)
-                    if file_age > (older_than_hours * 3600):
-                        os.remove(filepath)
-                        deleted += 1
-            
-            return deleted
-        except Exception as e:
-            logger.error(f"Cleanup error for user {user_id}: {e}")
-            return 0
-
-    def cleanup_all_users(self, older_than_hours: int = None) -> int:
-        try:
-            total_deleted = 0
-            if not os.path.exists(self.downloads_dir):
-                return 0
-                
-            for user_dir in os.listdir(self.downloads_dir):
-                if user_dir.startswith('user_'):
-                    try:
-                        user_id = int(user_dir.split('_')[1])
-                        total_deleted += self.cleanup_user_files(user_id, older_than_hours)
-                    except:
-                        continue
-            return total_deleted
-        except Exception as e:
-            logger.error(f"Global cleanup error: {e}")
-            return 0
-
-
 # ============================================================
 # دیتابیس
 # ============================================================
-
 class DatabaseManager:
     def __init__(self, num_shards=DB_SHARDS):
         self.num_shards = num_shards
@@ -906,11 +515,9 @@ class DatabaseManager:
 
 db = DatabaseManager()
 
-
 # ============================================================
 # سیستم کش
 # ============================================================
-
 class CacheManager:
     def __init__(self, max_size=10000):
         self.cache = {}
@@ -965,11 +572,9 @@ class CacheManager:
 
 cache = CacheManager(max_size=20000)
 
-
 # ============================================================
 # سیستم تایید پرداخت
 # ============================================================
-
 class PaymentVerifier:
     def __init__(self):
         self.apis = TRONGRID_APIS.copy()
@@ -1086,11 +691,9 @@ class PaymentVerifier:
 
 payment_verifier = PaymentVerifier()
 
-
 # ============================================================
 # سیستم قرعه‌کشی
 # ============================================================
-
 class LotterySystem:
     def __init__(self):
         self.current_lottery = None
@@ -1279,11 +882,9 @@ class LotterySystem:
 
 lottery_system = LotterySystem()
 
-
 # ============================================================
 # سیستم مدیریت کاربران
 # ============================================================
-
 class UserManager:
     @staticmethod
     def register_user(user_id, username=None, first_name=None, last_name=None):
@@ -1385,11 +986,299 @@ class UserManager:
 
 user_manager = UserManager()
 
+# ============================================================
+# سیستم دانلودر - ساده شده
+# ============================================================
+class DownloaderSystem:
+    def __init__(self):
+        self.downloads_dir = "downloads"
+        os.makedirs(self.downloads_dir, exist_ok=True)
+        self.user_downloads = {}
+        self.max_file_size = MAX_FILE_SIZE
+        self.max_downloads_per_day = MAX_DOWNLOADS_PER_DAY
+        
+        try:
+            import yt_dlp
+            self.ytdl_available = True
+        except:
+            self.ytdl_available = False
+            logger.warning("⚠️ yt-dlp not installed! Downloader disabled.")
+        
+        try:
+            subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
+            self.ffmpeg_available = True
+        except:
+            self.ffmpeg_available = False
+            logger.warning("⚠️ FFmpeg not installed!")
+
+    def is_instagram_link(self, url: str) -> bool:
+        patterns = [
+            r'instagram\.com/p/',
+            r'instagram\.com/reel/',
+            r'instagram\.com/stories/',
+            r'instagram\.com/tv/',
+            r'instagr\.am/',
+        ]
+        return any(re.search(pattern, url, re.IGNORECASE) for pattern in patterns)
+
+    def is_youtube_link(self, url: str) -> bool:
+        patterns = [
+            r'youtube\.com/watch\?v=',
+            r'youtu\.be/',
+            r'youtube\.com/shorts/',
+            r'youtube\.com/playlist\?',
+        ]
+        return any(re.search(pattern, url, re.IGNORECASE) for pattern in patterns)
+
+    def get_user_dir(self, user_id: int) -> str:
+        user_dir = f"{self.downloads_dir}/user_{user_id}"
+        os.makedirs(user_dir, exist_ok=True)
+        return user_dir
+
+    def get_file_size_readable(self, filepath: str) -> str:
+        try:
+            size = os.path.getsize(filepath)
+            for unit in ['B', 'KB', 'MB', 'GB']:
+                if size < 1024.0:
+                    return f"{size:.2f} {unit}"
+                size /= 1024.0
+            return f"{size:.2f} TB"
+        except:
+            return "Unknown"
+
+    def check_download_limit(self, user_id: int) -> bool:
+        today = datetime.now().strftime('%Y-%m-%d')
+        if user_id in self.user_downloads:
+            if self.user_downloads[user_id]['date'] == today:
+                return self.user_downloads[user_id]['count'] < self.max_downloads_per_day
+        return True
+
+    def increment_download_count(self, user_id: int):
+        today = datetime.now().strftime('%Y-%d-%m')
+        if user_id not in self.user_downloads:
+            self.user_downloads[user_id] = {'count': 0, 'date': today}
+        elif self.user_downloads[user_id]['date'] != today:
+            self.user_downloads[user_id] = {'count': 0, 'date': today}
+        self.user_downloads[user_id]['count'] += 1
+
+    async def download_instagram(self, url: str, user_id: int) -> Dict:
+        if not self.ytdl_available:
+            return {'success': False, 'error': 'ytdl_not_available', 'message': 'yt-dlp not installed'}
+            
+        try:
+            if not self.check_download_limit(user_id):
+                return {'success': False, 'error': 'limit_reached', 'message': 'Daily limit reached'}
+
+            import yt_dlp
+            
+            user_dir = self.get_user_dir(user_id)
+            
+            ydl_opts = {
+                'outtmpl': f'{user_dir}/instagram_%(id)s.%(ext)s',
+                'quiet': True,
+                'no_warnings': True,
+                'restrictfilenames': True,
+                'geo_bypass': True,
+                'socket_timeout': 30,
+                'retries': 3,
+                'max_filesize': self.max_file_size,
+                'noplaylist': True,
+                'extract_flat': False,
+            }
+
+            loop = asyncio.get_event_loop()
+            
+            def download():
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=True)
+                    filename = ydl.prepare_filename(info)
+                    if not os.path.exists(filename):
+                        for f in os.listdir(user_dir):
+                            if f.startswith(f"instagram_{info.get('id', '')}"):
+                                filename = os.path.join(user_dir, f)
+                                break
+                    return filename, info
+
+            filename, info = await loop.run_in_executor(None, download)
+
+            if os.path.exists(filename):
+                file_size = os.path.getsize(filename)
+                if file_size > self.max_file_size:
+                    os.remove(filename)
+                    return {'success': False, 'error': 'file_too_large', 'message': f'File too large'}
+
+                self.increment_download_count(user_id)
+                
+                return {
+                    'success': True,
+                    'file': filename,
+                    'title': info.get('title', 'Instagram Content'),
+                    'size': file_size,
+                    'type': 'video' if info.get('is_video', False) else 'photo'
+                }
+
+            return {'success': False, 'error': 'download_failed', 'message': 'File not found'}
+
+        except Exception as e:
+            logger.error(f"Instagram download error: {e}")
+            return {'success': False, 'error': 'error', 'message': str(e)}
+
+    async def download_youtube(self, url: str, user_id: int, quality: str = "720p", format_type: str = "video") -> Dict:
+        if not self.ytdl_available:
+            return {'success': False, 'error': 'ytdl_not_available', 'message': 'yt-dlp not installed'}
+            
+        try:
+            if not self.check_download_limit(user_id):
+                return {'success': False, 'error': 'limit_reached', 'message': 'Daily limit reached'}
+
+            import yt_dlp
+            
+            user_dir = self.get_user_dir(user_id)
+            
+            quality_map = {
+                '1080p': 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]',
+                '720p': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]',
+                '480p': 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]',
+                '360p': 'bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/best[height<=360]',
+                'audio': 'bestaudio/best',
+            }
+
+            ydl_opts = {
+                'outtmpl': f'{user_dir}/%(title)s_%(id)s.%(ext)s',
+                'quiet': True,
+                'no_warnings': True,
+                'noplaylist': True,
+                'extract_flat': False,
+                'max_filesize': self.max_file_size,
+                'restrictfilenames': True,
+                'geo_bypass': True,
+                'socket_timeout': 30,
+                'retries': 3,
+                'ignoreerrors': True,
+            }
+
+            if format_type == "audio":
+                ydl_opts.update({
+                    'format': 'bestaudio/best',
+                    'postprocessors': [{
+                        'key': 'FFmpegExtractAudio',
+                        'preferredcodec': 'mp3',
+                        'preferredquality': '192',
+                    }],
+                })
+            elif format_type == "video":
+                ydl_opts['format'] = quality_map.get(quality, 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best')
+            elif format_type == "subtitle":
+                ydl_opts.update({
+                    'writesubtitles': True,
+                    'writeautomaticsub': True,
+                    'subtitleslangs': ['en', 'fa', 'tr'],
+                    'skip_download': True,
+                })
+
+            loop = asyncio.get_event_loop()
+
+            def download():
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=True)
+                    
+                    if format_type == "subtitle":
+                        return None, info
+                        
+                    filename = ydl.prepare_filename(info)
+                    if not os.path.exists(filename):
+                        base_name = filename.rsplit('.', 1)[0] if '.' in filename else filename
+                        for ext in ['.mp4', '.mkv', '.webm', '.mp3', '.m4a']:
+                            test_file = base_name + ext
+                            if os.path.exists(test_file):
+                                filename = test_file
+                                break
+                    return filename, info
+
+            filename, info = await loop.run_in_executor(None, download)
+
+            if format_type == "subtitle":
+                subs = info.get('subtitles', {})
+                auto_subs = info.get('automatic_captions', {})
+                return {
+                    'success': True,
+                    'subtitles': subs,
+                    'auto_subtitles': auto_subs,
+                    'title': info.get('title', 'Unknown'),
+                    'type': 'subtitle'
+                }
+
+            if os.path.exists(filename):
+                file_size = os.path.getsize(filename)
+                if file_size > self.max_file_size:
+                    os.remove(filename)
+                    return {'success': False, 'error': 'file_too_large', 'message': 'File too large'}
+
+                self.increment_download_count(user_id)
+                
+                return {
+                    'success': True,
+                    'file': filename,
+                    'title': info.get('title', 'YouTube Video'),
+                    'size': file_size,
+                    'duration': info.get('duration', 0),
+                    'thumbnail': info.get('thumbnail', ''),
+                    'type': format_type,
+                    'quality': quality if format_type == 'video' else 'audio'
+                }
+
+            return {'success': False, 'error': 'download_failed', 'message': 'File not found'}
+
+        except Exception as e:
+            logger.error(f"YouTube download error: {e}")
+            return {'success': False, 'error': 'error', 'message': str(e)}
+
+    def cleanup_user_files(self, user_id: int, older_than_hours: int = None) -> int:
+        try:
+            if older_than_hours is None:
+                older_than_hours = DOWNLOAD_EXPIRY_HOURS
+                
+            user_dir = self.get_user_dir(user_id)
+            if not os.path.exists(user_dir):
+                return 0
+
+            current_time = time.time()
+            deleted = 0
+            
+            for filename in os.listdir(user_dir):
+                filepath = os.path.join(user_dir, filename)
+                if os.path.isfile(filepath):
+                    file_age = current_time - os.path.getmtime(filepath)
+                    if file_age > (older_than_hours * 3600):
+                        os.remove(filepath)
+                        deleted += 1
+            
+            return deleted
+        except Exception as e:
+            logger.error(f"Cleanup error: {e}")
+            return 0
+
+    def cleanup_all_users(self, older_than_hours: int = None) -> int:
+        try:
+            total_deleted = 0
+            if not os.path.exists(self.downloads_dir):
+                return 0
+                
+            for user_dir in os.listdir(self.downloads_dir):
+                if user_dir.startswith('user_'):
+                    try:
+                        user_id = int(user_dir.split('_')[1])
+                        total_deleted += self.cleanup_user_files(user_id, older_than_hours)
+                    except:
+                        continue
+            return total_deleted
+        except Exception as e:
+            logger.error(f"Global cleanup error: {e}")
+            return 0
 
 # ============================================================
 # کلاس اصلی ربات
 # ============================================================
-
 class UTYOBot:
     def __init__(self):
         self.application = Application.builder().token(BOT_TOKEN).build()
@@ -1406,7 +1295,7 @@ class UTYOBot:
                 db.execute(0, "INSERT INTO settings (key, value) VALUES ('system_initialized', 'true')")
                 logger.info("سیستم برای اولین بار مقداردهی شد")
             else:
-                logger.info("سیستم قبلاً مقداردهی شده - داده‌ها حفظ شدند")
+                logger.info("سیستم قبلاً مقداردهی شده")
         except Exception as e:
             logger.error(f"Error initializing system: {e}")
             
@@ -1420,7 +1309,7 @@ class UTYOBot:
         app.add_handler(CommandHandler("language", self.language_command))
         app.add_handler(CommandHandler("download", self.download_command))
         
-        # دکمه‌های منو - این خطوط بسیار مهم هستند
+        # ===== دکمه‌های اصلی منو - این خطوط حیاتی هستند =====
         app.add_handler(CallbackQueryHandler(self.main_menu_callback, pattern="^main_menu$"))
         app.add_handler(CallbackQueryHandler(self.lottery_callback, pattern="^lottery$"))
         app.add_handler(CallbackQueryHandler(self.referral_callback, pattern="^referral$"))
@@ -1510,8 +1399,7 @@ class UTYOBot:
                 return True
             except:
                 return False
-        except Exception as e:
-            logger.error(f"Error validating address: {e}")
+        except:
             return False
     
     def _validate_tx_hash(self, tx_hash):
@@ -1526,11 +1414,6 @@ class UTYOBot:
     
     async def _auto_verify_payment(self, user_id, from_address, to_address, amount):
         try:
-            cache_key = f"payment_{from_address}_{to_address}_{amount}"
-            cached_result = cache.get(cache_key)
-            if cached_result:
-                return cached_result
-            
             success, tx_id, message = await payment_verifier.verify_transaction(
                 from_address, to_address, amount
             )
@@ -1548,7 +1431,7 @@ class UTYOBot:
                     (user_id,)
                 )
                 
-                result = {'success': True, 'tx_id': tx_id, 'message': 'Verified'}
+                return {'success': True, 'tx_id': tx_id, 'message': 'Verified'}
             else:
                 db.execute(user_id,
                     """INSERT INTO transactions 
@@ -1557,10 +1440,7 @@ class UTYOBot:
                     (user_id, from_address, to_address, amount)
                 )
                 
-                result = {'success': False, 'tx_id': None, 'message': message or 'Verification failed'}
-            
-            cache.set(cache_key, result, ttl=60)
-            return result
+                return {'success': False, 'tx_id': None, 'message': message or 'Verification failed'}
             
         except Exception as e:
             logger.error(f"Error in auto verify payment: {e}")
@@ -1626,506 +1506,6 @@ class UTYOBot:
         )
         result = cursor.fetchone()
         return result['prize_amount'] if result else 0
-
-    # ============================================================
-    # توابع دانلودر
-    # ============================================================
-    
-    async def download_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            user_id = update.effective_user.id
-            lang = self._get_user_language(user_id)
-            
-            keyboard = [
-                [InlineKeyboardButton(
-                    LanguageManager.get_text(lang, 'download_ig'),
-                    callback_data="download_ig"
-                )],
-                [InlineKeyboardButton(
-                    LanguageManager.get_text(lang, 'download_yt'),
-                    callback_data="download_yt"
-                )],
-                [
-                    InlineKeyboardButton(
-                        LanguageManager.get_text(lang, 'download_gif'),
-                        callback_data="download_gif"
-                    ),
-                    InlineKeyboardButton(
-                        LanguageManager.get_text(lang, 'download_compress'),
-                        callback_data="download_compress"
-                    )
-                ],
-                [InlineKeyboardButton(
-                    LanguageManager.get_text(lang, 'back'),
-                    callback_data="main_menu"
-                )]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            text = LanguageManager.get_text(lang, 'download_title')
-            
-            if update.callback_query:
-                await update.callback_query.edit_message_text(
-                    text,
-                    reply_markup=reply_markup,
-                    parse_mode=ParseMode.MARKDOWN
-                )
-            else:
-                await update.message.reply_text(
-                    text,
-                    reply_markup=reply_markup,
-                    parse_mode=ParseMode.MARKDOWN
-                )
-        except Exception as e:
-            logger.error(f"Error in download_command: {e}")
-            logger.error(traceback.format_exc())
-    
-    async def download_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            query = update.callback_query
-            await query.answer()
-            await self.download_command(update, context)
-        except Exception as e:
-            logger.error(f"Error in download_callback: {e}")
-            logger.error(traceback.format_exc())
-    
-    async def download_ig_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            query = update.callback_query
-            await query.answer()
-            
-            user_id = query.from_user.id
-            lang = self._get_user_language(user_id)
-            
-            context.user_data['download_mode'] = 'instagram'
-            
-            keyboard = [[InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'back'),
-                callback_data="download"
-            )]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                LanguageManager.get_text(lang, 'download_instagram_text'),
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-        except Exception as e:
-            logger.error(f"Error in download_ig_callback: {e}")
-            logger.error(traceback.format_exc())
-    
-    async def download_yt_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            query = update.callback_query
-            await query.answer()
-            
-            user_id = query.from_user.id
-            lang = self._get_user_language(user_id)
-            
-            context.user_data['download_mode'] = 'youtube'
-            context.user_data['download_step'] = 'quality'
-            
-            keyboard = [
-                [
-                    InlineKeyboardButton("🎥 1080p", callback_data="download_quality_1080p"),
-                    InlineKeyboardButton("🎥 720p", callback_data="download_quality_720p")
-                ],
-                [
-                    InlineKeyboardButton("🎥 480p", callback_data="download_quality_480p"),
-                    InlineKeyboardButton("🎥 360p", callback_data="download_quality_360p")
-                ],
-                [
-                    InlineKeyboardButton(LanguageManager.get_text(lang, 'download_audio'), callback_data="download_quality_audio"),
-                    InlineKeyboardButton(LanguageManager.get_text(lang, 'download_subtitle'), callback_data="download_quality_subtitle")
-                ],
-                [InlineKeyboardButton(
-                    LanguageManager.get_text(lang, 'back'),
-                    callback_data="download"
-                )]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                LanguageManager.get_text(lang, 'download_quality'),
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-        except Exception as e:
-            logger.error(f"Error in download_yt_callback: {e}")
-            logger.error(traceback.format_exc())
-    
-    async def download_quality_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            query = update.callback_query
-            await query.answer()
-            
-            user_id = query.from_user.id
-            lang = self._get_user_language(user_id)
-            
-            quality = query.data.replace('download_quality_', '')
-            context.user_data['download_quality'] = quality
-            context.user_data['download_step'] = 'format'
-            
-            if quality == 'subtitle':
-                context.user_data['download_format'] = 'subtitle'
-                context.user_data['download_step'] = 'link'
-                await query.edit_message_text(
-                    LanguageManager.get_text(lang, 'download_guide'),
-                    parse_mode=ParseMode.MARKDOWN
-                )
-                return
-            
-            keyboard = [
-                [
-                    InlineKeyboardButton(LanguageManager.get_text(lang, 'download_video'), callback_data="download_format_video"),
-                    InlineKeyboardButton(LanguageManager.get_text(lang, 'download_audio'), callback_data="download_format_audio")
-                ],
-                [InlineKeyboardButton(
-                    LanguageManager.get_text(lang, 'back'),
-                    callback_data="download_yt"
-                )]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                LanguageManager.get_text(lang, 'download_format'),
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-        except Exception as e:
-            logger.error(f"Error in download_quality_callback: {e}")
-            logger.error(traceback.format_exc())
-    
-    async def download_format_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            query = update.callback_query
-            await query.answer()
-            
-            user_id = query.from_user.id
-            lang = self._get_user_language(user_id)
-            
-            format_type = query.data.replace('download_format_', '')
-            context.user_data['download_format'] = format_type
-            context.user_data['download_step'] = 'link'
-            
-            await query.edit_message_text(
-                LanguageManager.get_text(lang, 'download_guide'),
-                parse_mode=ParseMode.MARKDOWN
-            )
-        except Exception as e:
-            logger.error(f"Error in download_format_callback: {e}")
-            logger.error(traceback.format_exc())
-    
-    async def download_gif_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            query = update.callback_query
-            await query.answer()
-            
-            user_id = query.from_user.id
-            lang = self._get_user_language(user_id)
-            
-            context.user_data['download_mode'] = 'gif'
-            
-            keyboard = [[InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'back'),
-                callback_data="download"
-            )]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                LanguageManager.get_text(lang, 'download_gif_text'),
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-        except Exception as e:
-            logger.error(f"Error in download_gif_callback: {e}")
-            logger.error(traceback.format_exc())
-    
-    async def download_compress_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            query = update.callback_query
-            await query.answer()
-            
-            user_id = query.from_user.id
-            lang = self._get_user_language(user_id)
-            
-            context.user_data['download_mode'] = 'compress'
-            
-            keyboard = [
-                [
-                    InlineKeyboardButton("📦 Low", callback_data="download_compress_low"),
-                    InlineKeyboardButton("📦 Medium", callback_data="download_compress_medium")
-                ],
-                [InlineKeyboardButton("📦 High", callback_data="download_compress_high")],
-                [InlineKeyboardButton(
-                    LanguageManager.get_text(lang, 'back'),
-                    callback_data="download"
-                )]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                LanguageManager.get_text(lang, 'download_compress_text') + "\n\n🎯 **Select compression quality:**",
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-        except Exception as e:
-            logger.error(f"Error in download_compress_callback: {e}")
-            logger.error(traceback.format_exc())
-    
-    async def download_compress_quality_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            query = update.callback_query
-            await query.answer()
-            
-            user_id = query.from_user.id
-            lang = self._get_user_language(user_id)
-            
-            quality = query.data.replace('download_compress_', '')
-            context.user_data['compress_quality'] = quality
-            context.user_data['download_mode'] = 'compress_ready'
-            
-            keyboard = [[InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'back'),
-                callback_data="download"
-            )]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                "📦 **Send the video you want to compress.**\n\n🎯 Quality: {}\n\n📤 Send a video file.".format(quality.upper()),
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-        except Exception as e:
-            logger.error(f"Error in download_compress_quality_callback: {e}")
-            logger.error(traceback.format_exc())
-    
-    async def _handle_download_link(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            user_id = update.effective_user.id
-            url = update.message.text.strip()
-            lang = self._get_user_language(user_id)
-            
-            if self.downloader.is_instagram_link(url):
-                await update.message.reply_text(
-                    LanguageManager.get_text(lang, 'download_processing')
-                )
-                
-                result = await self.downloader.download_instagram(url, user_id)
-                
-                if result['success']:
-                    try:
-                        file_size = self.downloader.get_file_size_readable(result['file'])
-                        
-                        if result['type'] == 'video':
-                            await update.message.reply_video(
-                                video=open(result['file'], 'rb'),
-                                caption=LanguageManager.get_text(lang, 'download_complete', 
-                                    result['title'][:50], file_size),
-                                supports_streaming=True
-                            )
-                        else:
-                            await update.message.reply_photo(
-                                photo=open(result['file'], 'rb'),
-                                caption=LanguageManager.get_text(lang, 'download_complete', 
-                                    result['title'][:50], file_size)
-                            )
-                        
-                        os.remove(result['file'])
-                        
-                        user = user_manager.get_user(user_id)
-                        new_points = (user['total_participations'] or 0) + 1
-                        user_manager.update_user(user_id, total_participations=new_points)
-                        
-                        await update.message.reply_text(
-                            LanguageManager.get_text(lang, 'download_points', new_points)
-                        )
-                        
-                    except Exception as e:
-                        logger.error(f"Error sending file: {e}")
-                        await update.message.reply_text(
-                            LanguageManager.get_text(lang, 'download_failed', str(e))
-                        )
-                else:
-                    await update.message.reply_text(
-                        LanguageManager.get_text(lang, 'download_failed', result.get('message', 'Unknown error'))
-                    )
-                return
-            
-            if self.downloader.is_youtube_link(url):
-                await update.message.reply_text(
-                    LanguageManager.get_text(lang, 'download_processing')
-                )
-                
-                quality = context.user_data.get('download_quality', '720p')
-                format_type = context.user_data.get('download_format', 'video')
-                
-                result = await self.downloader.download_youtube(url, user_id, quality, format_type)
-                
-                if result['success']:
-                    try:
-                        if format_type == 'subtitle':
-                            subs_text = "📝 **Subtitles found:**\n\n"
-                            for lang_code, subs in result.get('subtitles', {}).items():
-                                subs_text += f"• {lang_code}: {len(subs)} subtitle(s)\n"
-                            for lang_code, subs in result.get('auto_subtitles', {}).items():
-                                subs_text += f"• {lang_code} (auto): {len(subs)} subtitle(s)\n"
-                            
-                            await update.message.reply_text(subs_text[:4000])
-                            
-                            user = user_manager.get_user(user_id)
-                            new_points = (user['total_participations'] or 0) + 1
-                            user_manager.update_user(user_id, total_participations=new_points)
-                            
-                            await update.message.reply_text(
-                                LanguageManager.get_text(lang, 'download_points', new_points)
-                            )
-                        else:
-                            file_size = self.downloader.get_file_size_readable(result['file'])
-                            
-                            if format_type == 'audio':
-                                await update.message.reply_audio(
-                                    audio=open(result['file'], 'rb'),
-                                    caption=LanguageManager.get_text(lang, 'download_complete', 
-                                        result['title'][:50], file_size),
-                                    performer="YouTube",
-                                    title=result['title'][:50]
-                                )
-                            else:
-                                await update.message.reply_video(
-                                    video=open(result['file'], 'rb'),
-                                    caption=LanguageManager.get_text(lang, 'download_complete', 
-                                        result['title'][:50], file_size),
-                                    supports_streaming=True
-                                )
-                            
-                            os.remove(result['file'])
-                            
-                            user = user_manager.get_user(user_id)
-                            new_points = (user['total_participations'] or 0) + 1
-                            user_manager.update_user(user_id, total_participations=new_points)
-                            
-                            await update.message.reply_text(
-                                LanguageManager.get_text(lang, 'download_points', new_points)
-                            )
-                        
-                    except Exception as e:
-                        logger.error(f"Error sending file: {e}")
-                        await update.message.reply_text(
-                            LanguageManager.get_text(lang, 'download_failed', str(e))
-                        )
-                else:
-                    await update.message.reply_text(
-                        LanguageManager.get_text(lang, 'download_failed', result.get('message', 'Unknown error'))
-                    )
-                return
-            
-            await update.message.reply_text(
-                LanguageManager.get_text(lang, 'download_not_supported')
-            )
-        except Exception as e:
-            logger.error(f"Error in _handle_download_link: {e}")
-            logger.error(traceback.format_exc())
-    
-    async def _handle_download_file(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            user_id = update.effective_user.id
-            lang = self._get_user_language(user_id)
-            
-            mode = context.user_data.get('download_mode')
-            
-            if mode == 'gif':
-                await update.message.reply_text(
-                    LanguageManager.get_text(lang, 'download_processing')
-                )
-                
-                if update.message.video:
-                    video_file = await update.message.video.get_file()
-                    temp_path = f"downloads/temp_{user_id}_{int(time.time())}.mp4"
-                    await video_file.download_to_drive(temp_path)
-                    
-                    result = await self.downloader.convert_to_gif(temp_path, user_id)
-                    
-                    if result['success']:
-                        try:
-                            await update.message.reply_document(
-                                document=open(result['file'], 'rb'),
-                                caption=LanguageManager.get_text(lang, 'download_complete',
-                                    "GIF", self.downloader.get_file_size_readable(result['file']))
-                            )
-                            os.remove(result['file'])
-                            
-                            user = user_manager.get_user(user_id)
-                            new_points = (user['total_participations'] or 0) + 1
-                            user_manager.update_user(user_id, total_participations=new_points)
-                            
-                            await update.message.reply_text(
-                                LanguageManager.get_text(lang, 'download_points', new_points)
-                            )
-                        except Exception as e:
-                            await update.message.reply_text(
-                                LanguageManager.get_text(lang, 'download_failed', str(e))
-                            )
-                    else:
-                        await update.message.reply_text(
-                            LanguageManager.get_text(lang, 'download_failed', result.get('message', 'Unknown error'))
-                        )
-                    
-                    if os.path.exists(temp_path):
-                        os.remove(temp_path)
-                    return
-            
-            elif mode == 'compress_ready':
-                await update.message.reply_text(
-                    LanguageManager.get_text(lang, 'download_processing')
-                )
-                
-                if update.message.video:
-                    video_file = await update.message.video.get_file()
-                    temp_path = f"downloads/temp_{user_id}_{int(time.time())}.mp4"
-                    await video_file.download_to_drive(temp_path)
-                    
-                    quality = context.user_data.get('compress_quality', 'medium')
-                    result = await self.downloader.compress_video(temp_path, user_id, quality)
-                    
-                    if result['success']:
-                        try:
-                            saved_text = f" (Saved: {result['saved_percent']}%)" if result.get('saved_percent') else ""
-                            await update.message.reply_video(
-                                video=open(result['file'], 'rb'),
-                                caption=LanguageManager.get_text(lang, 'download_complete',
-                                    "Compressed Video", self.downloader.get_file_size_readable(result['file'])) + saved_text,
-                                supports_streaming=True
-                            )
-                            os.remove(result['file'])
-                            
-                            user = user_manager.get_user(user_id)
-                            new_points = (user['total_participations'] or 0) + 1
-                            user_manager.update_user(user_id, total_participations=new_points)
-                            
-                            await update.message.reply_text(
-                                LanguageManager.get_text(lang, 'download_points', new_points)
-                            )
-                        except Exception as e:
-                            await update.message.reply_text(
-                                LanguageManager.get_text(lang, 'download_failed', str(e))
-                            )
-                    else:
-                        await update.message.reply_text(
-                            LanguageManager.get_text(lang, 'download_failed', result.get('message', 'Unknown error'))
-                        )
-                    
-                    if os.path.exists(temp_path):
-                        os.remove(temp_path)
-                    return
-            
-            await update.message.reply_text(
-                "❌ Please use the download menu to select an option first.",
-                parse_mode=ParseMode.MARKDOWN
-            )
-        except Exception as e:
-            logger.error(f"Error in _handle_download_file: {e}")
-            logger.error(traceback.format_exc())
 
     # ============================================================
     # دستورات عمومی
@@ -2194,9 +1574,58 @@ class UTYOBot:
         except Exception as e:
             logger.error(f"Error in language_command: {e}")
             logger.error(traceback.format_exc())
+    
+    async def download_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            user_id = update.effective_user.id
+            lang = self._get_user_language(user_id)
+            
+            keyboard = [
+                [InlineKeyboardButton(
+                    LanguageManager.get_text(lang, 'download_ig'),
+                    callback_data="download_ig"
+                )],
+                [InlineKeyboardButton(
+                    LanguageManager.get_text(lang, 'download_yt'),
+                    callback_data="download_yt"
+                )],
+                [
+                    InlineKeyboardButton(
+                        LanguageManager.get_text(lang, 'download_gif'),
+                        callback_data="download_gif"
+                    ),
+                    InlineKeyboardButton(
+                        LanguageManager.get_text(lang, 'download_compress'),
+                        callback_data="download_compress"
+                    )
+                ],
+                [InlineKeyboardButton(
+                    LanguageManager.get_text(lang, 'back'),
+                    callback_data="main_menu"
+                )]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            text = LanguageManager.get_text(lang, 'download_title')
+            
+            if update.callback_query:
+                await update.callback_query.edit_message_text(
+                    text,
+                    reply_markup=reply_markup,
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            else:
+                await update.message.reply_text(
+                    text,
+                    reply_markup=reply_markup,
+                    parse_mode=ParseMode.MARKDOWN
+                )
+        except Exception as e:
+            logger.error(f"Error in download_command: {e}")
+            logger.error(traceback.format_exc())
 
     # ============================================================
-    # کالبک‌های منوی اصلی - این بخش بسیار مهم است
+    # کالبک‌های اصلی منو
     # ============================================================
     
     async def main_menu_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2353,34 +1782,245 @@ class UTYOBot:
             logger.error(f"Error in language_callback: {e}")
             logger.error(traceback.format_exc())
     
-    async def set_language_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def download_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            query = update.callback_query
+            await query.answer()
+            await self.download_command(update, context)
+        except Exception as e:
+            logger.error(f"Error in download_callback: {e}")
+            logger.error(traceback.format_exc())
+
+    # ============================================================
+    # کالبک‌های دانلودر
+    # ============================================================
+    
+    async def download_ig_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             query = update.callback_query
             await query.answer()
             
             user_id = query.from_user.id
-            lang_code = query.data.replace('set_lang_', '')
+            lang = self._get_user_language(user_id)
             
-            if self._set_user_language(user_id, lang_code):
-                lang = self._get_user_language(user_id)
-                
+            context.user_data['download_mode'] = 'instagram'
+            
+            keyboard = [[InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'back'),
+                callback_data="download"
+            )]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                LanguageManager.get_text(lang, 'download_instagram_text'),
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN
+            )
+        except Exception as e:
+            logger.error(f"Error in download_ig_callback: {e}")
+            logger.error(traceback.format_exc())
+    
+    async def download_yt_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            query = update.callback_query
+            await query.answer()
+            
+            user_id = query.from_user.id
+            lang = self._get_user_language(user_id)
+            
+            context.user_data['download_mode'] = 'youtube'
+            context.user_data['download_step'] = 'quality'
+            
+            keyboard = [
+                [
+                    InlineKeyboardButton("🎥 1080p", callback_data="download_quality_1080p"),
+                    InlineKeyboardButton("🎥 720p", callback_data="download_quality_720p")
+                ],
+                [
+                    InlineKeyboardButton("🎥 480p", callback_data="download_quality_480p"),
+                    InlineKeyboardButton("🎥 360p", callback_data="download_quality_360p")
+                ],
+                [
+                    InlineKeyboardButton(LanguageManager.get_text(lang, 'download_audio'), callback_data="download_quality_audio"),
+                    InlineKeyboardButton(LanguageManager.get_text(lang, 'download_subtitle'), callback_data="download_quality_subtitle")
+                ],
+                [InlineKeyboardButton(
+                    LanguageManager.get_text(lang, 'back'),
+                    callback_data="download"
+                )]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                LanguageManager.get_text(lang, 'download_quality'),
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN
+            )
+        except Exception as e:
+            logger.error(f"Error in download_yt_callback: {e}")
+            logger.error(traceback.format_exc())
+    
+    async def download_quality_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            query = update.callback_query
+            await query.answer()
+            
+            user_id = query.from_user.id
+            lang = self._get_user_language(user_id)
+            
+            quality = query.data.replace('download_quality_', '')
+            context.user_data['download_quality'] = quality
+            context.user_data['download_step'] = 'format'
+            
+            if quality == 'subtitle':
+                context.user_data['download_format'] = 'subtitle'
+                context.user_data['download_step'] = 'link'
                 keyboard = [[InlineKeyboardButton(
-                    LanguageManager.get_text(lang, 'main_menu_btn'),
-                    callback_data="main_menu"
+                    LanguageManager.get_text(lang, 'back'),
+                    callback_data="download_yt"
                 )]]
                 reply_markup = InlineKeyboardMarkup(keyboard)
-                
                 await query.edit_message_text(
-                    f"✅ Language changed to {LanguageManager.get_language_name(lang_code)}!\n\n"
-                    f"🌐 زبان به {LanguageManager.get_language_name(lang_code)} تغییر یافت!",
-                    reply_markup=reply_markup
+                    LanguageManager.get_text(lang, 'download_guide'),
+                    reply_markup=reply_markup,
+                    parse_mode=ParseMode.MARKDOWN
                 )
+                return
+            
+            keyboard = [
+                [
+                    InlineKeyboardButton(LanguageManager.get_text(lang, 'download_video'), callback_data="download_format_video"),
+                    InlineKeyboardButton(LanguageManager.get_text(lang, 'download_audio'), callback_data="download_format_audio")
+                ],
+                [InlineKeyboardButton(
+                    LanguageManager.get_text(lang, 'back'),
+                    callback_data="download_yt"
+                )]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                LanguageManager.get_text(lang, 'download_format'),
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN
+            )
         except Exception as e:
-            logger.error(f"Error in set_language_callback: {e}")
+            logger.error(f"Error in download_quality_callback: {e}")
+            logger.error(traceback.format_exc())
+    
+    async def download_format_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            query = update.callback_query
+            await query.answer()
+            
+            user_id = query.from_user.id
+            lang = self._get_user_language(user_id)
+            
+            format_type = query.data.replace('download_format_', '')
+            context.user_data['download_format'] = format_type
+            context.user_data['download_step'] = 'link'
+            
+            keyboard = [[InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'back'),
+                callback_data="download_yt"
+            )]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                LanguageManager.get_text(lang, 'download_guide'),
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN
+            )
+        except Exception as e:
+            logger.error(f"Error in download_format_callback: {e}")
+            logger.error(traceback.format_exc())
+    
+    async def download_gif_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            query = update.callback_query
+            await query.answer()
+            
+            user_id = query.from_user.id
+            lang = self._get_user_language(user_id)
+            
+            context.user_data['download_mode'] = 'gif'
+            
+            keyboard = [[InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'back'),
+                callback_data="download"
+            )]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                LanguageManager.get_text(lang, 'download_gif_text'),
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN
+            )
+        except Exception as e:
+            logger.error(f"Error in download_gif_callback: {e}")
+            logger.error(traceback.format_exc())
+    
+    async def download_compress_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            query = update.callback_query
+            await query.answer()
+            
+            user_id = query.from_user.id
+            lang = self._get_user_language(user_id)
+            
+            context.user_data['download_mode'] = 'compress'
+            
+            keyboard = [
+                [
+                    InlineKeyboardButton("📦 Low", callback_data="download_compress_low"),
+                    InlineKeyboardButton("📦 Medium", callback_data="download_compress_medium")
+                ],
+                [InlineKeyboardButton("📦 High", callback_data="download_compress_high")],
+                [InlineKeyboardButton(
+                    LanguageManager.get_text(lang, 'back'),
+                    callback_data="download"
+                )]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                LanguageManager.get_text(lang, 'download_compress_text') + "\n\n🎯 **Select compression quality:**",
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN
+            )
+        except Exception as e:
+            logger.error(f"Error in download_compress_callback: {e}")
+            logger.error(traceback.format_exc())
+    
+    async def download_compress_quality_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            query = update.callback_query
+            await query.answer()
+            
+            user_id = query.from_user.id
+            lang = self._get_user_language(user_id)
+            
+            quality = query.data.replace('download_compress_', '')
+            context.user_data['compress_quality'] = quality
+            context.user_data['download_mode'] = 'compress_ready'
+            
+            keyboard = [[InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'back'),
+                callback_data="download"
+            )]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                f"📦 **Send the video you want to compress.**\n\n🎯 Quality: {quality.upper()}\n\n📤 Send a video file.",
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN
+            )
+        except Exception as e:
+            logger.error(f"Error in download_compress_quality_callback: {e}")
             logger.error(traceback.format_exc())
 
     # ============================================================
-    # کالبک‌های اشتراک (خلاصه شده)
+    # کالبک‌های اشتراک
     # ============================================================
     
     async def subscribe_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2644,7 +2284,7 @@ class UTYOBot:
             logger.error(traceback.format_exc())
 
     # ============================================================
-    # کالبک‌های تایید/رد توسط ادمین
+    # کالبک‌های تایید/رد توسط ادمین (خلاصه)
     # ============================================================
     
     async def admin_verify_approve_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2790,7 +2430,7 @@ class UTYOBot:
             logger.error(traceback.format_exc())
 
     # ============================================================
-    # کالبک‌های پنل مدیریت (خلاصه شده)
+    # پنل مدیریت (خلاصه)
     # ============================================================
     
     async def admin_panel_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2808,15 +2448,6 @@ class UTYOBot:
             
             user_count = user_manager.get_user_count()
             active_users = len(user_manager.get_active_users())
-            cache_stats = cache.get_stats()
-            
-            users_list = user_manager.get_all_users()
-            users_text = ""
-            for user in users_list[:10]:
-                users_text += f"• {user['user_id']} - {user['first_name'] or user['username'] or 'Unknown'}\n"
-            if len(users_list) > 10:
-                users_text += f"... و {len(users_list) - 10} نفر دیگر"
-            
             pending_count = len(self._get_pending_transactions())
             unpaid_winners = len(self._get_unpaid_winners())
             
@@ -2841,8 +2472,6 @@ class UTYOBot:
                 f"⏳ در انتظار تایید: {pending_count}\n"
                 f"💰 برندگان پرداخت نشده: {unpaid_winners}\n"
                 f"🔑 کلیدهای API: {len(payment_verifier.apis)}\n"
-                f"📥 فایل‌های دانلود: {len(os.listdir('downloads')) if os.path.exists('downloads') else 0}\n\n"
-                f"👥 **لیست کاربران:**\n{users_text}\n\n"
                 f"انتخاب کنید:"
             )
             
@@ -2854,35 +2483,6 @@ class UTYOBot:
         except Exception as e:
             logger.error(f"Error in admin_panel_callback: {e}")
             logger.error(traceback.format_exc())
-
-    async def admin_cleanup_downloads_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            query = update.callback_query
-            await query.answer()
-            
-            user_id = query.from_user.id
-            if user_id not in ADMIN_IDS:
-                await query.edit_message_text("⛔ دسترسی غیرمجاز!")
-                return
-            
-            deleted = self.downloader.cleanup_all_users()
-            
-            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                f"✅ **پاکسازی فایل‌های دانلود کامل شد!**\n\n"
-                f"🧹 فایل‌های حذف شده: {deleted}",
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-        except Exception as e:
-            logger.error(f"Error in admin_cleanup_downloads_callback: {e}")
-            logger.error(traceback.format_exc())
-    
-    # ============================================================
-    # ادامه توابع مدیریت (خلاصه شده)
-    # ============================================================
     
     async def admin_broadcast_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
@@ -2901,7 +2501,6 @@ class UTYOBot:
             )
         except Exception as e:
             logger.error(f"Error in admin_broadcast_callback: {e}")
-            logger.error(traceback.format_exc())
     
     async def admin_start_lottery_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
@@ -2930,7 +2529,6 @@ class UTYOBot:
             )
         except Exception as e:
             logger.error(f"Error in admin_start_lottery_callback: {e}")
-            logger.error(traceback.format_exc())
     
     async def start_lottery_confirm_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
@@ -2949,7 +2547,6 @@ class UTYOBot:
             )
         except Exception as e:
             logger.error(f"Error in start_lottery_confirm_callback: {e}")
-            logger.error(traceback.format_exc())
     
     async def start_lottery_final_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
@@ -2979,7 +2576,7 @@ class UTYOBot:
                         await self.application.bot.send_message(
                             chat_id=winner_id,
                             text=LanguageManager.get_text(winner_lang, 'winner_message',
-                                prize_per_winner, result['lottery_id']
+                                result['lottery_id'], prize_per_winner
                             ),
                             reply_markup=reply_markup,
                             parse_mode=ParseMode.MARKDOWN
@@ -2990,7 +2587,7 @@ class UTYOBot:
                 keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await query.edit_message_text(
-                    f"✅ **قرعه‌کشی با موفقیت انجام شد!** 🎉\n\n📊 **جزئیات:**\n• شماره قرعه‌کشی: {result['lottery_id']}\n• تعداد برندگان: {winners_count}\n• جایزه هر نفر: ${prize_per_winner:,}\n• کل جایزه: ${winners_count * prize_per_winner:,}\n\n👥 **برندگان:**\n{winners_list}",
+                    f"✅ **قرعه‌کشی با موفقیت انجام شد!** 🎉\n\n📊 **جزئیات:**\n• شماره قرعه‌کشی: {result['lottery_id']}\n• تعداد برندگان: {winners_count}\n• جایزه هر نفر: ${prize_per_winner:,}\n\n👥 **برندگان:**\n{winners_list}",
                     reply_markup=reply_markup,
                     parse_mode=ParseMode.MARKDOWN
                 )
@@ -3007,11 +2604,6 @@ class UTYOBot:
                 )
         except Exception as e:
             logger.error(f"Error in start_lottery_final_callback: {e}")
-            logger.error(traceback.format_exc())
-
-    # ============================================================
-    # سایر توابع مدیریت (خلاصه شده)
-    # ============================================================
     
     async def admin_manual_verify_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
@@ -3041,8 +2633,7 @@ class UTYOBot:
             await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
         except Exception as e:
             logger.error(f"Error in admin_manual_verify_callback: {e}")
-            logger.error(traceback.format_exc())
-
+    
     async def admin_poll_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             query = update.callback_query
@@ -3060,8 +2651,7 @@ class UTYOBot:
             )
         except Exception as e:
             logger.error(f"Error in admin_poll_callback: {e}")
-            logger.error(traceback.format_exc())
-
+    
     async def admin_pay_winners_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             query = update.callback_query
@@ -3076,16 +2666,15 @@ class UTYOBot:
                 await query.edit_message_text("✅ همه برندگان پرداخت شده‌اند!", reply_markup=reply_markup)
                 return
             text = "💰 **واریز به برندگان**\n\n"
-            for winner in winners:
-                text += f"👤 کاربر: {winner['user_id']}\n💰 مبلغ: ${winner['prize_amount']}\n📤 آدرس: {winner['wallet_address'] or 'نامشخص'}\n🏆 قرعه‌کشی: #{winner['lottery_id']}\n\n"
+            for winner in winners[:10]:
+                text += f"👤 کاربر: {winner['user_id']}\n💰 مبلغ: ${winner['prize_amount']}\n🏆 قرعه‌کشی: #{winner['lottery_id']}\n\n"
             text += f"📊 تعداد کل: {len(winners)}\n\nبرای پرداخت، از پنل مدیریت استفاده کنید."
             keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
         except Exception as e:
             logger.error(f"Error in admin_pay_winners_callback: {e}")
-            logger.error(traceback.format_exc())
-
+    
     async def admin_add_api_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             query = update.callback_query
@@ -3103,8 +2692,7 @@ class UTYOBot:
             )
         except Exception as e:
             logger.error(f"Error in admin_add_api_callback: {e}")
-            logger.error(traceback.format_exc())
-
+    
     async def admin_stats_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             query = update.callback_query
@@ -3117,12 +2705,7 @@ class UTYOBot:
             cache_stats = cache.get_stats()
             tx_stats = self._get_transaction_stats()
             lottery_stats = self._get_lottery_stats()
-            users_list = user_manager.get_all_users()
-            users_text = ""
-            for user in users_list[:10]:
-                users_text += f"• {user['user_id']} - {user['first_name'] or user['username'] or 'Unknown'}\n"
-            if len(users_list) > 10:
-                users_text += f"... و {len(users_list) - 10} نفر دیگر"
+            
             keyboard = [
                 [InlineKeyboardButton("🔄 به‌روزرسانی", callback_data="admin_stats")],
                 [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]
@@ -3130,17 +2713,33 @@ class UTYOBot:
             reply_markup = InlineKeyboardMarkup(keyboard)
             text = (
                 f"📊 **آمار کامل سیستم**\n\n"
-                f"👥 **کاربران:**\n• کل: {user_count:,}\n• فعال: {active_users:,}\n• درصد فعال: {(active_users/user_count*100) if user_count > 0 else 0:.1f}%\n\n"
+                f"👥 **کاربران:**\n• کل: {user_count:,}\n• فعال: {active_users:,}\n\n"
                 f"💳 **تراکنش‌ها:**\n• کل: {tx_stats['total']:,}\n• تایید شده: {tx_stats['verified']:,}\n• در انتظار: {tx_stats['pending']:,}\n\n"
-                f"🎰 **قرعه‌کشی:**\n• تعداد: {lottery_stats['total']}\n• برندگان کل: {lottery_stats['total_winners']}\n• آخرین: {lottery_stats['last'] or 'ندارد'}\n\n"
-                f"⚡ **سیستم:**\n• کش: {cache_stats['size']} آیتم\n• نرخ برخورد: {cache_stats['hit_rate']:.1f}%\n• API‌ها: {len(payment_verifier.apis)}\n• شاردها: {DB_SHARDS}\n"
-                f"📥 فایل‌های دانلود: {len(os.listdir('downloads')) if os.path.exists('downloads') else 0}\n\n"
-                f"👥 **لیست کاربران:**\n{users_text}"
+                f"🎰 **قرعه‌کشی:**\n• تعداد: {lottery_stats['total']}\n• برندگان کل: {lottery_stats['total_winners']}\n\n"
+                f"⚡ **سیستم:**\n• کش: {cache_stats['size']} آیتم\n• نرخ برخورد: {cache_stats['hit_rate']:.1f}%\n• API‌ها: {len(payment_verifier.apis)}\n• شاردها: {DB_SHARDS}"
             )
             await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
         except Exception as e:
             logger.error(f"Error in admin_stats_callback: {e}")
-            logger.error(traceback.format_exc())
+    
+    async def admin_cleanup_downloads_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            query = update.callback_query
+            await query.answer()
+            user_id = query.from_user.id
+            if user_id not in ADMIN_IDS:
+                await query.edit_message_text("⛔ دسترسی غیرمجاز!")
+                return
+            deleted = self.downloader.cleanup_all_users()
+            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(
+                f"✅ **پاکسازی فایل‌های دانلود کامل شد!**\n\n🧹 فایل‌های حذف شده: {deleted}",
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN
+            )
+        except Exception as e:
+            logger.error(f"Error in admin_cleanup_downloads_callback: {e}")
 
     # ============================================================
     # کالبک‌های برداشت جایزه
@@ -3178,7 +2777,6 @@ class UTYOBot:
             await query.edit_message_text(LanguageManager.get_text(lang, 'enter_withdraw_wallet', winner['prize_amount']), reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
         except Exception as e:
             logger.error(f"Error in withdraw_prize_callback: {e}")
-            logger.error(traceback.format_exc())
     
     async def confirm_withdraw_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
@@ -3230,7 +2828,35 @@ class UTYOBot:
                         pass
         except Exception as e:
             logger.error(f"Error in confirm_withdraw_callback: {e}")
-            logger.error(traceback.format_exc())
+
+    # ============================================================
+    # کالبک‌های تغییر زبان
+    # ============================================================
+    
+    async def set_language_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            query = update.callback_query
+            await query.answer()
+            
+            user_id = query.from_user.id
+            lang_code = query.data.replace('set_lang_', '')
+            
+            if self._set_user_language(user_id, lang_code):
+                lang = self._get_user_language(user_id)
+                
+                keyboard = [[InlineKeyboardButton(
+                    LanguageManager.get_text(lang, 'main_menu_btn'),
+                    callback_data="main_menu"
+                )]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await query.edit_message_text(
+                    f"✅ Language changed to {LanguageManager.get_language_name(lang_code)}!\n\n"
+                    f"🌐 زبان به {LanguageManager.get_language_name(lang_code)} تغییر یافت!",
+                    reply_markup=reply_markup
+                )
+        except Exception as e:
+            logger.error(f"Error in set_language_callback: {e}")
 
     # ============================================================
     # نمایش اطلاعات
@@ -3244,7 +2870,7 @@ class UTYOBot:
             
             lang = self._get_user_language(user_id)
             referral_code = user['referral_code']
-            bot_username = "UTYOB_Bot"
+            bot_username = (await self.application.bot.get_me()).username
             referral_link = f"https://t.me/{bot_username}?start=ref_{referral_code}"
             
             referred_count = len(db.execute_global(
@@ -3272,7 +2898,6 @@ class UTYOBot:
                     await update.message.reply_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
         except Exception as e:
             logger.error(f"Error in _show_referral: {e}")
-            logger.error(traceback.format_exc())
     
     async def _show_language_selector(self, update, user_id):
         try:
@@ -3306,7 +2931,6 @@ class UTYOBot:
                     await update.message.reply_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
         except Exception as e:
             logger.error(f"Error in _show_language_selector: {e}")
-            logger.error(traceback.format_exc())
 
     # ============================================================
     # مدیریت پیام‌ها
@@ -3357,7 +2981,10 @@ class UTYOBot:
                 context.user_data['subscription_from_address'] = None
                 context.user_data['payment_from_address'] = None
                 await update.message.reply_text(LanguageManager.get_text(lang, 'tx_hash_received', tx_hash), parse_mode=ParseMode.MARKDOWN)
-                pending_id = db.execute(0, "SELECT last_insert_rowid()").fetchone()[0]
+                
+                cursor = db.execute(0, "SELECT last_insert_rowid()")
+                pending_id = cursor.fetchone()[0]
+                
                 for admin_id in ADMIN_IDS:
                     try:
                         keyboard = [
@@ -3486,7 +3113,6 @@ class UTYOBot:
                     await update.message.reply_text("❌ لطفاً یک عدد معتبر وارد کنید!")
         except Exception as e:
             logger.error(f"Error in _handle_lottery_steps: {e}")
-            logger.error(traceback.format_exc())
     
     async def _handle_add_api(self, update, text, context):
         try:
@@ -3494,14 +3120,13 @@ class UTYOBot:
             if payment_verifier.add_api(api_key):
                 context.user_data['admin_action'] = None
                 await update.message.reply_text(
-                    f"✅ **API جدید با موفقیت اضافه شد!**\n\n🔑 کلید: `{api_key}`\n📊 تعداد کل API‌ها: {len(payment_verifier.apis)}\n\nاین API برای تایید تراکنش‌ها استفاده می‌شود.",
+                    f"✅ **API جدید با موفقیت اضافه شد!**\n\n🔑 کلید: `{api_key}`\n📊 تعداد کل API‌ها: {len(payment_verifier.apis)}",
                     parse_mode=ParseMode.MARKDOWN
                 )
             else:
                 await update.message.reply_text("❌ **خطا در اضافه کردن API!**\n\nاین API قبلاً اضافه شده است یا نامعتبر است.", parse_mode=ParseMode.MARKDOWN)
         except Exception as e:
             logger.error(f"Error in _handle_add_api: {e}")
-            logger.error(traceback.format_exc())
     
     async def _send_poll(self, update, text, context):
         try:
@@ -3538,13 +3163,12 @@ class UTYOBot:
             keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await update.message.reply_text(
-                f"✅ **ارسال نظرسنجی کامل شد!**\n\n📤 ارسال شده: {sent:,}\n❌ ناموفق: {failed:,}\n📊 کل: {sent + failed:,}",
+                f"✅ **ارسال نظرسنجی کامل شد!**\n\n📤 ارسال شده: {sent:,}\n❌ ناموفق: {failed:,}",
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN
             )
         except Exception as e:
             logger.error(f"Error in _send_poll: {e}")
-            logger.error(traceback.format_exc())
     
     async def _send_broadcast(self, update, text, context):
         try:
@@ -3568,30 +3192,149 @@ class UTYOBot:
             keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await update.message.reply_text(
-                f"✅ **ارسال پیام همگانی کامل شد!**\n\n📤 ارسال شده: {sent:,}\n❌ ناموفق: {failed:,}\n📊 کل: {sent + failed:,}",
+                f"✅ **ارسال پیام همگانی کامل شد!**\n\n📤 ارسال شده: {sent:,}\n❌ ناموفق: {failed:,}",
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN
             )
         except Exception as e:
             logger.error(f"Error in _send_broadcast: {e}")
-            logger.error(traceback.format_exc())
+    
+    async def _handle_download_link(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            user_id = update.effective_user.id
+            url = update.message.text.strip()
+            lang = self._get_user_language(user_id)
+            
+            if self.downloader.is_instagram_link(url):
+                await update.message.reply_text(
+                    LanguageManager.get_text(lang, 'download_processing')
+                )
+                
+                result = await self.downloader.download_instagram(url, user_id)
+                
+                if result['success']:
+                    try:
+                        file_size = self.downloader.get_file_size_readable(result['file'])
+                        
+                        if result['type'] == 'video':
+                            await update.message.reply_video(
+                                video=open(result['file'], 'rb'),
+                                caption=LanguageManager.get_text(lang, 'download_complete', 
+                                    result['title'][:50], file_size),
+                                supports_streaming=True
+                            )
+                        else:
+                            await update.message.reply_photo(
+                                photo=open(result['file'], 'rb'),
+                                caption=LanguageManager.get_text(lang, 'download_complete', 
+                                    result['title'][:50], file_size)
+                            )
+                        
+                        os.remove(result['file'])
+                        
+                        user = user_manager.get_user(user_id)
+                        new_points = (user['total_participations'] or 0) + 1
+                        user_manager.update_user(user_id, total_participations=new_points)
+                        
+                        await update.message.reply_text(
+                            LanguageManager.get_text(lang, 'download_points', new_points)
+                        )
+                        
+                    except Exception as e:
+                        logger.error(f"Error sending file: {e}")
+                        await update.message.reply_text(
+                            LanguageManager.get_text(lang, 'download_failed', str(e))
+                        )
+                else:
+                    await update.message.reply_text(
+                        LanguageManager.get_text(lang, 'download_failed', result.get('message', 'Unknown error'))
+                    )
+                return
+            
+            if self.downloader.is_youtube_link(url):
+                await update.message.reply_text(
+                    LanguageManager.get_text(lang, 'download_processing')
+                )
+                
+                quality = context.user_data.get('download_quality', '720p')
+                format_type = context.user_data.get('download_format', 'video')
+                
+                result = await self.downloader.download_youtube(url, user_id, quality, format_type)
+                
+                if result['success']:
+                    try:
+                        if format_type == 'subtitle':
+                            subs_text = "📝 **Subtitles found:**\n\n"
+                            for lang_code, subs in result.get('subtitles', {}).items():
+                                subs_text += f"• {lang_code}: {len(subs)} subtitle(s)\n"
+                            for lang_code, subs in result.get('auto_subtitles', {}).items():
+                                subs_text += f"• {lang_code} (auto): {len(subs)} subtitle(s)\n"
+                            
+                            await update.message.reply_text(subs_text[:4000])
+                            
+                            user = user_manager.get_user(user_id)
+                            new_points = (user['total_participations'] or 0) + 1
+                            user_manager.update_user(user_id, total_participations=new_points)
+                            
+                            await update.message.reply_text(
+                                LanguageManager.get_text(lang, 'download_points', new_points)
+                            )
+                        else:
+                            file_size = self.downloader.get_file_size_readable(result['file'])
+                            
+                            if format_type == 'audio':
+                                await update.message.reply_audio(
+                                    audio=open(result['file'], 'rb'),
+                                    caption=LanguageManager.get_text(lang, 'download_complete', 
+                                        result['title'][:50], file_size),
+                                    performer="YouTube",
+                                    title=result['title'][:50]
+                                )
+                            else:
+                                await update.message.reply_video(
+                                    video=open(result['file'], 'rb'),
+                                    caption=LanguageManager.get_text(lang, 'download_complete', 
+                                        result['title'][:50], file_size),
+                                    supports_streaming=True
+                                )
+                            
+                            os.remove(result['file'])
+                            
+                            user = user_manager.get_user(user_id)
+                            new_points = (user['total_participations'] or 0) + 1
+                            user_manager.update_user(user_id, total_participations=new_points)
+                            
+                            await update.message.reply_text(
+                                LanguageManager.get_text(lang, 'download_points', new_points)
+                            )
+                        
+                    except Exception as e:
+                        logger.error(f"Error sending file: {e}")
+                        await update.message.reply_text(
+                            LanguageManager.get_text(lang, 'download_failed', str(e))
+                        )
+                else:
+                    await update.message.reply_text(
+                        LanguageManager.get_text(lang, 'download_failed', result.get('message', 'Unknown error'))
+                    )
+                return
+            
+            await update.message.reply_text(
+                LanguageManager.get_text(lang, 'download_not_supported')
+            )
+        except Exception as e:
+            logger.error(f"Error in _handle_download_link: {e}")
     
     async def handle_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             user_id = update.effective_user.id
             lang = self._get_user_language(user_id)
             
-            download_mode = context.user_data.get('download_mode')
-            if download_mode in ['gif', 'compress_ready']:
-                await self._handle_download_file(update, context)
-                return
-            
             keyboard = [[InlineKeyboardButton(LanguageManager.get_text(lang, 'main_menu_btn'), callback_data="main_menu")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await update.message.reply_text(LanguageManager.get_text(lang, 'photo_not_supported'), reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
         except Exception as e:
             logger.error(f"Error in handle_photo: {e}")
-            logger.error(traceback.format_exc())
     
     async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Update {update} caused error {context.error}")
@@ -3610,11 +3353,9 @@ class UTYOBot:
         except:
             pass
 
-
 # ============================================================
 # تابع پاکسازی خودکار
 # ============================================================
-
 async def cleanup_scheduler():
     downloader = DownloaderSystem()
     while True:
@@ -3626,11 +3367,9 @@ async def cleanup_scheduler():
             logger.error(f"Cleanup scheduler error: {e}")
         await asyncio.sleep(21600)
 
-
 # ============================================================
 # اجرای ربات
 # ============================================================
-
 async def main():
     try:
         bot = UTYOBot()
@@ -3639,9 +3378,6 @@ async def main():
         logger.info(f"👥 Admins: {len(ADMIN_IDS)}")
         logger.info(f"🗄️ Shards: {DB_SHARDS}")
         logger.info(f"🔑 APIs: {len(TRONGRID_APIS)}")
-        logger.info(f"⚡ Threads: 50")
-        logger.info(f"💾 Cache size: 20,000 items")
-        logger.info(f"📥 Downloads dir: downloads/")
         
         asyncio.create_task(cleanup_scheduler())
         
@@ -3660,7 +3396,6 @@ async def main():
         logger.error(f"❌ Error: {e}")
         logger.error(traceback.format_exc())
         raise
-
 
 if __name__ == '__main__':
     try:
