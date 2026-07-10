@@ -1,5 +1,5 @@
 # ============================================================
-# ربات قرعه‌کشی هوشمند UTYOB - نسخه فوق‌سریع با فاکتور ساز پیشرفته
+# ربات قرعه‌کشی هوشمند UTYOB - نسخه کامل و بدون خطا
 # ============================================================
 
 import asyncio
@@ -27,7 +27,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 from telegram.constants import ParseMode
 
 # ============================================================
-# تنظیمات اولیه - بهینه برای سرعت بالا
+# تنظیمات اولیه
 # ============================================================
 logging.basicConfig(
     level=logging.INFO,
@@ -78,7 +78,6 @@ class LanguageManager:
             'lottery_back': "🎰 Back to Lottery",
             'close': "❌ Close",
             'subscribed_users': "👥 Subscribed Users",
-            
             'subscribe_wallet': "💳 **Subscribe to UTYOB Lottery**\n\nPlease enter your source TRC20 wallet address:\n\n🔹 **Subscription fee:** $100\n🔹 **Destination address:**\n`{}`\n\n⚠️ **Important:**\n• Use TRC20 network only\n• Amount must be exactly $100\n• After sending, click the button below\n\n📤 **Enter your source wallet address:**",
             'after_subscribe_wallet': "✅ **Wallet address saved!**\n\n🔹 Your address: `{}`\n\n💰 **Please send exactly $100 to:**\n`{}`\n\n⚠️ **Important:**\n• Use TRC20 network only\n• Send exactly $100\n• After sending, click the button below\n\n✅ **Click after sending:**",
             'confirm_subscribe': "✅ I sent the payment",
@@ -87,7 +86,6 @@ class LanguageManager:
             'send_tx_hash': "📤 Please send your transaction hash (TX ID) for manual verification:",
             'tx_hash_received': "✅ Transaction hash received!\n\n🔹 Hash: `{}`\n\n⏳ Your transaction is being reviewed by admin.\n📢 You will be notified when verified.",
             'tx_hash_invalid': "❌ Invalid transaction hash!\n\nPlease send a valid TRON transaction hash.\nExample: `abc123def456...`",
-            
             'enter_wallet': "💳 **Deposit to participate in the lottery**\n\nPlease enter your source wallet address (TRC20):\n\n🔹 **Deposit amount:** $100\n🔹 **Destination address:**\n`{}`\n\n⚠️ **Important notes:**\n• Use only TRC20 network\n• Amount must be exactly $100\n• System will verify automatically\n• Save transaction ID for tracking\n\n📤 **Enter your source address:**",
             'enter_wallet_short': "📤 **Enter your source TRC20 wallet address:**",
             'after_wallet': "✅ **Wallet address saved!**\n\n🔹 Your address: `{}`\n\n💰 **Please send exactly $100 to:**\n`{}`\n\n⚠️ **Important:**\n• Use TRC20 network only\n• After sending, click the button below\n• System will verify automatically\n\n✅ **Click below after sending:**",
@@ -98,28 +96,22 @@ class LanguageManager:
             'payment_failed': "❌ **Payment verification failed!**\n\n🔹 Reason: {}\n\n📌 **Solutions:**\n1. Amount must be exactly $100\n2. Destination address must be correct\n3. Transaction must be completed\n4. Use TRC20 network\n\n🔄 Try again after checking.\n\nIf you're sure about your payment, send your transaction hash:",
             'retry': "🔄 Try Again",
             'support': "📞 Support",
-            
             'withdraw_prize': "💰 Withdraw Prize",
             'enter_withdraw_wallet': "💰 **Withdraw Prize**\n\nPrize amount: **${:,}**\n\nPlease enter your TRC20 wallet address:\n\n⚠️ **Important notes:**\n• Use only TRC20 network\n• Address must be correct\n• After confirmation, payment will be made\n\n📤 **Enter your wallet address:**",
             'withdraw_success': "✅ **Withdrawal registered successfully!** 🎉\n\n💰 Amount: ${:,}\n📤 Address: {}\n\n⏳ Amount will be sent to your account soon.\n🔔 You will be notified when sent.",
             'already_paid': "✅ Prize already paid!\n\n💰 Amount: ${}\n📅 Date: {}",
             'no_winner': "❌ You don't have any prize!\n\nParticipate in future lotteries.",
             'next_lottery': "🎰 Next Lottery",
-            
             'referral_text': "🔗 **UTYOB Referral System**\n\n👤 You: {}\n📊 Invites: {}\n💰 Rewards: ${}\n\n🔑 **Your referral code:**\n`{}`\n\n🔗 **Referral link:**\n{}\n\n💰 **Referral reward:**\n• 5% discount for you\n• 5% discount for your friend\n• Instant reward after verification\n\n📤 Share this link with your friends!",
             'share': "📤 Share",
             'referral_joined': "🎉 **New referral joined!**\n\n👤 {}\n🔗 Referred by: {}\n💰 You both got 5% discount!",
             'referral_discount': "🎉 **You got 5% discount!**\n\n👤 {}\n🔗 Referred by: {}\n💰 5% discount applied to your subscription!",
-            
             'guide_text': "📖 **UTYOB Bot Complete Guide**\n\n🎯 **How it works:**\n1. **Register**: Use /start to register\n2. **Subscription**: Purchase subscription to participate\n3. **Deposit**: Send $100 to the specified address\n4. **Participate**: Join the lottery after verification\n5. **Win**: Receive prize if you win\n\n💰 **Deposit amount:**\n- Fixed amount: $100\n- Deposit address: TV61aTh98MGqmteYzda5AaBzdXgGqreG6A\n- Network: TRC20\n\n🎁 **Prizes:**\n- 1st prize: 50% of total\n- 2nd prize: 30% of total\n- 3rd prize: 20% of total\n\n🔗 **Referral system:**\n- Each user has unique referral code\n- 5% discount for both you and your friend\n\n⚠️ **Rules:**\n- One participation per lottery per user\n- Previous winners have lower chance\n- All transactions verified automatically\n\n📞 **Support:**\nContact admin for questions.",
-            
             'language_selector': "🌐 **Change Language**\n\nCurrent language: {}",
-            
             'invalid_command': "⚠️ Invalid command!\n\nUse the buttons or /help.",
             'error_message': "⚠️ An error occurred! Please try again.",
             'photo_not_supported': "📸 Photo received!\nBut this feature is not supported.",
             'invalid_wallet': "❌ Invalid wallet address!\n\nPlease enter a valid TRC20 address.\nExample: `TV61aTh98MGqmteYzda5AaBzdXgGqreG6A`",
-            
             'admin_verify_tx': "✅ **Transaction Verification Request**\n\n👤 User: {}\n📤 From: {}\n📥 To: {}\n💰 Amount: ${}\n🔗 TX Hash: `{}`\n\nPlease verify this transaction:",
             'admin_verify_approve': "✅ Approve",
             'admin_verify_reject': "❌ Reject",
@@ -127,7 +119,6 @@ class LanguageManager:
             'admin_verify_rejected': "❌ **Transaction rejected!**\n\n👤 User: {}\n🔗 TX Hash: `{}`\n\nUser has been notified.",
             'user_verify_approved': "✅ **Your transaction has been approved!** 🎉\n\n💰 Subscription activated!\n🔗 TX Hash: `{}`\n\n🎉 You now have an active subscription!\n🙏 Welcome to UTYOB Lottery!",
             'user_verify_rejected': "❌ **Your transaction has been rejected!**\n\n🔗 TX Hash: `{}`\n\nPlease check your transaction and try again.\n\n📌 **Reasons:**\n• Amount may not be exactly $100\n• Address may be incorrect\n• Transaction may not be completed",
-            
             'poll_message': "📊 **Poll**\n\n{}",
             'poll_option_1': "✅ Yes",
             'poll_option_2': "❌ No",
@@ -135,7 +126,6 @@ class LanguageManager:
             'poll_result_admin': "📊 **Poll Result**\n\n👤 User: {}\n📝 Question: {}\n✅ Answer: {}\n🕐 Time: {}",
             'poll_yes': "Yes ✅",
             'poll_no': "No ❌",
-
             'instagram_downloader': "📸 **Instagram Downloader**\n\nSend me an Instagram post/reel URL and I'll download it for you!\n\n📤 Send the link:",
             'invoice_maker_text': "🧾 **Invoice Maker**\n\nClick the button below to open the invoice maker tool:\n\n✨ Fast and simple!\n\n📌 After finishing, click **Close** to return.\n\n📥 Downloads are saved to your gallery.",
             'open_invoice_btn': "🧾 Open Invoice Maker",
@@ -144,27 +134,21 @@ class LanguageManager:
             'download_failed': "❌ **Download failed!**\n\n🔹 Reason: {}\n\n📌 Make sure the link is correct and the video is available.",
             'invalid_url': "❌ Invalid URL!\n\nPlease send a valid Instagram link.",
             'processing': "🔄 Processing your request...",
-
             'lottery_announcement': "🎰 **Lottery Announcement**\n\n📅 Date: {}\n💰 Prize: ${}\n👥 Winners: {}\n\n📤 To participate, please send $100 to:\n`{}`\n\n⚠️ **Important:**\n• Use TRC20 network only\n• Enter your source wallet address\n• Make sure your subscription is active\n\n🎯 Good luck to everyone!",
             'lottery_winner_announcement': "🎉 **Lottery Winner!**\n\n🏆 Congratulations!\n👤 User: {}\n💰 Prize: ${}\n📤 Wallet: {}\n🌍 Country: {}\n\n✅ Prize has been sent to your wallet!\n🙏 Enjoy your winnings!",
             'lottery_winner_admin': "🏆 **Lottery Winners**\n\n📅 Date: {}\n💰 Total Prize: ${}\n👥 Winners:\n{}\n\n✅ All winners have been paid.",
             'lottery_no_winners': "❌ No eligible users for lottery.",
             'lottery_paid': "✅ Winners paid successfully!",
-            
             'enter_lottery_date': "📅 **Enter Lottery Date**\n\nPlease enter the lottery date (YYYY-MM-DD):\nExample: `2024-12-31`",
             'enter_lottery_prize': "💰 **Enter Prize Amount**\n\nPlease enter the prize amount for each winner:\nExample: `500`",
             'enter_lottery_winners': "👥 **Enter Number of Winners**\n\nPlease enter the number of winners:\nExample: `3`",
             'lottery_confirm': "✅ **Lottery Confirmation**\n\n📅 Date: {}\n💰 Prize: ${}\n👥 Winners: {}\n\n⚠️ Are you sure you want to start the lottery?",
             'lottery_started': "🎰 **Lottery Started!**\n\n📅 Date: {}\n💰 Prize: ${}\n👥 Winners: {}\n\n🎯 Selecting winners...",
             'lottery_completed': "✅ **Lottery Completed!**\n\n📅 Date: {}\n💰 Prize: ${}\n👥 Winners: {}\n\n🏆 Winners have been selected and notified.",
-            
             'pay_winners_confirm': "💰 **Pay Winners**\n\nTotal winners: {}\nTotal prize: ${}\n\n⚠️ Are you sure you want to pay all winners?",
             'pay_winners_success': "✅ **Winners Paid!**\n\nTotal winners: {}\nTotal prize: ${}\n\n📢 All winners have been notified.",
-            
             'subscribed_users_list': "👥 **Subscribed Users**\n\nTotal: {}\n\n{}",
             'no_subscribed_users': "❌ No subscribed users found.",
-
-            # متون جدید برای ساخت ربات
             'build_robot_title': "🤖 **Build Your Robot**\n\nSend your bot token to create a robot.",
             'build_robot_help': "🔑 **How to get token:**\n1. Open @BotFather\n2. Send /newbot\n3. Choose a name\n4. Choose a username\n5. Copy the token",
             'build_robot_token_received': "✅ **Token received!**\n\nYour robot is being created...",
@@ -203,7 +187,6 @@ class LanguageManager:
             'lottery_back': "🎰 بازگشت به قرعه‌کشی",
             'close': "❌ بستن",
             'subscribed_users': "👥 کاربران اشتراکی",
-            
             'subscribe_wallet': "💳 **خرید اشتراک UTYOB**\n\nلطفاً آدرس کیف پول مبدا (TRC20) خود را وارد کنید:\n\n🔹 **هزینه اشتراک:** ۱۰۰ دلار\n🔹 **آدرس مقصد:**\n`{}`\n\n⚠️ **نکات مهم:**\n• فقط از شبکه TRC20 استفاده کنید\n• مبلغ دقیقاً ۱۰۰ دلار باشد\n• پس از واریز، روی دکمه زیر کلیک کنید\n\n📤 **آدرس کیف پول خود را وارد کنید:**",
             'after_subscribe_wallet': "✅ **آدرس کیف پول ذخیره شد!**\n\n🔹 آدرس شما: `{}`\n\n💰 **لطفاً مبلغ ۱۰۰ دلار به آدرس زیر واریز کنید:**\n`{}`\n\n⚠️ **نکات مهم:**\n• فقط از شبکه TRC20 استفاده کنید\n• مبلغ دقیقاً ۱۰۰ دلار باشد\n• پس از واریز، روی دکمه زیر کلیک کنید\n\n✅ **پس از واریز کلیک کنید:**",
             'confirm_subscribe': "✅ پرداخت کردم",
@@ -212,7 +195,6 @@ class LanguageManager:
             'send_tx_hash': "📤 لطفاً هش تراکنش (TX ID) خود را برای تایید دستی ارسال کنید:",
             'tx_hash_received': "✅ هش تراکنش دریافت شد!\n\n🔹 هش: `{}`\n\n⏳ تراکنش شما در حال بررسی توسط مدیر است.\n📢 پس از تایید به شما اطلاع داده می‌شود.",
             'tx_hash_invalid': "❌ هش تراکنش نامعتبر!\n\nلطفاً یک هش تراکنش معتبر TRON ارسال کنید.\nمثال: `abc123def456...`",
-            
             'enter_wallet': "💳 **واریز برای شرکت در قرعه‌کشی**\n\nلطفاً آدرس کیف پول مبدا (TRC20) خود را وارد کنید:\n\n🔹 **مبلغ واریز:** ۱۰۰ دلار\n🔹 **آدرس مقصد:**\n`{}`\n\n⚠️ **نکات مهم:**\n• فقط از شبکه TRC20 استفاده کنید\n• مبلغ دقیقاً ۱۰۰ دلار باشد\n• سیستم به صورت خودکار تایید می‌کند\n• کد تراکنش را برای پیگیری ذخیره کنید\n\n📤 **آدرس مبدا خود را وارد کنید:**",
             'enter_wallet_short': "📤 **آدرس کیف پول TRC20 خود را وارد کنید:**",
             'after_wallet': "✅ **آدرس کیف پول ذخیره شد!**\n\n🔹 آدرس شما: `{}`\n\n💰 **لطفاً مبلغ ۱۰۰ دلار به آدرس زیر واریز کنید:**\n`{}`\n\n⚠️ **نکات مهم:**\n• فقط از شبکه TRC20 استفاده کنید\n• پس از واریز، روی دکمه زیر کلیک کنید\n• سیستم به صورت خودکار تایید می‌کند\n\n✅ **پس از واریز، کلیک کنید:**",
@@ -223,28 +205,22 @@ class LanguageManager:
             'payment_failed': "❌ **پرداخت شما تایید نشد!**\n\n🔹 دلیل: {}\n\n📌 **راهکارها:**\n1. مبلغ دقیقاً ۱۰۰ دلار باشد\n2. آدرس مقصد صحیح باشد\n3. تراکنش انجام شده باشد\n4. از شبکه TRC20 استفاده کنید\n\n🔄 پس از بررسی، مجدداً تلاش کنید.\n\nاگر از پرداخت خود مطمئن هستید، هش تراکنش خود را ارسال کنید:",
             'retry': "🔄 تلاش مجدد",
             'support': "📞 پشتیبانی",
-            
             'withdraw_prize': "💰 برداشت جایزه",
             'enter_withdraw_wallet': "💰 **برداشت جایزه**\n\nمبلغ جایزه: **${:,}**\n\nلطفاً آدرس کیف پول TRC20 خود را وارد کنید:\n\n⚠️ **نکات مهم:**\n• فقط از شبکه TRC20 استفاده کنید\n• آدرس باید دقیق و صحیح باشد\n• پس از تایید، واریز انجام می‌شود\n\n📤 **آدرس کیف پول خود را وارد کنید:**",
             'withdraw_success': "✅ **برداشت شما با موفقیت ثبت شد!** 🎉\n\n💰 مبلغ: ${:,}\n📤 آدرس: {}\n\n⏳ مبلغ به زودی به حساب شما واریز می‌شود.\n🔔 پس از واریز، به شما اطلاع داده می‌شود.",
             'already_paid': "✅ جایزه شما قبلاً پرداخت شده است!\n\n💰 مبلغ: ${}\n📅 تاریخ: {}",
             'no_winner': "❌ شما برنده‌ای ندارید!\n\nدر قرعه‌کشی‌های بعدی شرکت کنید.",
             'next_lottery': "🎰 قرعه‌کشی بعدی",
-            
             'referral_text': "🔗 **سیستم رفرال UTYOB**\n\n👤 شما: {}\n📊 تعداد دعوت‌ها: {}\n💰 پاداش: ${}\n\n🔑 **کد رفرال شما:**\n`{}`\n\n🔗 **لینک دعوت:**\n{}\n\n💰 **پاداش دعوت:**\n• ۵٪ تخفیف برای شما\n• ۵٪ تخفیف برای دوست شما\n• پاداش فوری پس از تایید\n\n📤 لینک را برای دوستان خود ارسال کنید!",
             'share': "📤 اشتراک‌گذاری",
             'referral_joined': "🎉 **دعوت جدید!**\n\n👤 {}\n🔗 دعوت کننده: {}\n💰 هر دو ۵٪ تخفیف گرفتید!",
             'referral_discount': "🎉 **۵٪ تخفیف گرفتید!**\n\n👤 {}\n🔗 دعوت کننده: {}\n💰 ۵٪ تخفیف به اشتراک شما اعمال شد!",
-            
             'guide_text': "📖 **راهنمای کامل ربات UTYOB**\n\n🎯 **نحوه کار:**\n1. **ثبت‌نام**: با دستور /start ثبت‌نام کنید\n2. **اشتراک**: برای شرکت در قرعه‌کشی، اشتراک تهیه کنید\n3. **واریز**: مبلغ ۱۰۰ دلار به آدرس مشخص واریز کنید\n4. **شرکت**: پس از تایید، در قرعه‌کشی شرکت کنید\n5. **برنده**: در صورت برنده شدن، جایزه دریافت کنید\n\n💰 **مبلغ واریز:**\n- مبلغ ثابت: ۱۰۰ دلار\n- آدرس واریز: TV61aTh98MGqmteYzda5AaBzdXgGqreG6A\n- شبکه: TRC20\n\n🎁 **جوایز:**\n- جایزه اول: ۵۰٪ از کل مبلغ\n- جایزه دوم: ۳۰٪ از کل مبلغ\n- جایزه سوم: ۲۰٪ از کل مبلغ\n\n🔗 **سیستم رفرال:**\n- هر کاربر کد رفرال اختصاصی دارد\n- ۵٪ تخفیف برای شما و دوستتان\n\n⚠️ **قوانین:**\n- هر کاربر فقط یک بار در هر قرعه‌کشی شرکت می‌کند\n- برندگان قبلی شانس کمتری در قرعه‌کشی‌های بعدی دارند\n- تمامی تراکنش‌ها به صورت خودکار تایید می‌شوند\n\n📞 **پشتیبانی:**\nبرای سوالات و مشکلات با مدیریت تماس بگیرید.",
-            
             'language_selector': "🌐 **تغییر زبان**\n\nزبان فعلی: {}",
-            
             'invalid_command': "⚠️ دستور نامعتبر!\n\nاز دکمه‌های موجود استفاده کنید یا /help را ببینید.",
             'error_message': "⚠️ خطایی رخ داد! لطفاً دوباره تلاش کنید.",
             'photo_not_supported': "📸 عکس دریافت شد!\nاما این قابلیت پشتیبانی نمی‌شود.",
             'invalid_wallet': "❌ آدرس کیف پول نامعتبر!\n\nلطفاً یک آدرس معتبر TRC20 وارد کنید.\nمثال: `TV61aTh98MGqmteYzda5AaBzdXgGqreG6A`",
-            
             'admin_verify_tx': "✅ **درخواست تایید تراکنش**\n\n👤 کاربر: {}\n📤 از: {}\n📥 به: {}\n💰 مبلغ: ${}\n🔗 هش تراکنش: `{}`\n\nلطفاً این تراکنش را تایید کنید:",
             'admin_verify_approve': "✅ تایید",
             'admin_verify_reject': "❌ رد",
@@ -252,7 +228,6 @@ class LanguageManager:
             'admin_verify_rejected': "❌ **تراکنش رد شد!**\n\n👤 کاربر: {}\n🔗 هش: `{}`\n\nبه کاربر اطلاع داده شد.",
             'user_verify_approved': "✅ **تراکنش شما تایید شد!** 🎉\n\n💰 اشتراک فعال شد!\n🔗 هش: `{}`\n\n🎉 اشتراک شما با موفقیت فعال شد!\n🙏 به UTYOB خوش آمدید!",
             'user_verify_rejected': "❌ **تراکنش شما رد شد!**\n\n🔗 هش: `{}`\n\nلطفاً تراکنش خود را بررسی کرده و مجدداً تلاش کنید.\n\n📌 **دلایل احتمالی:**\n• مبلغ دقیقاً ۱۰۰ دلار نبوده\n• آدرس مقصد اشتباه بوده\n• تراکنش کامل نشده است",
-            
             'poll_message': "📊 **نظرسنجی**\n\n{}",
             'poll_option_1': "✅ بله",
             'poll_option_2': "❌ خیر",
@@ -260,7 +235,6 @@ class LanguageManager:
             'poll_result_admin': "📊 **نتیجه نظرسنجی**\n\n👤 کاربر: {}\n📝 سوال: {}\n✅ پاسخ: {}\n🕐 زمان: {}",
             'poll_yes': "بله ✅",
             'poll_no': "خیر ❌",
-
             'instagram_downloader': "📸 **دانلودر اینستاگرام**\n\nلینک پست یا ریل اینستاگرام را ارسال کنید تا آن را دانلود کنم!\n\n📤 لینک را ارسال کنید:",
             'invoice_maker_text': "🧾 **فاکتور ساز**\n\nبرای ساخت فاکتور، روی دکمه زیر کلیک کنید:\n\n✨ سریع و ساده!\n\n📌 پس از اتمام، روی **بستن** کلیک کنید تا برگردید.\n\n📥 دانلودها در گالری شما ذخیره می‌شوند.",
             'open_invoice_btn': "🧾 باز کردن فاکتور ساز",
@@ -269,27 +243,21 @@ class LanguageManager:
             'download_failed': "❌ **دانلود ناموفق!**\n\n🔹 دلیل: {}\n\n📌 مطمئن شوید لینک صحیح است و ویدیو در دسترس است.",
             'invalid_url': "❌ لینک نامعتبر!\n\nلطفاً یک لینک معتبر از اینستاگرام ارسال کنید.",
             'processing': "🔄 در حال پردازش درخواست شما...",
-
             'lottery_announcement': "🎰 **اطلاعیه قرعه‌کشی**\n\n📅 تاریخ: {}\n💰 جایزه: ${}\n👥 تعداد برندگان: {}\n\n📤 برای شرکت، لطفاً مبلغ ۱۰۰ دلار به آدرس زیر واریز کنید:\n`{}`\n\n⚠️ **نکات مهم:**\n• فقط از شبکه TRC20 استفاده کنید\n• آدرس کیف پول مبدا خود را وارد کنید\n• اشتراک شما باید فعال باشد\n\n🎯 برای همه آرزوی موفقیت داریم!",
             'lottery_winner_announcement': "🎉 **برنده قرعه‌کشی!**\n\n🏆 تبریک!\n👤 کاربر: {}\n💰 جایزه: ${}\n📤 کیف پول: {}\n🌍 کشور: {}\n\n✅ جایزه به کیف پول شما واریز شد!\n🙏 از برداشت خود لذت ببرید!",
             'lottery_winner_admin': "🏆 **برندگان قرعه‌کشی**\n\n📅 تاریخ: {}\n💰 کل جایزه: ${}\n👥 برندگان:\n{}\n\n✅ تمام برندگان پرداخت شدند.",
             'lottery_no_winners': "❌ کاربران واجد شرایطی برای قرعه‌کشی وجود ندارد.",
             'lottery_paid': "✅ برندگان با موفقیت پرداخت شدند!",
-            
             'enter_lottery_date': "📅 **تاریخ قرعه‌کشی را وارد کنید**\n\nلطفاً تاریخ قرعه‌کشی را وارد کنید (YYYY-MM-DD):\nمثال: `1403-10-11`",
             'enter_lottery_prize': "💰 **مبلغ جایزه را وارد کنید**\n\nلطفاً مبلغ جایزه برای هر برنده را وارد کنید:\nمثال: `500`",
             'enter_lottery_winners': "👥 **تعداد برندگان را وارد کنید**\n\nلطفاً تعداد برندگان را وارد کنید:\nمثال: `3`",
             'lottery_confirm': "✅ **تایید قرعه‌کشی**\n\n📅 تاریخ: {}\n💰 جایزه: ${}\n👥 تعداد برندگان: {}\n\n⚠️ آیا مطمئن هستید که می‌خواهید قرعه‌کشی را شروع کنید؟",
             'lottery_started': "🎰 **قرعه‌کشی شروع شد!**\n\n📅 تاریخ: {}\n💰 جایزه: ${}\n👥 تعداد برندگان: {}\n\n🎯 در حال انتخاب برندگان...",
             'lottery_completed': "✅ **قرعه‌کشی انجام شد!**\n\n📅 تاریخ: {}\n💰 جایزه: ${}\n👥 تعداد برندگان: {}\n\n🏆 برندگان انتخاب و مطلع شدند.",
-            
             'pay_winners_confirm': "💰 **پرداخت به برندگان**\n\nتعداد برندگان: {}\nمجموع جایزه: ${}\n\n⚠️ آیا مطمئن هستید که می‌خواهید به همه برندگان پرداخت کنید؟",
             'pay_winners_success': "✅ **برندگان پرداخت شدند!**\n\nتعداد برندگان: {}\nمجموع جایزه: ${}\n\n📢 همه برندگان مطلع شدند.",
-            
             'subscribed_users_list': "👥 **کاربران اشتراکی**\n\nتعداد: {}\n\n{}",
             'no_subscribed_users': "❌ کاربر اشتراکی یافت نشد.",
-
-            # متون جدید برای ساخت ربات
             'build_robot_title': "🤖 **ساخت ربات شما**\n\nبرای ساخت ربات، توکن آن را ارسال کنید.",
             'build_robot_help': "🔑 **نحوه دریافت توکن:**\n۱. @BotFather را باز کنید\n۲. /newbot را ارسال کنید\n۳. یک نام انتخاب کنید\n۴. یک نام کاربری انتخاب کنید\n۵. توکن را کپی کنید",
             'build_robot_token_received': "✅ **توکن دریافت شد!**\n\nدر حال ساخت ربات شما...",
@@ -328,7 +296,6 @@ class LanguageManager:
             'lottery_back': "🎰 Piyangoya Dön",
             'close': "❌ Kapat",
             'subscribed_users': "👥 Abone Kullanıcılar",
-            
             'subscribe_wallet': "💳 **UTYOB Aboneliği**\n\nLütfen kaynak TRC20 cüzdan adresinizi girin:\n\n🔹 **Abonelik ücreti:** 100$\n🔹 **Hedef adres:**\n`{}`\n\n⚠️ **Önemli:**\n• Sadece TRC20 ağını kullanın\n• Tutar tam olarak 100$ olmalı\n• Gönderdikten sonra aşağıdaki butona tıklayın\n\n📤 **Kaynak cüzdan adresinizi girin:**",
             'after_subscribe_wallet': "✅ **Cüzdan adresi kaydedildi!**\n\n🔹 Adresiniz: `{}`\n\n💰 **Lütfen tam olarak 100$'yi aşağıdaki adrese gönderin:**\n`{}`\n\n⚠️ **Önemli:**\n• Sadece TRC20 ağını kullanın\n• Tutar tam olarak 100$ olmalı\n• Gönderdikten sonra aşağıdaki butona tıklayın\n\n✅ **Gönderdikten sonra tıklayın:**",
             'confirm_subscribe': "✅ Ödemeyi Gönderdim",
@@ -337,7 +304,6 @@ class LanguageManager:
             'send_tx_hash': "📤 Manuel doğrulama için işlem hash'inizi (TX ID) gönderin:",
             'tx_hash_received': "✅ İşlem hash'i alındı!\n\n🔹 Hash: `{}`\n\n⏳ İşleminiz yönetici tarafından inceleniyor.\n📢 Onaylandığında bilgilendirileceksiniz.",
             'tx_hash_invalid': "❌ Geçersiz işlem hash'i!\n\nLütfen geçerli bir TRON işlem hash'i gönderin.\nÖrnek: `abc123def456...`",
-            
             'enter_wallet': "💳 **Piyangoya katılmak için yatırım**\n\nLütfen kaynak cüzdan adresinizi (TRC20) girin:\n\n🔹 **Yatırım tutarı:** 100$\n🔹 **Hedef adres:**\n`{}`\n\n⚠️ **Önemli notlar:**\n• Sadece TRC20 ağını kullanın\n• Tutar tam olarak 100$ olmalı\n• Sistem otomatik olarak doğrulayacak\n• Takip için işlem kimliğini kaydedin\n\n📤 **Kaynak adresinizi girin:**",
             'enter_wallet_short': "📤 **TRC20 cüzdan adresinizi girin:**",
             'after_wallet': "✅ **Cüzdan adresi kaydedildi!**\n\n🔹 Adresiniz: `{}`\n\n💰 **Lütfen tam olarak 100$'yi aşağıdaki adrese gönderin:**\n`{}`\n\n⚠️ **Önemli:**\n• Sadece TRC20 ağını kullanın\n• Gönderdikten sonra aşağıdaki butona tıklayın\n• Sistem otomatik olarak doğrulayacak\n\n✅ **Gönderdikten sonra tıklayın:**",
@@ -348,28 +314,22 @@ class LanguageManager:
             'payment_failed': "❌ **Ödeme doğrulaması başarısız!**\n\n🔹 Sebep: {}\n\n📌 **Çözümler:**\n1. Tutar tam olarak 100$ olmalı\n2. Hedef adres doğru olmalı\n3. İşlem tamamlanmış olmalı\n4. TRC20 ağını kullanın\n\n🔄 Kontrol ettikten sonra tekrar deneyin.\n\nÖdemenizden eminseniz, işlem hash'inizi gönderin:",
             'retry': "🔄 Tekrar Dene",
             'support': "📞 Destek",
-            
             'withdraw_prize': "💰 Ödülü Çek",
             'enter_withdraw_wallet': "💰 **Ödülü Çek**\n\nÖdül tutarı: **${:,}**\n\nLütfen TRC20 cüzdan adresinizi girin:\n\n⚠️ **Önemli notlar:**\n• Sadece TRC20 ağını kullanın\n• Adres doğru ve tam olmalı\n• Onaydan sonra ödeme yapılacak\n\n📤 **Cüzdan adresinizi girin:**",
             'withdraw_success': "✅ **Çekim başarıyla kaydedildi!** 🎉\n\n💰 Tutar: ${:,}\n📤 Adres: {}\n\n⏳ Tutar yakında hesabınıza gönderilecek.\n🔔 Gönderildiğinde bilgilendirileceksiniz.",
             'already_paid': "✅ Ödül zaten ödendi!\n\n💰 Tutar: ${}\n📅 Tarih: {}",
             'no_winner': "❌ Hiç ödülünüz yok!\n\nGelecek piyangolara katılın.",
             'next_lottery': "🎰 Sonraki Piyango",
-            
             'referral_text': "🔗 **UTYOB Referans Sistemi**\n\n👤 Siz: {}\n📊 Davetler: {}\n💰 Ödül: ${}\n\n🔑 **Referans kodunuz:**\n`{}`\n\n🔗 **Referans linki:**\n{}\n\n💰 **Referans ödülü:**\n• Sizin için %5 indirim\n• Arkadaşınız için %5 indirim\n• Doğrulama sonrası anında ödül\n\n📤 Bu linki arkadaşlarınızla paylaşın!",
             'share': "📤 Paylaş",
             'referral_joined': "🎉 **Yeni referans katıldı!**\n\n👤 {}\n🔗 Davet eden: {}\n💰 İkiniz de %5 indirim kazandınız!",
             'referral_discount': "🎉 **%5 indirim kazandınız!**\n\n👤 {}\n🔗 Davet eden: {}\n💰 Aboneliğinize %5 indirim uygulandı!",
-            
             'guide_text': "📖 **UTYOB Bot Tam Rehber**\n\n🎯 **Nasıl çalışır:**\n1. **Kayıt**: /start ile kaydolun\n2. **Abonelik**: Katılmak için abonelik satın alın\n3. **Yatırım**: Belirtilen adrese 100$ gönderin\n4. **Katılım**: Doğrulama sonrası piyangoya katılın\n5. **Kazanç**: Kazanırsanız ödülü alın\n\n💰 **Yatırım tutarı:**\n- Sabit tutar: 100$\n- Yatırım adresi: TV61aTh98MGqmteYzda5AaBzdXgGqreG6A\n- Ağ: TRC20\n\n🎁 **Ödüller:**\n- 1. ödül: Toplamın %50'si\n- 2. ödül: Toplamın %30'u\n- 3. ödül: Toplamın %20'si\n\n🔗 **Referans sistemi:**\n- Her kullanıcının benzersiz referans kodu vardır\n- Sizin ve arkadaşınız için %5 indirim\n\n⚠️ **Kurallar:**\n- Her piyangoda kullanıcı başına bir katılım\n- Önceki kazananların şansı daha düşük\n- Tüm işlemler otomatik doğrulanır\n\n📞 **Destek:**\nSorularınız için yöneticiye başvurun.",
-            
             'language_selector': "🌐 **Dil Değiştir**\n\nMevcut dil: {}",
-            
             'invalid_command': "⚠️ Geçersiz komut!\n\nButonları veya /help kullanın.",
             'error_message': "⚠️ Bir hata oluştu! Lütfen tekrar deneyin.",
             'photo_not_supported': "📸 Fotoğraf alındı!\nAncak bu özellik desteklenmiyor.",
             'invalid_wallet': "❌ Geçersiz cüzdan adresi!\n\nLütfen geçerli bir TRC20 adresi girin.\nÖrnek: `TV61aTh98MGqmteYzda5AaBzdXgGqreG6A`",
-            
             'admin_verify_tx': "✅ **İşlem Doğrulama Talebi**\n\n👤 Kullanıcı: {}\n📤 Gönderen: {}\n📥 Alan: {}\n💰 Tutar: ${}\n🔗 TX Hash: `{}`\n\nLütfen bu işlemi doğrulayın:",
             'admin_verify_approve': "✅ Onayla",
             'admin_verify_reject': "❌ Reddet",
@@ -377,7 +337,6 @@ class LanguageManager:
             'admin_verify_rejected': "❌ **İşlem reddedildi!**\n\n👤 Kullanıcı: {}\n🔗 TX Hash: `{}`\n\nKullanıcı bilgilendirildi.",
             'user_verify_approved': "✅ **İşleminiz onaylandı!** 🎉\n\n💰 Abonelik aktifleştirildi!\n🔗 TX Hash: `{}`\n\n🎉 Aboneliğiniz başarıyla aktifleştirildi!\n🙏 UTYOB'a hoş geldiniz!",
             'user_verify_rejected': "❌ **İşleminiz reddedildi!**\n\n🔗 TX Hash: `{}`\n\nLütfen işleminizi kontrol edip tekrar deneyin.\n\n📌 **Olası nedenler:**\n• Tutar tam olarak 100$ değil\n• Hedef adres yanlış\n• İşlem tamamlanmamış",
-            
             'poll_message': "📊 **Anket**\n\n{}",
             'poll_option_1': "✅ Evet",
             'poll_option_2': "❌ Hayır",
@@ -385,7 +344,6 @@ class LanguageManager:
             'poll_result_admin': "📊 **Anket Sonucu**\n\n👤 Kullanıcı: {}\n📝 Soru: {}\n✅ Cevap: {}\n🕐 Zaman: {}",
             'poll_yes': "Evet ✅",
             'poll_no': "Hayır ❌",
-
             'instagram_downloader': "📸 **Instagram İndirici**\n\nBir Instagram gönderisi/reel URL'si gönderin, sizin için indireyim!\n\n📤 Linki gönder:",
             'invoice_maker_text': "🧾 **Fatura Oluşturucu**\n\nFatura oluşturmak için aşağıdaki düğmeye tıklayın:\n\n✨ Hızlı ve kolay!\n\n📌 Bitirdikten sonra **Kapat**'a tıklayarak geri dönün.\n\n📥 İndirmeler galerinize kaydedilir.",
             'open_invoice_btn': "🧾 Fatura Oluşturucuyu Aç",
@@ -394,27 +352,21 @@ class LanguageManager:
             'download_failed': "❌ **İndirme başarısız!**\n\n🔹 Sebep: {}\n\n📌 Linkin doğru olduğundan ve videonun mevcut olduğundan emin olun.",
             'invalid_url': "❌ Geçersiz URL!\n\nLütfen geçerli bir Instagram linki gönderin.",
             'processing': "🔄 İsteğiniz işleniyor...",
-
             'lottery_announcement': "🎰 **Piyango Duyurusu**\n\n📅 Tarih: {}\n💰 Ödül: ${}\n👥 Kazananlar: {}\n\n📤 Katılmak için lütfen aşağıdaki adrese 100$ gönderin:\n`{}`\n\n⚠️ **Önemli:**\n• Sadece TRC20 ağını kullanın\n• Kaynak cüzdan adresinizi girin\n• Aboneliğiniz aktif olmalı\n\n🎯 Herkese iyi şanslar!",
             'lottery_winner_announcement': "🎉 **Piyango Kazananı!**\n\n🏆 Tebrikler!\n👤 Kullanıcı: {}\n💰 Ödül: ${}\n📤 Cüzdan: {}\n🌍 Ülke: {}\n\n✅ Ödül cüzdanınıza gönderildi!\n🙏 Kazancınızın tadını çıkarın!",
             'lottery_winner_admin': "🏆 **Piyango Kazananları**\n\n📅 Tarih: {}\n💰 Toplam Ödül: ${}\n👥 Kazananlar:\n{}\n\n✅ Tüm kazananlara ödeme yapıldı.",
             'lottery_no_winners': "❌ Piyango için uygun kullanıcı yok.",
             'lottery_paid': "✅ Kazananlara başarıyla ödeme yapıldı!",
-            
             'enter_lottery_date': "📅 **Piyango Tarihi Girin**\n\nLütfen piyango tarihini girin (YYYY-MM-DD):\nÖrnek: `2024-12-31`",
             'enter_lottery_prize': "💰 **Ödül Miktarını Girin**\n\nLütfen her kazanan için ödül miktarını girin:\nÖrnek: `500`",
             'enter_lottery_winners': "👥 **Kazanan Sayısını Girin**\n\nLütfen kazanan sayısını girin:\nÖrnek: `3`",
             'lottery_confirm': "✅ **Piyango Onayı**\n\n📅 Tarih: {}\n💰 Ödül: ${}\n👥 Kazananlar: {}\n\n⚠️ Piyangoyu başlatmak istediğinize emin misiniz?",
             'lottery_started': "🎰 **Piyango Başladı!**\n\n📅 Tarih: {}\n💰 Ödül: ${}\n👥 Kazananlar: {}\n\n🎯 Kazananlar seçiliyor...",
             'lottery_completed': "✅ **Piyango Tamamlandı!**\n\n📅 Tarih: {}\n💰 Ödül: ${}\n👥 Kazananlar: {}\n\n🏆 Kazananlar seçildi ve bilgilendirildi.",
-            
             'pay_winners_confirm': "💰 **Kazananlara Ödeme**\n\nKazanan sayısı: {}\nToplam ödül: ${}\n\n⚠️ Tüm kazananlara ödeme yapmak istediğinize emin misiniz?",
             'pay_winners_success': "✅ **Kazananlara Ödeme Yapıldı!**\n\nKazanan sayısı: {}\nToplam ödül: ${}\n\n📢 Tüm kazananlar bilgilendirildi.",
-            
             'subscribed_users_list': "👥 **Abone Kullanıcılar**\n\nToplam: {}\n\n{}",
             'no_subscribed_users': "❌ Abone kullanıcı bulunamadı.",
-
-            # متون جدید برای ساخت ربات
             'build_robot_title': "🤖 **Botunuzu Oluşturun**\n\nBot oluşturmak için tokenini gönderin.",
             'build_robot_help': "🔑 **Token nasıl alınır:**\n1. @BotFather'ı açın\n2. /newbot gönderin\n3. Bir isim seçin\n4. Bir kullanıcı adı seçin\n5. Tokeni kopyalayın",
             'build_robot_token_received': "✅ **Token alındı!**\n\nBotunuz oluşturuluyor...",
@@ -464,7 +416,7 @@ class LanguageManager:
         return cls.LANGUAGES.get(lang_code, {}).get('emoji', '🇬🇧')
 
 # ============================================================
-# دیتابیس با ۵۰۰ شارد برای مقیاس‌پذیری بالا
+# دیتابیس با ۵۰۰ شارد
 # ============================================================
 class DatabaseManager:
     def __init__(self, num_shards=DB_SHARDS):
@@ -598,9 +550,6 @@ class DatabaseManager:
             )
         ''')
         
-        # ============================================================
-        # جداول جدید برای ساخت ربات و مدیریت سرور
-        # ============================================================
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS user_robots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -660,8 +609,6 @@ class DatabaseManager:
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_poll_user ON poll_responses(user_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_lotteries_date ON lotteries(lottery_date)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_lotteries_status ON lotteries(status)')
-        
-        # ایندکس‌های جدید
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_robots_user ON user_robots(user_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_robots_status ON user_robots(status)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_uploaded_files_language ON uploaded_bot_files(language)')
@@ -719,7 +666,7 @@ class DatabaseManager:
 db = DatabaseManager()
 
 # ============================================================
-# سیستم کش پیشرفته با TTL و LRU
+# سیستم کش
 # ============================================================
 class CacheManager:
     def __init__(self, max_size=10000):
@@ -776,7 +723,7 @@ class CacheManager:
 cache = CacheManager(max_size=20000)
 
 # ============================================================
-# سیستم دانلودر واقعی
+# سیستم دانلودر
 # ============================================================
 class DownloadManager:
     def __init__(self):
@@ -854,7 +801,7 @@ class DownloadManager:
 download_manager = DownloadManager()
 
 # ============================================================
-# سیستم تایید پرداخت با چندین API و کش
+# سیستم تایید پرداخت
 # ============================================================
 class PaymentVerifier:
     def __init__(self):
@@ -973,7 +920,7 @@ class PaymentVerifier:
 payment_verifier = PaymentVerifier()
 
 # ============================================================
-# سیستم قرعه‌کشی با الگوریتم هوش مصنوعی پیشرفته
+# سیستم قرعه‌کشی
 # ============================================================
 class LotterySystem:
     def __init__(self):
@@ -1188,7 +1135,7 @@ class LotterySystem:
 lottery_system = LotterySystem()
 
 # ============================================================
-# سیستم مدیریت کاربران با پایداری بالا
+# سیستم مدیریت کاربران
 # ============================================================
 class UserManager:
     @staticmethod
@@ -1349,7 +1296,7 @@ class UserManager:
 user_manager = UserManager()
 
 # ============================================================
-# کلاس اصلی ربات با سرعت بالا
+# کلاس اصلی ربات
 # ============================================================
 class UTYOBot:
     def __init__(self):
@@ -1358,7 +1305,6 @@ class UTYOBot:
         self.executor = ThreadPoolExecutor(max_workers=50)
         self._setup_handlers()
         self._init_system()
-        # مقداردهی اولیه سیستم ربات‌ها
         self._init_robot_system()
         
     def _init_system(self):
@@ -1373,9 +1319,7 @@ class UTYOBot:
             logger.error(f"Error initializing system: {e}")
             
     def _init_robot_system(self):
-        """مقداردهی اولیه سیستم ربات‌ها"""
         try:
-            # ایجاد دایرکتوری فایل‌های ربات
             os.makedirs("robot_files", exist_ok=True)
             logger.info("✅ Robot system initialized")
         except Exception as e:
@@ -1384,32 +1328,39 @@ class UTYOBot:
     def _setup_handlers(self):
         app = self.application
         
+        # ============================================================
+        # دستورات
+        # ============================================================
         app.add_handler(CommandHandler("start", self.start_command))
         app.add_handler(CommandHandler("help", self.help_command))
         app.add_handler(CommandHandler("referral", self.referral_command))
         app.add_handler(CommandHandler("language", self.language_command))
         
+        # ============================================================
         # منوی اصلی
+        # ============================================================
         app.add_handler(CallbackQueryHandler(self.main_menu_callback, pattern="^main_menu$"))
         app.add_handler(CallbackQueryHandler(self.lottery_callback, pattern="^lottery$"))
         app.add_handler(CallbackQueryHandler(self.referral_callback, pattern="^referral$"))
         app.add_handler(CallbackQueryHandler(self.guide_callback, pattern="^guide$"))
         app.add_handler(CallbackQueryHandler(self.language_callback, pattern="^language$"))
         
+        # ============================================================
         # دانلودر و فاکتور ساز
+        # ============================================================
         app.add_handler(CallbackQueryHandler(self.instagram_download_callback, pattern="^instagram_download$"))
         app.add_handler(CallbackQueryHandler(self.invoice_maker_callback, pattern="^invoice_maker$"))
         
-        # اشتراک
+        # ============================================================
+        # اشتراک و قرعه‌کشی
+        # ============================================================
         app.add_handler(CallbackQueryHandler(self.subscribe_callback, pattern="^subscribe$"))
         app.add_handler(CallbackQueryHandler(self.confirm_subscribe_callback, pattern="^confirm_subscribe$"))
-        
-        # قرعه‌کشی
         app.add_handler(CallbackQueryHandler(self.join_lottery_callback, pattern="^join_lottery$"))
         app.add_handler(CallbackQueryHandler(self.confirm_payment_callback, pattern="^confirm_payment$"))
         
         # ============================================================
-        # دکمه‌های جدید - ساخت ربات و مدیریت
+        # ساخت ربات - دکمه‌های جدید
         # ============================================================
         app.add_handler(CallbackQueryHandler(self.build_robot_callback, pattern="^build_robot$"))
         app.add_handler(CallbackQueryHandler(self.my_robots_callback, pattern="^my_robots$"))
@@ -1417,7 +1368,9 @@ class UTYOBot:
         app.add_handler(CallbackQueryHandler(self.robot_confirm_delete_callback, pattern="^robot_confirm_delete_"))
         app.add_handler(CallbackQueryHandler(self.robot_cancel_delete_callback, pattern="^robot_cancel_delete$"))
         
+        # ============================================================
         # پنل مدیریت
+        # ============================================================
         app.add_handler(CallbackQueryHandler(self.admin_panel_callback, pattern="^admin_panel$"))
         app.add_handler(CallbackQueryHandler(self.admin_broadcast_callback, pattern="^admin_broadcast$"))
         app.add_handler(CallbackQueryHandler(self.admin_start_lottery_callback, pattern="^admin_start_lottery$"))
@@ -1436,34 +1389,49 @@ class UTYOBot:
         app.add_handler(CallbackQueryHandler(self.admin_manage_servers_callback, pattern="^admin_manage_servers$"))
         app.add_handler(CallbackQueryHandler(self.admin_server_delete_callback, pattern="^admin_server_delete_"))
         
+        # ============================================================
         # نظرسنجی
+        # ============================================================
         app.add_handler(CallbackQueryHandler(self.poll_response_callback, pattern="^poll_yes$"))
         app.add_handler(CallbackQueryHandler(self.poll_response_callback, pattern="^poll_no$"))
         
+        # ============================================================
         # تایید تراکنش
+        # ============================================================
         app.add_handler(CallbackQueryHandler(self.admin_verify_approve_callback, pattern="^admin_verify_approve_"))
         app.add_handler(CallbackQueryHandler(self.admin_verify_reject_callback, pattern="^admin_verify_reject_"))
         
+        # ============================================================
         # تایید قرعه‌کشی
+        # ============================================================
         app.add_handler(CallbackQueryHandler(self.start_lottery_confirm_callback, pattern="^start_lottery_confirm$"))
         app.add_handler(CallbackQueryHandler(self.pay_winners_confirm_callback, pattern="^pay_winners_confirm$"))
         
+        # ============================================================
         # برداشت جایزه
+        # ============================================================
         app.add_handler(CallbackQueryHandler(self.withdraw_prize_callback, pattern="^withdraw_prize$"))
         app.add_handler(CallbackQueryHandler(self.confirm_withdraw_callback, pattern="^confirm_withdraw$"))
         
+        # ============================================================
         # تغییر زبان
+        # ============================================================
         app.add_handler(CallbackQueryHandler(self.set_language_callback, pattern="^set_lang_"))
         
+        # ============================================================
         # پیام‌ها
+        # ============================================================
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         app.add_handler(MessageHandler(filters.PHOTO, self.handle_photo))
         app.add_handler(MessageHandler(filters.Document.ALL, self.handle_document))
         
+        # ============================================================
+        # خطاها
+        # ============================================================
         app.add_error_handler(self.error_handler)
 
     # ============================================================
-    # توابع کمکی - بهینه برای سرعت
+    # توابع کمکی
     # ============================================================
     
     def _get_user_language(self, user_id):
@@ -1509,7 +1477,6 @@ class UTYOBot:
             return False
     
     def _validate_bot_token(self, token):
-        """بررسی اعتبار توکن ربات"""
         if not token:
             return False
         parts = token.split(':')
@@ -1623,7 +1590,7 @@ class UTYOBot:
         return result['prize_amount'] if result else 0
 
     # ============================================================
-    # منوی اصلی با دکمه‌های جدید
+    # دستور start
     # ============================================================
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
@@ -1672,47 +1639,7 @@ class UTYOBot:
             except Exception as e:
                 logger.error(f"Error sending referral notification: {e}")
         
-        keyboard = [
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'lottery'),
-                callback_data="lottery"
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'referral'),
-                callback_data="referral"
-            )],
-            [InlineKeyboardButton(
-                "🤖 ساخت ربات",
-                callback_data="build_robot"
-            )],
-            [InlineKeyboardButton(
-                "📋 ربات‌های من",
-                callback_data="my_robots"
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'instagram_download'),
-                callback_data="instagram_download"
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'invoice_maker'),
-                callback_data="invoice_maker"
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'guide'),
-                callback_data="guide"
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'language'),
-                callback_data="language"
-            )]
-        ]
-        
-        if user.id in ADMIN_IDS:
-            keyboard.append([InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'admin_panel'),
-                callback_data="admin_panel"
-            )])
-        
+        keyboard = self._get_main_keyboard(user.id, lang)
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
@@ -1720,14 +1647,45 @@ class UTYOBot:
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
-    
-    async def main_menu_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
+
+    # ============================================================
+    # دستور help (مشکل اینجا بود)
+    # ============================================================
+    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """دستور راهنما"""
+        user_id = update.effective_user.id
         lang = self._get_user_language(user_id)
         
+        keyboard = [[InlineKeyboardButton(
+            LanguageManager.get_text(lang, 'back'),
+            callback_data="main_menu"
+        )]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            LanguageManager.get_text(lang, 'guide_text'),
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+    # ============================================================
+    # دستور referral
+    # ============================================================
+    async def referral_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        await self._show_referral(update, user_id)
+
+    # ============================================================
+    # دستور language
+    # ============================================================
+    async def language_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        await self._show_language_selector(update, user_id)
+
+    # ============================================================
+    # منوی اصلی
+    # ============================================================
+    def _get_main_keyboard(self, user_id, lang):
         keyboard = [
             [InlineKeyboardButton(
                 LanguageManager.get_text(lang, 'lottery'),
@@ -1769,6 +1727,16 @@ class UTYOBot:
                 callback_data="admin_panel"
             )])
         
+        return keyboard
+
+    async def main_menu_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        lang = self._get_user_language(user_id)
+        
+        keyboard = self._get_main_keyboard(user_id, lang)
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
@@ -1776,375 +1744,10 @@ class UTYOBot:
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
-    
-    # ============================================================
-    # دکمه ساخت ربات
-    # ============================================================
-    async def build_robot_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        
-        # دریافت فایل‌های آپلودی شده
-        cursor = db.execute_global(
-            "SELECT * FROM uploaded_bot_files ORDER BY created_at DESC"
-        )
-        uploaded_files = cursor
-        
-        if not uploaded_files:
-            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text(
-                LanguageManager.get_text(lang, 'no_uploaded_files'),
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-        
-        # نمایش لیست فایل‌ها
-        keyboard = []
-        for file in uploaded_files[:10]:
-            lang_name = {'en': '🇬🇧 English', 'fa': '🇮🇷 فارسی', 'tr': '🇹🇷 Türkçe'}.get(file['language'], file['language'])
-            keyboard.append([InlineKeyboardButton(
-                f"📄 {file['file_name']} - {lang_name}",
-                callback_data=f"robot_select_{file['id']}"
-            )])
-        
-        keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")])
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            LanguageManager.get_text(lang, 'select_file'),
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-        
-        context.user_data['selecting_robot_file'] = True
 
     # ============================================================
-    # نمایش ربات‌های کاربر
+    # کالبک‌های قرعه‌کشی
     # ============================================================
-    async def my_robots_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        
-        cursor = db.execute(user_id,
-            "SELECT * FROM user_robots WHERE user_id = ? ORDER BY created_at DESC",
-            (user_id,)
-        )
-        robots = cursor.fetchall()
-        
-        if not robots:
-            keyboard = [
-                [InlineKeyboardButton("🤖 ساخت ربات جدید", callback_data="build_robot")],
-                [InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                LanguageManager.get_text(lang, 'no_robots'),
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-        
-        text = LanguageManager.get_text(lang, 'my_robots_title', len(robots)) + "\n\n"
-        
-        for robot in robots:
-            status_emoji = "🟢" if robot['status'] == 'active' else "🔴"
-            text += f"{status_emoji} 🤖 ربات #{robot['id']}\n"
-            text += f"   🔹 توکن: `{robot['bot_token'][:15]}...`\n"
-            text += f"   🔹 زبان: {robot['language']}\n"
-            text += f"   🔹 وضعیت: {robot['status']}\n"
-            text += f"   🔹 ساخته شده: {robot['created_at'][:10]}\n\n"
-        
-        keyboard = []
-        for robot in robots:
-            keyboard.append([InlineKeyboardButton(
-                f"🗑️ حذف ربات #{robot['id']}",
-                callback_data=f"robot_delete_{robot['id']}"
-            )])
-        
-        keyboard.append([InlineKeyboardButton("🤖 ساخت ربات جدید", callback_data="build_robot")])
-        keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")])
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            text,
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    # ============================================================
-    # حذف ربات
-    # ============================================================
-    async def robot_delete_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        robot_id = int(query.data.replace('robot_delete_', ''))
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        
-        keyboard = [
-            [
-                InlineKeyboardButton("✅ بله، حذف کن", callback_data=f"robot_confirm_delete_{robot_id}"),
-                InlineKeyboardButton("❌ نه، برگرد", callback_data="robot_cancel_delete")
-            ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            LanguageManager.get_text(lang, 'robot_delete_confirm', robot_id),
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    async def robot_confirm_delete_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        robot_id = int(query.data.replace('robot_confirm_delete_', ''))
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        
-        db.execute(user_id,
-            "DELETE FROM user_robots WHERE id = ? AND user_id = ?",
-            (robot_id, user_id)
-        )
-        
-        await query.edit_message_text(
-            LanguageManager.get_text(lang, 'robot_deleted'),
-            parse_mode=ParseMode.MARKDOWN
-        )
-        
-        await self.my_robots_callback(update, context)
-    
-    async def robot_cancel_delete_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        await self.my_robots_callback(update, context)
-
-    # ============================================================
-    # پنل مدیریت - با دکمه‌های جدید
-    # ============================================================
-    async def admin_panel_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        
-        if user_id not in ADMIN_IDS:
-            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text("⛔ دسترسی غیرمجاز!", reply_markup=reply_markup)
-            return
-        
-        user_count = user_manager.get_user_count()
-        active_users = len(user_manager.get_active_users())
-        cache_stats = cache.get_stats()
-        
-        users_list = user_manager.get_all_users()
-        users_text = ""
-        for user in users_list[:10]:
-            users_text += f"• {user['user_id']} - {user['first_name'] or user['username'] or 'Unknown'}\n"
-        if len(users_list) > 10:
-            users_text += f"... و {len(users_list) - 10} نفر دیگر"
-        
-        pending_count = len(self._get_pending_transactions())
-        unpaid_winners = len(self._get_unpaid_winners())
-        subscribed_count = len(user_manager.get_subscribed_users())
-        
-        # آمار ربات‌ها
-        cursor = db.execute_global("SELECT COUNT(*) as count FROM user_robots")
-        total_robots = 0
-        for row in cursor:
-            total_robots += row['count']
-        
-        cursor = db.execute_global("SELECT COUNT(*) as count FROM uploaded_bot_files")
-        total_files = 0
-        for row in cursor:
-            total_files += row['count']
-        
-        cursor = db.execute_global("SELECT COUNT(*) as count FROM servers WHERE status = 'active'")
-        total_servers = 0
-        for row in cursor:
-            total_servers += row['count']
-        
-        keyboard = [
-            [InlineKeyboardButton("📢 ارسال پیام همگانی", callback_data="admin_broadcast")],
-            [InlineKeyboardButton("🎰 شروع قرعه‌کشی", callback_data="admin_start_lottery")],
-            [InlineKeyboardButton(f"✅ تایید دستی ({pending_count})", callback_data="admin_manual_verify")],
-            [InlineKeyboardButton("📊 ارسال نظرسنجی", callback_data="admin_poll")],
-            [InlineKeyboardButton(f"💰 واریز به برندگان ({unpaid_winners})", callback_data="admin_pay_winners")],
-            [InlineKeyboardButton(f"👥 کاربران اشتراکی ({subscribed_count})", callback_data="admin_subscribed_users")],
-            [InlineKeyboardButton("👥 لیست کاربران", callback_data="admin_user_list")],
-            [InlineKeyboardButton("🔑 اضافه کردن API", callback_data="admin_add_api")],
-            [InlineKeyboardButton("📈 آمار و اطلاعات", callback_data="admin_stats")],
-            # دکمه‌های جدید مدیریت
-            [InlineKeyboardButton(f"📤 آپلود فایل ربات ({total_files})", callback_data="admin_upload_file")],
-            [InlineKeyboardButton(f"🌐 مدیریت سرورها ({total_servers})", callback_data="admin_manage_servers")],
-            [InlineKeyboardButton("➕ افزودن سرور جدید", callback_data="admin_add_server")],
-            [InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        text = (
-            f"⚙️ **پنل مدیریت**\n\n"
-            f"📊 **آمار:**\n"
-            f"👥 کل کاربران: {user_count:,}\n"
-            f"✅ اشتراک فعال: {active_users:,}\n"
-            f"🤖 ربات‌های ساخته شده: {total_robots:,}\n"
-            f"📄 فایل‌های آپلودی: {total_files}\n"
-            f"🖥️ سرورهای فعال: {total_servers}\n"
-            f"⏳ در انتظار تایید: {pending_count}\n"
-            f"💰 برندگان پرداخت نشده: {unpaid_winners}\n"
-            f"🔑 کلیدهای API: {len(payment_verifier.apis)}\n\n"
-            f"👥 **لیست کاربران:**\n{users_text}\n\n"
-            f"انتخاب کنید:"
-        )
-        
-        await query.edit_message_text(
-            text,
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    # ============================================================
-    # آپلود فایل ربات توسط ادمین
-    # ============================================================
-    async def admin_upload_file_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        if user_id not in ADMIN_IDS:
-            return
-        
-        context.user_data['admin_action'] = 'upload_robot_file'
-        
-        keyboard = [[InlineKeyboardButton("🔙 انصراف", callback_data="admin_panel")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            "📤 **آپلود فایل ربات**\n\n"
-            "لطفاً فایل کد ربات را ارسال کنید:\n\n"
-            "📌 **نکات:**\n"
-            "• فایل باید به صورت TEXT یا فایل .py باشد\n"
-            "• از `{BOT_TOKEN}` برای توکن استفاده کنید\n"
-            "• از `{ADMIN_ID}` برای ادمین استفاده کنید\n\n"
-            "🌐 **زبان فایل را مشخص کنید:**\n"
-            "پس از ارسال فایل، زبان را انتخاب کنید.",
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-        
-        context.user_data['waiting_for_robot_file'] = True
-
-    # ============================================================
-    # مدیریت سرورها
-    # ============================================================
-    async def admin_manage_servers_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        if user_id not in ADMIN_IDS:
-            return
-        
-        cursor = db.execute_global(
-            "SELECT * FROM servers ORDER BY created_at DESC"
-        )
-        servers = cursor
-        
-        text = "🌐 **مدیریت سرورها**\n\n"
-        
-        if not servers:
-            text += "❌ هیچ سروری ثبت نشده است.\n"
-        else:
-            for server in servers:
-                status_emoji = "🟢" if server['status'] == 'active' else "🔴"
-                text += f"{status_emoji} **{server['name']}**\n"
-                text += f"   📍 IP: {server['ip']}:{server['port']}\n"
-                text += f"   📦 کارگرها: {server['current_workers']}/{server['max_workers']}\n"
-                text += f"   🗂️ شاردها: {server['shards']}\n"
-                text += f"   📅 ایجاد: {server['created_at'][:10]}\n\n"
-        
-        keyboard = [
-            [InlineKeyboardButton("➕ افزودن سرور جدید", callback_data="admin_add_server")],
-            [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]
-        ]
-        
-        # دکمه حذف برای هر سرور
-        for server in servers:
-            keyboard.insert(0, [InlineKeyboardButton(
-                f"🗑️ حذف سرور {server['ip']}",
-                callback_data=f"admin_server_delete_{server['id']}"
-            )])
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            text,
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-
-    # ============================================================
-    # افزودن سرور جدید
-    # ============================================================
-    async def admin_add_server_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        if user_id not in ADMIN_IDS:
-            return
-        
-        context.user_data['add_server_step'] = 1
-        
-        keyboard = [[InlineKeyboardButton("🔙 انصراف", callback_data="admin_manage_servers")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            "🌐 **افزودن سرور جدید**\n\n"
-            "مرحله ۱: لطفاً IP سرور را وارد کنید:\n\n"
-            "مثال: `192.168.1.100`",
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-
-    # ============================================================
-    # حذف سرور
-    # ============================================================
-    async def admin_server_delete_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        if user_id not in ADMIN_IDS:
-            return
-        
-        server_id = int(query.data.replace('admin_server_delete_', ''))
-        
-        db.execute(0,
-            "DELETE FROM servers WHERE id = ?",
-            (server_id,)
-        )
-        
-        await query.edit_message_text("✅ سرور با موفقیت حذف شد!")
-        await self.admin_manage_servers_callback(update, context)
-
-    # ============================================================
-    # بقیه توابع - بدون تغییر
-    # ============================================================
-    # [ادامه کدهای قبلی - lottery, referral, guide, language, etc]
-    
     async def lottery_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -2193,13 +1796,19 @@ class UTYOBot:
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
-    
+
+    # ============================================================
+    # کالبک‌های رفرال
+    # ============================================================
     async def referral_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
         user_id = query.from_user.id
         await self._show_referral(update, user_id)
-    
+
+    # ============================================================
+    # کالبک‌های راهنما
+    # ============================================================
     async def guide_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -2217,13 +1826,16 @@ class UTYOBot:
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
-    
+
+    # ============================================================
+    # کالبک‌های زبان
+    # ============================================================
     async def language_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
         user_id = query.from_user.id
         await self._show_language_selector(update, user_id)
-    
+
     async def set_language_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -2245,7 +1857,7 @@ class UTYOBot:
             )
 
     # ============================================================
-    # توابع کمکی نمایش
+    # نمایش رفرال و زبان
     # ============================================================
     async def _show_referral(self, update, user_id):
         user = user_manager.get_user(user_id)
@@ -2342,10 +1954,153 @@ class UTYOBot:
                 )
 
     # ============================================================
-    # کالبک‌های نظرسنجی، دانلودر، اشتراک و قرعه‌کشی (بدون تغییر)
+    # ساخت ربات - کالبک‌های جدید
     # ============================================================
-    # [ادامه کدهای قبلی - poll, download, subscribe, join_lottery, etc]
-    
+    async def build_robot_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        lang = self._get_user_language(user_id)
+        
+        cursor = db.execute_global(
+            "SELECT * FROM uploaded_bot_files ORDER BY created_at DESC"
+        )
+        uploaded_files = cursor
+        
+        if not uploaded_files:
+            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(
+                LanguageManager.get_text(lang, 'no_uploaded_files'),
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+        
+        keyboard = []
+        for file in uploaded_files[:10]:
+            lang_name = {'en': '🇬🇧 English', 'fa': '🇮🇷 فارسی', 'tr': '🇹🇷 Türkçe'}.get(file['language'], file['language'])
+            keyboard.append([InlineKeyboardButton(
+                f"📄 {file['file_name']} - {lang_name}",
+                callback_data=f"robot_select_{file['id']}"
+            )])
+        
+        keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            LanguageManager.get_text(lang, 'select_file'),
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+        
+        context.user_data['selecting_robot_file'] = True
+
+    async def my_robots_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        lang = self._get_user_language(user_id)
+        
+        cursor = db.execute(user_id,
+            "SELECT * FROM user_robots WHERE user_id = ? ORDER BY created_at DESC",
+            (user_id,)
+        )
+        robots = cursor.fetchall()
+        
+        if not robots:
+            keyboard = [
+                [InlineKeyboardButton("🤖 ساخت ربات جدید", callback_data="build_robot")],
+                [InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                LanguageManager.get_text(lang, 'no_robots'),
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+        
+        text = LanguageManager.get_text(lang, 'my_robots_title', len(robots)) + "\n\n"
+        
+        for robot in robots:
+            status_emoji = "🟢" if robot['status'] == 'active' else "🔴"
+            text += f"{status_emoji} 🤖 ربات #{robot['id']}\n"
+            text += f"   🔹 توکن: `{robot['bot_token'][:15]}...`\n"
+            text += f"   🔹 زبان: {robot['language']}\n"
+            text += f"   🔹 وضعیت: {robot['status']}\n"
+            text += f"   🔹 ساخته شده: {robot['created_at'][:10]}\n\n"
+        
+        keyboard = []
+        for robot in robots:
+            keyboard.append([InlineKeyboardButton(
+                f"🗑️ حذف ربات #{robot['id']}",
+                callback_data=f"robot_delete_{robot['id']}"
+            )])
+        
+        keyboard.append([InlineKeyboardButton("🤖 ساخت ربات جدید", callback_data="build_robot")])
+        keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            text,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+    async def robot_delete_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        robot_id = int(query.data.replace('robot_delete_', ''))
+        user_id = query.from_user.id
+        lang = self._get_user_language(user_id)
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ بله، حذف کن", callback_data=f"robot_confirm_delete_{robot_id}"),
+                InlineKeyboardButton("❌ نه، برگرد", callback_data="robot_cancel_delete")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            LanguageManager.get_text(lang, 'robot_delete_confirm', robot_id),
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+    async def robot_confirm_delete_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        robot_id = int(query.data.replace('robot_confirm_delete_', ''))
+        user_id = query.from_user.id
+        lang = self._get_user_language(user_id)
+        
+        db.execute(user_id,
+            "DELETE FROM user_robots WHERE id = ? AND user_id = ?",
+            (robot_id, user_id)
+        )
+        
+        await query.edit_message_text(
+            LanguageManager.get_text(lang, 'robot_deleted'),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        
+        await self.my_robots_callback(update, context)
+
+    async def robot_cancel_delete_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        await self.my_robots_callback(update, context)
+
+    # ============================================================
+    # کالبک‌های نظرسنجی
+    # ============================================================
     async def poll_response_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -2387,6 +2142,9 @@ class UTYOBot:
             except Exception as e:
                 logger.error(f"Error sending poll result to admin {admin_id}: {e}")
 
+    # ============================================================
+    # کالبک‌های دانلودر و فاکتور ساز
+    # ============================================================
     async def instagram_download_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -2407,7 +2165,7 @@ class UTYOBot:
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
-    
+
     async def invoice_maker_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -2432,7 +2190,7 @@ class UTYOBot:
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
-    
+
     async def _download_media(self, update: Update, context: ContextTypes.DEFAULT_TYPE, url: str, media_type: str):
         user_id = update.effective_user.id
         lang = self._get_user_language(user_id)
@@ -2491,7 +2249,7 @@ class UTYOBot:
             )
 
     # ============================================================
-    # اشتراک و قرعه‌کشی
+    # کالبک‌های اشتراک
     # ============================================================
     async def subscribe_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
@@ -2529,7 +2287,7 @@ class UTYOBot:
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
-    
+
     async def confirm_subscribe_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -2619,6 +2377,9 @@ class UTYOBot:
                 parse_mode=ParseMode.MARKDOWN
             )
 
+    # ============================================================
+    # کالبک‌های شرکت در قرعه‌کشی
+    # ============================================================
     async def join_lottery_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -2662,7 +2423,7 @@ class UTYOBot:
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
-    
+
     async def confirm_payment_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -2734,7 +2495,7 @@ class UTYOBot:
             )
 
     # ============================================================
-    # تایید تراکنش توسط ادمین
+    # کالبک‌های تایید/رد توسط ادمین
     # ============================================================
     async def admin_verify_approve_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
@@ -2816,7 +2577,7 @@ class UTYOBot:
                     )
                 except:
                     pass
-    
+
     async def admin_verify_reject_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -2871,7 +2632,214 @@ class UTYOBot:
         )
 
     # ============================================================
-    # ادامه توابع مدیریت
+    # کالبک‌های پنل مدیریت
+    # ============================================================
+    async def admin_panel_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        
+        if user_id not in ADMIN_IDS:
+            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text("⛔ دسترسی غیرمجاز!", reply_markup=reply_markup)
+            return
+        
+        user_count = user_manager.get_user_count()
+        active_users = len(user_manager.get_active_users())
+        cache_stats = cache.get_stats()
+        
+        users_list = user_manager.get_all_users()
+        users_text = ""
+        for user in users_list[:10]:
+            users_text += f"• {user['user_id']} - {user['first_name'] or user['username'] or 'Unknown'}\n"
+        if len(users_list) > 10:
+            users_text += f"... و {len(users_list) - 10} نفر دیگر"
+        
+        pending_count = len(self._get_pending_transactions())
+        unpaid_winners = len(self._get_unpaid_winners())
+        subscribed_count = len(user_manager.get_subscribed_users())
+        
+        cursor = db.execute_global("SELECT COUNT(*) as count FROM user_robots")
+        total_robots = 0
+        for row in cursor:
+            total_robots += row['count']
+        
+        cursor = db.execute_global("SELECT COUNT(*) as count FROM uploaded_bot_files")
+        total_files = 0
+        for row in cursor:
+            total_files += row['count']
+        
+        cursor = db.execute_global("SELECT COUNT(*) as count FROM servers WHERE status = 'active'")
+        total_servers = 0
+        for row in cursor:
+            total_servers += row['count']
+        
+        keyboard = [
+            [InlineKeyboardButton("📢 ارسال پیام همگانی", callback_data="admin_broadcast")],
+            [InlineKeyboardButton("🎰 شروع قرعه‌کشی", callback_data="admin_start_lottery")],
+            [InlineKeyboardButton(f"✅ تایید دستی ({pending_count})", callback_data="admin_manual_verify")],
+            [InlineKeyboardButton("📊 ارسال نظرسنجی", callback_data="admin_poll")],
+            [InlineKeyboardButton(f"💰 واریز به برندگان ({unpaid_winners})", callback_data="admin_pay_winners")],
+            [InlineKeyboardButton(f"👥 کاربران اشتراکی ({subscribed_count})", callback_data="admin_subscribed_users")],
+            [InlineKeyboardButton("👥 لیست کاربران", callback_data="admin_user_list")],
+            [InlineKeyboardButton("🔑 اضافه کردن API", callback_data="admin_add_api")],
+            [InlineKeyboardButton("📈 آمار و اطلاعات", callback_data="admin_stats")],
+            [InlineKeyboardButton(f"📤 آپلود فایل ربات ({total_files})", callback_data="admin_upload_file")],
+            [InlineKeyboardButton(f"🌐 مدیریت سرورها ({total_servers})", callback_data="admin_manage_servers")],
+            [InlineKeyboardButton("➕ افزودن سرور جدید", callback_data="admin_add_server")],
+            [InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        text = (
+            f"⚙️ **پنل مدیریت**\n\n"
+            f"📊 **آمار:**\n"
+            f"👥 کل کاربران: {user_count:,}\n"
+            f"✅ اشتراک فعال: {active_users:,}\n"
+            f"🤖 ربات‌های ساخته شده: {total_robots:,}\n"
+            f"📄 فایل‌های آپلودی: {total_files}\n"
+            f"🖥️ سرورهای فعال: {total_servers}\n"
+            f"⏳ در انتظار تایید: {pending_count}\n"
+            f"💰 برندگان پرداخت نشده: {unpaid_winners}\n"
+            f"🔑 کلیدهای API: {len(payment_verifier.apis)}\n\n"
+            f"👥 **لیست کاربران:**\n{users_text}\n\n"
+            f"انتخاب کنید:"
+        )
+        
+        await query.edit_message_text(
+            text,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+    # ============================================================
+    # آپلود فایل ربات توسط ادمین
+    # ============================================================
+    async def admin_upload_file_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        if user_id not in ADMIN_IDS:
+            return
+        
+        context.user_data['admin_action'] = 'upload_robot_file'
+        
+        keyboard = [[InlineKeyboardButton("🔙 انصراف", callback_data="admin_panel")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            "📤 **آپلود فایل ربات**\n\n"
+            "لطفاً فایل کد ربات را ارسال کنید:\n\n"
+            "📌 **نکات:**\n"
+            "• فایل باید به صورت TEXT یا فایل .py باشد\n"
+            "• از `{BOT_TOKEN}` برای توکن استفاده کنید\n"
+            "• از `{ADMIN_ID}` برای ادمین استفاده کنید\n\n"
+            "🌐 **زبان فایل را مشخص کنید:**\n"
+            "پس از ارسال فایل، زبان را انتخاب کنید.",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+        
+        context.user_data['waiting_for_robot_file'] = True
+
+    # ============================================================
+    # مدیریت سرورها
+    # ============================================================
+    async def admin_manage_servers_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        if user_id not in ADMIN_IDS:
+            return
+        
+        cursor = db.execute_global(
+            "SELECT * FROM servers ORDER BY created_at DESC"
+        )
+        servers = cursor
+        
+        text = "🌐 **مدیریت سرورها**\n\n"
+        
+        if not servers:
+            text += "❌ هیچ سروری ثبت نشده است.\n"
+        else:
+            for server in servers:
+                status_emoji = "🟢" if server['status'] == 'active' else "🔴"
+                text += f"{status_emoji} **{server['name']}**\n"
+                text += f"   📍 IP: {server['ip']}:{server['port']}\n"
+                text += f"   📦 کارگرها: {server['current_workers']}/{server['max_workers']}\n"
+                text += f"   🗂️ شاردها: {server['shards']}\n"
+                text += f"   📅 ایجاد: {server['created_at'][:10]}\n\n"
+        
+        keyboard = [
+            [InlineKeyboardButton("➕ افزودن سرور جدید", callback_data="admin_add_server")],
+            [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]
+        ]
+        
+        for server in servers:
+            keyboard.insert(0, [InlineKeyboardButton(
+                f"🗑️ حذف سرور {server['ip']}",
+                callback_data=f"admin_server_delete_{server['id']}"
+            )])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            text,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+    # ============================================================
+    # افزودن سرور جدید
+    # ============================================================
+    async def admin_add_server_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        if user_id not in ADMIN_IDS:
+            return
+        
+        context.user_data['add_server_step'] = 1
+        
+        keyboard = [[InlineKeyboardButton("🔙 انصراف", callback_data="admin_manage_servers")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            "🌐 **افزودن سرور جدید**\n\n"
+            "مرحله ۱: لطفاً IP سرور را وارد کنید:\n\n"
+            "مثال: `192.168.1.100`",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+    # ============================================================
+    # حذف سرور
+    # ============================================================
+    async def admin_server_delete_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        if user_id not in ADMIN_IDS:
+            return
+        
+        server_id = int(query.data.replace('admin_server_delete_', ''))
+        
+        db.execute(0,
+            "DELETE FROM servers WHERE id = ?",
+            (server_id,)
+        )
+        
+        await query.edit_message_text("✅ سرور با موفقیت حذف شد!")
+        await self.admin_manage_servers_callback(update, context)
+
+    # ============================================================
+    # سایر توابع مدیریت
     # ============================================================
     async def admin_subscribed_users_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
@@ -2916,7 +2884,7 @@ class UTYOBot:
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN
             )
-    
+
     async def admin_user_list_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -2957,7 +2925,7 @@ class UTYOBot:
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN
             )
-    
+
     async def admin_reset_user_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -2990,7 +2958,7 @@ class UTYOBot:
             "❌ خطا در بازنشانی کاربر! لطفاً از لیست کاربران استفاده کنید.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]])
         )
-    
+
     async def admin_broadcast_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -3011,7 +2979,7 @@ class UTYOBot:
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
-    
+
     async def admin_start_lottery_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -3039,7 +3007,7 @@ class UTYOBot:
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
-    
+
     async def admin_manual_verify_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -3086,7 +3054,7 @@ class UTYOBot:
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
-    
+
     async def admin_poll_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -3108,7 +3076,7 @@ class UTYOBot:
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
-    
+
     async def admin_pay_winners_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -3138,7 +3106,7 @@ class UTYOBot:
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
-    
+
     async def pay_winners_confirm_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -3215,7 +3183,7 @@ class UTYOBot:
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
-    
+
     async def admin_add_api_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -3239,7 +3207,7 @@ class UTYOBot:
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
-    
+
     async def admin_stats_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -3254,7 +3222,6 @@ class UTYOBot:
         tx_stats = self._get_transaction_stats()
         lottery_stats = self._get_lottery_stats()
         
-        # آمار ربات‌ها
         cursor = db.execute_global("SELECT COUNT(*) as count FROM user_robots")
         total_robots = 0
         for row in cursor:
@@ -3466,7 +3433,7 @@ class UTYOBot:
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
-    
+
     async def confirm_withdraw_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -3630,7 +3597,6 @@ class UTYOBot:
                 await update.message.reply_text("❌ فایل ربات یافت نشد!")
                 return
             
-            # دریافت محتوای فایل
             file_content = None
             if os.path.exists(file_info['file_path']):
                 with open(file_info['file_path'], 'r', encoding='utf-8') as f:
@@ -3640,11 +3606,9 @@ class UTYOBot:
                 await update.message.reply_text("❌ خطا در خواندن فایل ربات!")
                 return
             
-            # جایگزینی توکن و ادمین
             file_content = file_content.replace('{BOT_TOKEN}', token)
             file_content = file_content.replace('{ADMIN_ID}', str(user_id))
             
-            # ذخیره در دیتابیس
             file_hash = hashlib.sha256(file_content.encode()).hexdigest()
             
             db.execute(user_id,
@@ -3742,7 +3706,6 @@ class UTYOBot:
                     await update.message.reply_text("❌ اطلاعات ناقص است! لطفاً دوباره تلاش کنید.")
                     return
                 
-                # ذخیره سرور در دیتابیس
                 db.execute(0,
                     """INSERT INTO servers 
                        (name, ip, port, username, password, status, max_workers, shards) 
@@ -3960,55 +3923,7 @@ class UTYOBot:
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
-    
-    # ============================================================
-    # مدیریت فایل‌ها
-    # ============================================================
-    async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        
-        if context.user_data.get('waiting_for_robot_file'):
-            document = update.message.document
-            
-            # بررسی نوع فایل
-            if document.mime_type not in ['text/plain', 'application/x-python-code'] and not document.file_name.endswith('.py'):
-                await update.message.reply_text(
-                    "❌ لطفاً یک فایل متنی (.py یا .txt) آپلود کنید!"
-                )
-                return
-            
-            # دانلود فایل
-            file = await context.bot.get_file(document.file_id)
-            file_content = await file.download_as_bytearray()
-            text = file_content.decode('utf-8')
-            
-            # درخواست انتخاب زبان
-            context.user_data['pending_file_content'] = text
-            context.user_data['pending_file_name'] = document.file_name
-            
-            keyboard = [
-                [InlineKeyboardButton("🇬🇧 English", callback_data="file_lang_en")],
-                [InlineKeyboardButton("🇮🇷 فارسی", callback_data="file_lang_fa")],
-                [InlineKeyboardButton("🇹🇷 Türkçe", callback_data="file_lang_tr")],
-                [InlineKeyboardButton("🔙 انصراف", callback_data="admin_panel")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await update.message.reply_text(
-                "📄 **فایل دریافت شد!**\n\n"
-                f"📁 نام: {document.file_name}\n"
-                f"📦 حجم: {document.file_size:,} bytes\n\n"
-                "🌐 **زبان فایل را انتخاب کنید:**",
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-            
-            context.user_data['waiting_for_file_lang'] = True
-            return
-    
-    # ============================================================
-    # توابع داخلی - بدون تغییر
-    # ============================================================
+
     async def _handle_lottery_steps(self, update, text, context):
         user_id = update.effective_user.id
         lang = self._get_user_language(user_id)
@@ -4078,7 +3993,7 @@ class UTYOBot:
                 )
             except ValueError:
                 await update.message.reply_text("❌ لطفاً یک عدد معتبر وارد کنید!")
-    
+
     async def _handle_add_api(self, update, text, context):
         user_id = update.effective_user.id
         api_key = text.strip()
@@ -4098,7 +4013,7 @@ class UTYOBot:
                 "این API قبلاً اضافه شده است یا نامعتبر است.",
                 parse_mode=ParseMode.MARKDOWN
             )
-    
+
     async def _send_poll(self, update, text, context):
         user_id = update.effective_user.id
         
@@ -4156,7 +4071,7 @@ class UTYOBot:
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
-    
+
     async def _send_broadcast(self, update, text, context):
         user_id = update.effective_user.id
         
@@ -4197,7 +4112,7 @@ class UTYOBot:
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
-    
+
     async def handle_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         lang = self._get_user_language(user_id)
@@ -4213,7 +4128,89 @@ class UTYOBot:
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
-    
+
+    async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        
+        if context.user_data.get('waiting_for_robot_file'):
+            document = update.message.document
+            
+            if document.mime_type not in ['text/plain', 'application/x-python-code'] and not document.file_name.endswith('.py'):
+                await update.message.reply_text(
+                    "❌ لطفاً یک فایل متنی (.py یا .txt) آپلود کنید!"
+                )
+                return
+            
+            file = await context.bot.get_file(document.file_id)
+            file_content = await file.download_as_bytearray()
+            text = file_content.decode('utf-8')
+            
+            context.user_data['pending_file_content'] = text
+            context.user_data['pending_file_name'] = document.file_name
+            
+            keyboard = [
+                [InlineKeyboardButton("🇬🇧 English", callback_data="file_lang_en")],
+                [InlineKeyboardButton("🇮🇷 فارسی", callback_data="file_lang_fa")],
+                [InlineKeyboardButton("🇹🇷 Türkçe", callback_data="file_lang_tr")],
+                [InlineKeyboardButton("🔙 انصراف", callback_data="admin_panel")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await update.message.reply_text(
+                "📄 **فایل دریافت شد!**\n\n"
+                f"📁 نام: {document.file_name}\n"
+                f"📦 حجم: {document.file_size:,} bytes\n\n"
+                "🌐 **زبان فایل را انتخاب کنید:**",
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN
+            )
+            
+            context.user_data['waiting_for_file_lang'] = True
+            return
+        
+        # مدیریت انتخاب زبان فایل
+        if context.user_data.get('waiting_for_file_lang'):
+            if update.callback_query:
+                query = update.callback_query
+                await query.answer()
+                
+                lang_code = query.data.replace('file_lang_', '')
+                file_content = context.user_data.get('pending_file_content')
+                file_name = context.user_data.get('pending_file_name')
+                
+                if file_content and file_name:
+                    # ذخیره فایل
+                    file_hash = hashlib.sha256(file_content.encode()).hexdigest()
+                    file_path = os.path.join("robot_files", f"{file_hash}_{file_name}")
+                    
+                    with open(file_path, 'w', encoding='utf-8') as f:
+                        f.write(file_content)
+                    
+                    db.execute(user_id,
+                        """INSERT INTO uploaded_bot_files 
+                           (file_name, file_path, language, file_hash, uploaded_by) 
+                           VALUES (?, ?, ?, ?, ?)""",
+                        (file_name, file_path, lang_code, file_hash, user_id)
+                    )
+                    
+                    context.user_data['waiting_for_file_lang'] = False
+                    context.user_data['pending_file_content'] = None
+                    context.user_data['pending_file_name'] = None
+                    
+                    keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                    
+                    await query.edit_message_text(
+                        f"✅ **فایل با موفقیت آپلود شد!**\n\n"
+                        f"📁 نام: {file_name}\n"
+                        f"🌐 زبان: {lang_code}\n"
+                        f"🔑 هش: `{file_hash[:20]}...`\n\n"
+                        f"📌 کاربران می‌توانند از این فایل برای ساخت ربات استفاده کنند.",
+                        reply_markup=reply_markup,
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                return
+
     async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Update {update} caused error {context.error}")
         
@@ -4239,7 +4236,6 @@ class UTYOBot:
 # ============================================================
 # اجرای ربات
 # ============================================================
-
 def main():
     try:
         bot = UTYOBot()
