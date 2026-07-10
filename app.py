@@ -1,5 +1,5 @@
 # ============================================================
-# ربات قرعه‌کشی هوشمند UTYOB - نسخه نهایی با TTS و YouTube Downloader
+# ربات قرعه‌کشی هوشمند UTYOB - نسخه نهایی با TTS فوق‌حرفه‌ای
 # ============================================================
 
 import asyncio
@@ -139,19 +139,20 @@ class LanguageManager:
             'quality_480': "📱 480p SD",
             'quality_audio': "🎵 Audio Only",
             'download_started': "⏳ Download started... This may take a few seconds.",
-            'tts_title': "🔊 **Text to Speech Converter**\n\nSend me any text and I'll convert it to speech!\n\n📌 **Features:**\n• 15+ languages supported\n• Natural voice quality\n• Adjustable speed\n• Download as MP3\n\n🌐 **Select your language:**",
-            'tts_lang_select': "🌐 **Select Language:**\n\nChoose your preferred language:",
+            'tts_title': "🔊 **Text to Speech Converter**\n\nSend me any text and I'll convert it to speech!\n\n📌 **Features:**\n• 30+ languages supported\n• Natural voice quality\n• Adjustable speed (4 levels)\n• Download as MP3 (320kbps)\n• High quality audio processing\n\n🌐 **Select your language:**",
+            'tts_lang_select': "🌐 **Select Language:**\n\nChoose your preferred language from {}+ options:",
             'tts_speed_select': "⚡ **Select Speed:**\n\nChoose the speed you want:",
             'tts_speed_slow': "🐢 Slow",
             'tts_speed_normal': "⚡ Normal",
             'tts_speed_fast': "🚀 Fast",
             'tts_speed_very_fast': "🔥 Very Fast",
-            'tts_waiting_text': "📝 **Send me the text to convert to speech:**\n\n💡 You can send long texts (up to 5000 characters).",
+            'tts_waiting_text': "📝 **Send me the text to convert to speech:**\n\n💡 You can send long texts (up to 5000 characters).\n\n🎯 Supported languages:\n",
             'tts_text_too_long': "❌ **Text too long!**\n\n📝 Your text: {}\n📌 Maximum: 5000 characters\n\nPlease send a shorter text.",
-            'tts_converting': "🔊 **Converting text to speech...**\n\n📝 Text length: {} characters\n⏳ Please wait...",
-            'tts_success': "🔊 **Text-to-Speech Completed!** 🎉\n\n📝 Text: `{}`\n📊 Words: {}\n⏱️ Reading time: ~{} seconds\n📦 Size: {} KB\n🔊 Language: {}\n⚡ Speed: {}\n\n💡 Listen and enjoy! 🎧",
-            'tts_failed': "❌ **Conversion failed!**\n\n🔹 Reason: {}\n\nPlease try again with shorter text.",
+            'tts_converting': "🔊 **Converting text to speech...**\n\n📝 Text length: {} characters\n⏳ This may take a few seconds...",
+            'tts_success': "🔊 **Text-to-Speech Completed!** 🎉\n\n📝 Text: `{}`\n📊 Words: {}\n⏱️ Duration: ~{} seconds\n📦 Size: {} KB\n🔊 Language: {}\n⚡ Speed: {}\n🎧 Quality: 320 kbps\n\n💡 Listen and enjoy! 🎧",
+            'tts_failed': "❌ **Conversion failed!**\n\n🔹 Reason: {}\n\n📌 Please check:\n• Text length (max 5000 chars)\n• Internet connection\n• Try again with shorter text",
             'tts_again': "🔄 Convert Another",
+            'tts_installing': "⚠️ **ffmpeg not found!**\n\nPlease install ffmpeg to use this feature:\n\n📌 **Installation:**\n• Windows: https://ffmpeg.org/download.html\n• Linux: `sudo apt install ffmpeg`\n• macOS: `brew install ffmpeg`\n\nAfter installation, restart the bot.",
         },
         'fa': {
             'name': 'فارسی',
@@ -165,7 +166,7 @@ class LanguageManager:
             'admin_panel': "⚙️ پنل مدیریت",
             'youtube_download': "🎬 دانلودر یوتیوب",
             'invoice_maker': "🧾 فاکتور ساز",
-            'text_to_speech': "🔊 متن به گفتار",
+            'text_to_speech': "🔊 تبدیل متن به گفتار",
             'no_subscription': "❌ **شما اشتراک فعال ندارید!**\n\nبرای شرکت در قرعه‌کشی، ابتدا باید اشتراک تهیه کنید.\n\n💰 هزینه اشتراک: ۱۰۰ دلار\n📅 مدت اعتبار: ۱ ماه\n\nبرای تهیه اشتراک، روی دکمه زیر کلیک کنید.",
             'subscribe': "🔄 خرید اشتراک",
             'back': "🔙 بازگشت",
@@ -234,19 +235,20 @@ class LanguageManager:
             'quality_480': "📱 480p SD",
             'quality_audio': "🎵 فقط صدا",
             'download_started': "⏳ دانلود شروع شد... چند ثانیه طول می‌کشد.",
-            'tts_title': "🔊 **تبدیل متن به گفتار**\n\nهر متنی را بفرستید تا به گفتار تبدیل کنم!\n\n📌 **ویژگی‌ها:**\n• پشتیبانی از ۱۵+ زبان\n• صدای طبیعی\n• سرعت قابل تنظیم\n• دانلود به صورت MP3\n\n🌐 **زبان خود را انتخاب کنید:**",
-            'tts_lang_select': "🌐 **انتخاب زبان:**\n\nزبان مورد نظر خود را انتخاب کنید:",
+            'tts_title': "🔊 **تبدیل متن به گفتار حرفه‌ای**\n\nهر متنی را بفرستید تا به گفتار تبدیل کنم!\n\n📌 **ویژگی‌ها:**\n• پشتیبانی از ۳۰+ زبان\n• صدای طبیعی و با کیفیت\n• ۴ سطح سرعت قابل تنظیم\n• خروجی MP3 با کیفیت ۳۲۰kbps\n• پردازش حرفه‌ای صدا\n\n🌐 **زبان خود را انتخاب کنید:**",
+            'tts_lang_select': "🌐 **انتخاب زبان:**\n\nزبان مورد نظر خود را از {}+ گزینه انتخاب کنید:",
             'tts_speed_select': "⚡ **انتخاب سرعت:**\n\nسرعت مورد نظر را انتخاب کنید:",
             'tts_speed_slow': "🐢 کند",
             'tts_speed_normal': "⚡ معمولی",
             'tts_speed_fast': "🚀 سریع",
             'tts_speed_very_fast': "🔥 خیلی سریع",
-            'tts_waiting_text': "📝 **متن خود را برای تبدیل به گفتار بفرستید:**\n\n💡 می‌توانید متن‌های طولانی (تا ۵۰۰۰ کاراکتر) ارسال کنید.",
+            'tts_waiting_text': "📝 **متن خود را برای تبدیل به گفتار بفرستید:**\n\n💡 می‌توانید متن‌های طولانی (تا ۵۰۰۰ کاراکتر) ارسال کنید.\n\n🎯 زبان‌های پشتیبانی شده:\n",
             'tts_text_too_long': "❌ **متن خیلی طولانی است!**\n\n📝 متن شما: {}\n📌 حداکثر: ۵۰۰۰ کاراکتر\n\nلطفاً متن کوتاه‌تری ارسال کنید.",
-            'tts_converting': "🔊 **در حال تبدیل متن به گفتار...**\n\n📝 طول متن: {} کاراکتر\n⏳ لطفاً صبر کنید...",
-            'tts_success': "🔊 **تبدیل متن به گفتار کامل شد!** 🎉\n\n📝 متن: `{}`\n📊 تعداد کلمات: {}\n⏱️ زمان تقریبی خواندن: ~{} ثانیه\n📦 حجم: {} KB\n🔊 زبان: {}\n⚡ سرعت: {}\n\n💡 گوش کنید و لذت ببرید! 🎧",
-            'tts_failed': "❌ **تبدیل ناموفق!**\n\n🔹 دلیل: {}\n\nلطفاً با متن کوتاه‌تر دوباره تلاش کنید.",
+            'tts_converting': "🔊 **در حال تبدیل متن به گفتار...**\n\n📝 طول متن: {} کاراکتر\n⏳ چند ثانیه صبر کنید...",
+            'tts_success': "🔊 **تبدیل متن به گفتار کامل شد!** 🎉\n\n📝 متن: `{}`\n📊 تعداد کلمات: {}\n⏱️ مدت زمان: ~{} ثانیه\n📦 حجم: {} KB\n🔊 زبان: {}\n⚡ سرعت: {}\n🎧 کیفیت: ۳۲۰ kbps\n\n💡 گوش کنید و لذت ببرید! 🎧",
+            'tts_failed': "❌ **تبدیل ناموفق!**\n\n🔹 دلیل: {}\n\n📌 لطفاً بررسی کنید:\n• طول متن (حداکثر ۵۰۰۰ کاراکتر)\n• اتصال اینترنت\n• دوباره با متن کوتاه‌تر تلاش کنید",
             'tts_again': "🔄 تبدیل مجدد",
+            'tts_installing': "⚠️ **ffmpeg پیدا نشد!**\n\nلطفاً برای استفاده از این قابلیت ffmpeg را نصب کنید:\n\n📌 **نصب:**\n• Windows: https://ffmpeg.org/download.html\n• Linux: `sudo apt install ffmpeg`\n• macOS: `brew install ffmpeg`\n\nپس از نصب، ربات را مجدداً راه‌اندازی کنید.",
         },
         'tr': {
             'name': 'Türkçe',
@@ -329,19 +331,20 @@ class LanguageManager:
             'quality_480': "📱 480p SD",
             'quality_audio': "🎵 Sadece Ses",
             'download_started': "⏳ İndirme başladı... Birkaç saniye sürebilir.",
-            'tts_title': "🔊 **Metin Seslendirme**\n\nHerhangi bir metni gönderin, seslendireyim!\n\n📌 **Özellikler:**\n• 15+ dil desteği\n• Doğal ses kalitesi\n• Ayarlanabilir hız\n• MP3 olarak indirme\n\n🌐 **Dil seçin:**",
-            'tts_lang_select': "🌐 **Dil Seçin:**\n\nTercih ettiğiniz dili seçin:",
+            'tts_title': "🔊 **Profesyonel Metin Seslendirme**\n\nHerhangi bir metni gönderin, seslendireyim!\n\n📌 **Özellikler:**\n• 30+ dil desteği\n• Doğal ve kaliteli ses\n• 4 farklı hız seviyesi\n• 320kbps MP3 çıktısı\n• Profesyonel ses işleme\n\n🌐 **Dil seçin:**",
+            'tts_lang_select': "🌐 **Dil Seçin:**\n\nTercih ettiğiniz dili {}+ seçenek arasından seçin:",
             'tts_speed_select': "⚡ **Hız Seçin:**\n\nİstediğiniz hızı seçin:",
             'tts_speed_slow': "🐢 Yavaş",
             'tts_speed_normal': "⚡ Normal",
             'tts_speed_fast': "🚀 Hızlı",
             'tts_speed_very_fast': "🔥 Çok Hızlı",
-            'tts_waiting_text': "📝 **Seslendirilecek metni gönderin:**\n\n💡 Uzun metinler gönderebilirsiniz (5000 karaktere kadar).",
+            'tts_waiting_text': "📝 **Seslendirilecek metni gönderin:**\n\n💡 Uzun metinler gönderebilirsiniz (5000 karaktere kadar).\n\n🎯 Desteklenen diller:\n",
             'tts_text_too_long': "❌ **Metin çok uzun!**\n\n📝 Metniniz: {}\n📌 Maksimum: 5000 karakter\n\nLütfen daha kısa bir metin gönderin.",
-            'tts_converting': "🔊 **Metin seslendiriliyor...**\n\n📝 Metin uzunluğu: {} karakter\n⏳ Lütfen bekleyin...",
-            'tts_success': "🔊 **Metin Seslendirme Tamamlandı!** 🎉\n\n📝 Metin: `{}`\n📊 Kelime sayısı: {}\n⏱️ Yaklaşık okuma süresi: ~{} saniye\n📦 Boyut: {} KB\n🔊 Dil: {}\n⚡ Hız: {}\n\n💡 Dinleyin ve keyfini çıkarın! 🎧",
-            'tts_failed': "❌ **Seslendirme başarısız!**\n\n🔹 Sebep: {}\n\nLütfen daha kısa bir metinle tekrar deneyin.",
+            'tts_converting': "🔊 **Metin seslendiriliyor...**\n\n📝 Metin uzunluğu: {} karakter\n⏳ Birkaç saniye sürebilir...",
+            'tts_success': "🔊 **Metin Seslendirme Tamamlandı!** 🎉\n\n📝 Metin: `{}`\n📊 Kelime sayısı: {}\n⏱️ Süre: ~{} saniye\n📦 Boyut: {} KB\n🔊 Dil: {}\n⚡ Hız: {}\n🎧 Kalite: 320 kbps\n\n💡 Dinleyin ve keyfini çıkarın! 🎧",
+            'tts_failed': "❌ **Seslendirme başarısız!**\n\n🔹 Sebep: {}\n\n📌 Lütfen kontrol edin:\n• Metin uzunluğu (max 5000 karakter)\n• İnternet bağlantısı\n• Daha kısa metinle tekrar deneyin",
             'tts_again': "🔄 Tekrar Dene",
+            'tts_installing': "⚠️ **ffmpeg bulunamadı!**\n\nBu özelliği kullanmak için ffmpeg yükleyin:\n\n📌 **Yükleme:**\n• Windows: https://ffmpeg.org/download.html\n• Linux: `sudo apt install ffmpeg`\n• macOS: `brew install ffmpeg`\n\nYüklemeden sonra botu yeniden başlatın.",
         }
     }
     
@@ -713,60 +716,165 @@ class YouTubeDownloader:
 youtube_downloader = YouTubeDownloader()
 
 # ============================================================
-# سیستم Text-to-Speech پیشرفته
+# سیستم Text-to-Speech فوق‌حرفه‌ای
 # ============================================================
 class TextToSpeech:
     def __init__(self):
-        self.executor = ThreadPoolExecutor(max_workers=10)
+        self.executor = ThreadPoolExecutor(max_workers=20)
         self.temp_dir = tempfile.mkdtemp()
         os.makedirs("tts", exist_ok=True)
+        self._check_ffmpeg()
+        
+    def _check_ffmpeg(self):
+        """بررسی وجود ffmpeg"""
+        if shutil.which('ffmpeg') is None:
+            logger.error("❌ ffmpeg not found!")
+            return False
+        logger.info("✅ ffmpeg found")
+        return True
         
     async def convert_to_speech(self, text: str, lang: str = "en", speed: str = "normal") -> Tuple[bool, str, dict]:
         try:
             from gtts import gTTS
             from pydub import AudioSegment
+            import io
             
+            # ============================================================
+            # پشتیبانی کامل از 30+ زبان
+            # ============================================================
             lang_map = {
                 'en': 'en', 'fa': 'fa', 'tr': 'tr',
                 'es': 'es', 'fr': 'fr', 'de': 'de',
                 'it': 'it', 'pt': 'pt', 'ru': 'ru',
                 'ja': 'ja', 'ko': 'ko', 'zh': 'zh-CN',
-                'ar': 'ar', 'hi': 'hi', 'nl': 'nl'
+                'ar': 'ar', 'hi': 'hi', 'nl': 'nl',
+                'el': 'el', 'he': 'he', 'id': 'id',
+                'ms': 'ms', 'pl': 'pl', 'ro': 'ro',
+                'sv': 'sv', 'th': 'th', 'uk': 'uk',
+                'vi': 'vi', 'bg': 'bg', 'cs': 'cs',
+                'da': 'da', 'fi': 'fi', 'hu': 'hu',
+                'no': 'no', 'sk': 'sk', 'sl': 'sl'
             }
             
             tts_lang = lang_map.get(lang, 'en')
             
+            # ============================================================
+            # تنظیمات سرعت
+            # ============================================================
+            speed_map = {
+                'slow': 0.7,
+                'normal': 1.0,
+                'fast': 1.3,
+                'very_fast': 1.6
+            }
+            
+            speed_factor = speed_map.get(speed, 1.0)
+            is_slow = (speed == 'slow')
+            
+            # ============================================================
+            # تولید فایل صوتی
+            # ============================================================
             filename = f"tts_{int(time.time())}.mp3"
             filepath = os.path.join(self.temp_dir, filename)
             
-            tts = gTTS(text=text, lang=tts_lang, slow=(speed == 'slow'))
+            # تبدیل با gTTS
+            tts = gTTS(text=text, lang=tts_lang, slow=is_slow)
             tts.save(filepath)
             
-            if speed != 'slow' and speed != 'normal':
+            # ============================================================
+            # پردازش با pydub برای کیفیت بالا
+            # ============================================================
+            if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
                 try:
-                    speed_map = {'fast': 1.2, 'very_fast': 1.5}
-                    speed_factor = speed_map.get(speed, 1.0)
-                    
                     audio = AudioSegment.from_mp3(filepath)
-                    audio = audio.speedup(playback_speed=speed_factor)
-                    audio.export(filepath, format="mp3")
+                    
+                    # تغییر سرعت
+                    if speed_factor != 1.0 and not is_slow:
+                        if speed_factor > 1.0:
+                            audio = audio.speedup(playback_speed=speed_factor)
+                        else:
+                            audio = audio._spawn(audio.raw_data, overrides={
+                                "frame_rate": int(audio.frame_rate * speed_factor)
+                            })
+                            audio = audio.set_frame_rate(audio.frame_rate)
+                    
+                    # افزایش کیفیت صدا
+                    audio = audio.high_pass_filter(80)  # حذف نویز
+                    audio = audio.normalize()  # عادی‌سازی
+                    audio = audio + 3  # افزایش بلندی
+                    
+                    # خروجی با کیفیت بالا
+                    audio.export(filepath, format="mp3", bitrate="320k")
+                    
                 except Exception as e:
-                    logger.warning(f"Speed adjustment failed: {e}")
+                    logger.warning(f"Audio processing failed: {e}")
             
-            if os.path.exists(filepath):
+            # ============================================================
+            # اطلاعات فایل
+            # ============================================================
+            if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
                 file_size = os.path.getsize(filepath) // 1024
+                words = len(text.split())
+                
+                try:
+                    audio = AudioSegment.from_mp3(filepath)
+                    duration = len(audio) // 1000
+                except:
+                    duration = int(words / 2)
+                
                 info = {
                     'size': file_size,
-                    'words': len(text.split()),
-                    'chars': len(text)
+                    'words': words,
+                    'duration': duration,
+                    'lang': tts_lang,
+                    'speed': speed,
+                    'text_preview': text[:100] + ('...' if len(text) > 100 else '')
                 }
+                
                 return True, filepath, info
-            
-            return False, None, {"error": "Conversion failed"}
+                
+            return False, None, {"error": "Conversion failed - empty file"}
             
         except Exception as e:
             logger.error(f"TTS error: {e}")
             return False, None, {"error": str(e)}
+    
+    def get_supported_languages(self) -> List[Dict]:
+        """لیست زبان‌های پشتیبانی شده"""
+        return [
+            {'code': 'en', 'name': '🇬🇧 English'},
+            {'code': 'fa', 'name': '🇮🇷 فارسی'},
+            {'code': 'tr', 'name': '🇹🇷 Türkçe'},
+            {'code': 'es', 'name': '🇪🇸 Español'},
+            {'code': 'fr', 'name': '🇫🇷 Français'},
+            {'code': 'de', 'name': '🇩🇪 Deutsch'},
+            {'code': 'it', 'name': '🇮🇹 Italiano'},
+            {'code': 'pt', 'name': '🇵🇹 Português'},
+            {'code': 'ru', 'name': '🇷🇺 Русский'},
+            {'code': 'ja', 'name': '🇯🇵 日本語'},
+            {'code': 'ko', 'name': '🇰🇷 한국어'},
+            {'code': 'zh', 'name': '🇨🇳 中文'},
+            {'code': 'ar', 'name': '🇸🇦 العربية'},
+            {'code': 'hi', 'name': '🇮🇳 हिन्दी'},
+            {'code': 'nl', 'name': '🇳🇱 Nederlands'},
+            {'code': 'el', 'name': '🇬🇷 Ελληνικά'},
+            {'code': 'he', 'name': '🇮🇱 עברית'},
+            {'code': 'id', 'name': '🇮🇩 Bahasa Indonesia'},
+            {'code': 'pl', 'name': '🇵🇱 Polski'},
+            {'code': 'ro', 'name': '🇷🇴 Română'},
+            {'code': 'sv', 'name': '🇸🇪 Svenska'},
+            {'code': 'th', 'name': '🇹🇭 ไทย'},
+            {'code': 'uk', 'name': '🇺🇦 Українська'},
+            {'code': 'vi', 'name': '🇻🇳 Tiếng Việt'},
+            {'code': 'bg', 'name': '🇧🇬 Български'},
+            {'code': 'cs', 'name': '🇨🇿 Čeština'},
+            {'code': 'da', 'name': '🇩🇰 Dansk'},
+            {'code': 'fi', 'name': '🇫🇮 Suomi'},
+            {'code': 'hu', 'name': '🇭🇺 Magyar'},
+            {'code': 'no', 'name': '🇳🇴 Norsk'},
+            {'code': 'sk', 'name': '🇸🇰 Slovenčina'},
+            {'code': 'sl', 'name': '🇸🇮 Slovenščina'},
+        ]
 
 tts = TextToSpeech()
 
@@ -1724,7 +1832,7 @@ class UTYOBot:
             )
 
     # ============================================================
-    # کالبک‌های Text-to-Speech
+    # کالبک‌های Text-to-Speech فوق‌حرفه‌ای
     # ============================================================
     async def tts_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
@@ -1733,24 +1841,34 @@ class UTYOBot:
         user_id = query.from_user.id
         lang = self._get_user_language(user_id)
         
+        # بررسی وجود ffmpeg
+        if not tts._check_ffmpeg():
+            await query.edit_message_text(
+                LanguageManager.get_text(lang, 'tts_installing'),
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+        
         self._clear_user_state(user_id)
         
-        keyboard = [
-            [InlineKeyboardButton("🇬🇧 English", callback_data="tts_lang_en")],
-            [InlineKeyboardButton("🇮🇷 فارسی", callback_data="tts_lang_fa")],
-            [InlineKeyboardButton("🇹🇷 Türkçe", callback_data="tts_lang_tr")],
-            [InlineKeyboardButton("🇪🇸 Español", callback_data="tts_lang_es")],
-            [InlineKeyboardButton("🇫🇷 Français", callback_data="tts_lang_fr")],
-            [InlineKeyboardButton("🇩🇪 Deutsch", callback_data="tts_lang_de")],
-            [InlineKeyboardButton("🇮🇹 Italiano", callback_data="tts_lang_it")],
-            [InlineKeyboardButton("🇷🇺 Русский", callback_data="tts_lang_ru")],
-            [InlineKeyboardButton("🇯🇵 日本語", callback_data="tts_lang_ja")],
-            [InlineKeyboardButton("🇨🇳 中文", callback_data="tts_lang_zh")],
-            [InlineKeyboardButton("🇸🇦 العربية", callback_data="tts_lang_ar")],
-            [InlineKeyboardButton("🇮🇳 हिन्दी", callback_data="tts_lang_hi")],
-            [InlineKeyboardButton("🇳🇱 Nederlands", callback_data="tts_lang_nl")],
-            [InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]
-        ]
+        languages = tts.get_supported_languages()
+        keyboard = []
+        
+        # نمایش زبان‌ها به صورت 2 ستونه
+        for i in range(0, len(languages), 2):
+            row = []
+            row.append(InlineKeyboardButton(
+                languages[i]['name'],
+                callback_data=f"tts_lang_{languages[i]['code']}"
+            ))
+            if i + 1 < len(languages):
+                row.append(InlineKeyboardButton(
+                    languages[i+1]['name'],
+                    callback_data=f"tts_lang_{languages[i+1]['code']}"
+                ))
+            keyboard.append(row)
+        
+        keyboard.append([InlineKeyboardButton(LanguageManager.get_text(lang, 'back'), callback_data="main_menu")])
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         self._set_user_state(user_id, 'tts_lang_select')
@@ -1796,16 +1914,26 @@ class UTYOBot:
         speed = query.data.replace('tts_speed_', '')
         
         context.user_data['tts_speed'] = speed
+        
+        # لیست زبان‌های پشتیبانی شده برای نمایش
+        languages = tts.get_supported_languages()
+        lang_names = {l['code']: l['name'] for l in languages}
+        selected_lang = context.user_data.get('tts_lang', 'en')
+        
         self._set_user_state(user_id, 'tts_waiting_text', {
-            'lang': context.user_data.get('tts_lang', 'en'),
+            'lang': selected_lang,
             'speed': speed
         })
         
         keyboard = [[InlineKeyboardButton(LanguageManager.get_text(lang, 'back'), callback_data="tts")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
+        text = LanguageManager.get_text(lang, 'tts_waiting_text')
+        text += f"\n\n🌐 **Selected:** {lang_names.get(selected_lang, selected_lang)}\n"
+        text += f"⚡ **Speed:** {LanguageManager.get_text(lang, f'tts_speed_{speed}')}"
+        
         await query.edit_message_text(
-            LanguageManager.get_text(lang, 'tts_waiting_text'),
+            text,
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
@@ -1834,7 +1962,7 @@ class UTYOBot:
             
             if success and filepath and os.path.exists(filepath):
                 words = len(text.split())
-                reading_time = int(words / 2)
+                duration = info.get('duration', int(words / 2))
                 
                 with open(filepath, 'rb') as f:
                     await update.message.reply_audio(
@@ -1842,7 +1970,7 @@ class UTYOBot:
                         caption=LanguageManager.get_text(lang, 'tts_success',
                             text[:100] + ('...' if len(text) > 100 else ''),
                             words,
-                            reading_time,
+                            duration,
                             info.get('size', 0),
                             tts_lang.upper(),
                             tts_speed
@@ -1882,7 +2010,7 @@ class UTYOBot:
             )
 
     # ============================================================
-    # کالبک‌های فاکتور ساز - یک دکمه با WebApp
+    # کالبک‌های فاکتور ساز
     # ============================================================
     async def invoice_maker_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
@@ -2851,9 +2979,7 @@ class UTYOBot:
         
         state, data = self._get_user_state(user_id)
         
-        # ============================================================
         # YouTube Downloader
-        # ============================================================
         if state == 'youtube_waiting_link':
             if text.startswith('http://') or text.startswith('https://'):
                 if youtube_downloader.validate_youtube_url(text):
@@ -2872,9 +2998,7 @@ class UTYOBot:
                 )
                 return
         
-        # ============================================================
         # Text-to-Speech
-        # ============================================================
         if state == 'tts_waiting_text':
             if text.strip():
                 await self._handle_tts_text(update, context, text.strip())
@@ -2886,9 +3010,7 @@ class UTYOBot:
                 )
                 return
         
-        # ============================================================
         # مدیریت actions
-        # ============================================================
         admin_action = context.user_data.get('admin_action')
         
         if admin_action == 'broadcast':
@@ -2905,9 +3027,7 @@ class UTYOBot:
             await self._send_poll(update, text, context)
             return
         
-        # ============================================================
         # تایید هش تراکنش
-        # ============================================================
         if context.user_data.get('waiting_for_tx_hash'):
             tx_hash = text.strip()
             
@@ -2963,9 +3083,7 @@ class UTYOBot:
             
             return
         
-        # ============================================================
         # اشتراک - وارد کردن کیف پول
-        # ============================================================
         if state == 'waiting_subscribe_wallet':
             wallet_address = text.strip()
             
@@ -2992,9 +3110,7 @@ class UTYOBot:
             )
             return
         
-        # ============================================================
         # شرکت در قرعه‌کشی - وارد کردن کیف پول
-        # ============================================================
         if state == 'waiting_wallet':
             wallet_address = text.strip()
             
@@ -3021,9 +3137,7 @@ class UTYOBot:
             )
             return
         
-        # ============================================================
         # برداشت جایزه - وارد کردن کیف پول
-        # ============================================================
         if state == 'waiting_withdraw_wallet':
             wallet_address = text.strip()
             
@@ -3063,9 +3177,7 @@ class UTYOBot:
                 )
             return
         
-        # ============================================================
         # پیام نامعتبر
-        # ============================================================
         keyboard = [[InlineKeyboardButton(LanguageManager.get_text(lang, 'main_menu_btn'), callback_data="main_menu")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -3324,7 +3436,7 @@ def main():
         logger.info(f"⚡ Threads: 100")
         logger.info(f"💾 Cache size: 50,000 items")
         logger.info("🎬 YouTube Downloader: Ready (4K/1080p/720p/480p/Audio)")
-        logger.info("🔊 Text-to-Speech: Ready (15+ Languages)")
+        logger.info("🔊 Text-to-Speech: Ready (30+ Languages)")
         logger.info("🧾 Invoice Maker: Ready")
         logger.info("⚡ Polling started")
 
