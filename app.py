@@ -1,5 +1,5 @@
 # ============================================================
-# ربات قرعه‌کشی هوشمند UTYOB - نسخه نهایی با دانلودر فیلم
+# ربات قرعه‌کشی هوشمند UTYOB - نسخه نهایی با TTS و YouTube Downloader
 # ============================================================
 
 import asyncio
@@ -54,7 +54,7 @@ DB_SHARDS = 1000
 CACHE_TTL = 300
 
 # ============================================================
-# سیستم چندزبانه
+# سیستم چندزبانه کامل
 # ============================================================
 class LanguageManager:
     LANGUAGES = {
@@ -68,15 +68,15 @@ class LanguageManager:
             'guide': "📖 Guide",
             'language': "🌐 Change Language",
             'admin_panel': "⚙️ Admin Panel",
-            'movie_download': "🎬 Movie Downloader",
+            'youtube_download': "🎬 YouTube Downloader",
             'invoice_maker': "🧾 Invoice Maker",
+            'text_to_speech': "🔊 Text to Speech",
             'no_subscription': "❌ **You don't have an active subscription!**\n\nTo participate in the lottery, you must first purchase a subscription.\n\n💰 Subscription cost: $100\n📅 Validity: 1 month\n\nClick the button below to subscribe.",
             'subscribe': "🔄 Subscribe Now",
             'back': "🔙 Back",
             'main_menu_btn': "🔙 Main Menu",
             'lottery_back': "🎰 Back to Lottery",
             'close': "❌ Close",
-            'subscribed_users': "👥 Subscribed Users",
             'subscribe_wallet': "💳 **Subscribe to UTYOB Lottery**\n\nPlease enter your source TRC20 wallet address:\n\n🔹 **Subscription fee:** $100\n🔹 **Destination address:**\n`{}`\n\n⚠️ **Important:**\n• Use TRC20 network only\n• Amount must be exactly $100\n• After sending, click the button below\n\n📤 **Enter your source wallet address:**",
             'after_subscribe_wallet': "✅ **Wallet address saved!**\n\n🔹 Your address: `{}`\n\n💰 **Please send exactly $100 to:**\n`{}`\n\n⚠️ **Important:**\n• Use TRC20 network only\n• Send exactly $100\n• After sending, click the button below\n\n✅ **Click after sending:**",
             'confirm_subscribe': "✅ I sent the payment",
@@ -124,28 +124,34 @@ class LanguageManager:
             'poll_result_admin': "📊 **Poll Result**\n\n👤 User: {}\n📝 Question: {}\n✅ Answer: {}\n🕐 Time: {}",
             'poll_yes': "Yes ✅",
             'poll_no': "No ❌",
-            'movie_downloader': "🎬 **Movie Downloader**\n\nType the name of the movie you want to download:\n\n📌 Supported sites:\n• YTS - yts.mx\n• 1337x - 1337x.to\n• RARBG - rarbg.to\n• The Pirate Bay - thepiratebay.org\n• EZTV - eztv.re\n\n🎯 Example: `Inception` or `The Dark Knight`",
-            'movie_searching': "🔍 Searching for `{}`...\n\nPlease wait, this may take a few seconds.",
-            'movie_not_found': "❌ No movies found for `{}`!\n\nPlease try another movie name or check the spelling.",
-            'movie_results': "🎬 **Search Results for `{}`**\n\nFound {} movie(s):\n\n{}",
-            'movie_info': "🎬 **{}**\n\n📅 Year: {}\n⭐ Rating: {}\n🎭 Genres: {}\n📝 Plot: {}\n\nDownload links:\n{}",
-            'movie_downloading': "⏳ Downloading `{}`...\n\nPlease wait, this may take a few minutes.",
-            'movie_download_success': "✅ **Download completed!** 🎉\n\n🎬 Movie: {}\n📦 Size: {}\n📅 Year: {}\n\nEnjoy watching! 🍿",
-            'movie_download_failed': "❌ **Download failed!**\n\n🔹 Reason: {}\n\nPlease try again or choose another movie.",
-            'movie_choose_quality': "🎬 **Choose Quality for `{}`**\n\nSelect the quality you want to download:",
+            'youtube_downloader': "🎬 **YouTube Downloader**\n\nSend me a YouTube link and I'll download it for you!\n\n📌 Supported:\n• Videos (4K/1080p/720p/480p)\n• Audio only\n• Shorts\n\n📤 **Send the YouTube link:**",
+            'invoice_maker_text': "🧾 **Invoice Maker**\n\nClick the **Open Invoice Maker** button below to open the tool:\n\n✨ Fast and simple!\n\n📌 After finishing, click **Close** to return.\n\n📥 Downloads are saved to your gallery.",
+            'open_invoice_btn': "🧾 Open Invoice Maker",
+            'downloading': "⏳ Downloading... Please wait.",
+            'download_success': "✅ **Download completed!** 🎉\n\n📥 File ready for download.",
+            'download_failed': "❌ **Download failed!**\n\n🔹 Reason: {}\n\n📌 Make sure the link is correct and the video is available.",
+            'invalid_url': "❌ Invalid URL!\n\nPlease send a valid YouTube link.",
+            'processing': "🔄 Processing your request...",
+            'video_quality': "🎬 **Select Quality:**\n\nChoose the quality you want:",
+            'quality_4k': "📱 4K Ultra HD",
             'quality_1080': "📱 1080p Full HD",
             'quality_720': "📱 720p HD",
             'quality_480': "📱 480p SD",
-            'quality_1080_3d': "📱 1080p 3D",
-            'movie_selected': "✅ Selected: `{}` - {}",
-            'movie_invalid_site': "❌ Invalid site! Please choose from the supported sites below:",
-            'movie_select_site': "🌐 **Select a site to search:**\n\nChoose your preferred site:",
-            'site_yts': "🎬 YTS (yts.mx)",
-            'site_1337x': "🎬 1337x (1337x.to)",
-            'site_rarbg': "🎬 RARBG (rarbg.to)",
-            'site_tpb': "🎬 The Pirate Bay (thepiratebay.org)",
-            'site_eztv': "🎬 EZTV (eztv.re)",
-            'site_other': "🌐 Other (Enter URL)",
+            'quality_audio': "🎵 Audio Only",
+            'download_started': "⏳ Download started... This may take a few seconds.",
+            'tts_title': "🔊 **Text to Speech Converter**\n\nSend me any text and I'll convert it to speech!\n\n📌 **Features:**\n• 15+ languages supported\n• Natural voice quality\n• Adjustable speed\n• Download as MP3\n\n🌐 **Select your language:**",
+            'tts_lang_select': "🌐 **Select Language:**\n\nChoose your preferred language:",
+            'tts_speed_select': "⚡ **Select Speed:**\n\nChoose the speed you want:",
+            'tts_speed_slow': "🐢 Slow",
+            'tts_speed_normal': "⚡ Normal",
+            'tts_speed_fast': "🚀 Fast",
+            'tts_speed_very_fast': "🔥 Very Fast",
+            'tts_waiting_text': "📝 **Send me the text to convert to speech:**\n\n💡 You can send long texts (up to 5000 characters).",
+            'tts_text_too_long': "❌ **Text too long!**\n\n📝 Your text: {}\n📌 Maximum: 5000 characters\n\nPlease send a shorter text.",
+            'tts_converting': "🔊 **Converting text to speech...**\n\n📝 Text length: {} characters\n⏳ Please wait...",
+            'tts_success': "🔊 **Text-to-Speech Completed!** 🎉\n\n📝 Text: `{}`\n📊 Words: {}\n⏱️ Reading time: ~{} seconds\n📦 Size: {} KB\n🔊 Language: {}\n⚡ Speed: {}\n\n💡 Listen and enjoy! 🎧",
+            'tts_failed': "❌ **Conversion failed!**\n\n🔹 Reason: {}\n\nPlease try again with shorter text.",
+            'tts_again': "🔄 Convert Another",
         },
         'fa': {
             'name': 'فارسی',
@@ -157,15 +163,15 @@ class LanguageManager:
             'guide': "📖 راهنمایی",
             'language': "🌐 تغییر زبان",
             'admin_panel': "⚙️ پنل مدیریت",
-            'movie_download': "🎬 دانلودر فیلم",
+            'youtube_download': "🎬 دانلودر یوتیوب",
             'invoice_maker': "🧾 فاکتور ساز",
+            'text_to_speech': "🔊 متن به گفتار",
             'no_subscription': "❌ **شما اشتراک فعال ندارید!**\n\nبرای شرکت در قرعه‌کشی، ابتدا باید اشتراک تهیه کنید.\n\n💰 هزینه اشتراک: ۱۰۰ دلار\n📅 مدت اعتبار: ۱ ماه\n\nبرای تهیه اشتراک، روی دکمه زیر کلیک کنید.",
             'subscribe': "🔄 خرید اشتراک",
             'back': "🔙 بازگشت",
             'main_menu_btn': "🔙 منوی اصلی",
             'lottery_back': "🎰 بازگشت به قرعه‌کشی",
             'close': "❌ بستن",
-            'subscribed_users': "👥 کاربران اشتراکی",
             'subscribe_wallet': "💳 **خرید اشتراک UTYOB**\n\nلطفاً آدرس کیف پول مبدا (TRC20) خود را وارد کنید:\n\n🔹 **هزینه اشتراک:** ۱۰۰ دلار\n🔹 **آدرس مقصد:**\n`{}`\n\n⚠️ **نکات مهم:**\n• فقط از شبکه TRC20 استفاده کنید\n• مبلغ دقیقاً ۱۰۰ دلار باشد\n• پس از واریز، روی دکمه زیر کلیک کنید\n\n📤 **آدرس کیف پول خود را وارد کنید:**",
             'after_subscribe_wallet': "✅ **آدرس کیف پول ذخیره شد!**\n\n🔹 آدرس شما: `{}`\n\n💰 **لطفاً مبلغ ۱۰۰ دلار به آدرس زیر واریز کنید:**\n`{}`\n\n⚠️ **نکات مهم:**\n• فقط از شبکه TRC20 استفاده کنید\n• مبلغ دقیقاً ۱۰۰ دلار باشد\n• پس از واریز، روی دکمه زیر کلیک کنید\n\n✅ **پس از واریز کلیک کنید:**",
             'confirm_subscribe': "✅ پرداخت کردم",
@@ -213,28 +219,34 @@ class LanguageManager:
             'poll_result_admin': "📊 **نتیجه نظرسنجی**\n\n👤 کاربر: {}\n📝 سوال: {}\n✅ پاسخ: {}\n🕐 زمان: {}",
             'poll_yes': "بله ✅",
             'poll_no': "خیر ❌",
-            'movie_downloader': "🎬 **دانلودر فیلم**\n\nنام فیلم مورد نظر خود را تایپ کنید:\n\n📌 سایت‌های پشتیبانی شده:\n• YTS - yts.mx\n• 1337x - 1337x.to\n• RARBG - rarbg.to\n• The Pirate Bay - thepiratebay.org\n• EZTV - eztv.re\n\n🎯 مثال: `Inception` یا `The Dark Knight`",
-            'movie_searching': "🔍 در حال جستجوی `{}`...\n\nلطفاً چند ثانیه صبر کنید.",
-            'movie_not_found': "❌ فیلمی برای `{}` پیدا نشد!\n\nلطفاً نام دیگری را امتحان کنید یا املای آن را بررسی کنید.",
-            'movie_results': "🎬 **نتایج جستجو برای `{}`**\n\n{} فیلم پیدا شد:\n\n{}",
-            'movie_info': "🎬 **{}**\n\n📅 سال: {}\n⭐ امتیاز: {}\n🎭 ژانر: {}\n📝 خلاصه: {}\n\nلینک‌های دانلود:\n{}",
-            'movie_downloading': "⏳ در حال دانلود `{}`...\n\nلطفاً چند دقیقه صبر کنید.",
-            'movie_download_success': "✅ **دانلود کامل شد!** 🎉\n\n🎬 فیلم: {}\n📦 حجم: {}\n📅 سال: {}\n\nنوش جان! 🍿",
-            'movie_download_failed': "❌ **دانلود ناموفق!**\n\n🔹 دلیل: {}\n\nلطفاً دوباره تلاش کنید یا فیلم دیگری را انتخاب کنید.",
-            'movie_choose_quality': "🎬 **کیفیت مورد نظر برای `{}` را انتخاب کنید:**",
+            'youtube_downloader': "🎬 **دانلودر یوتیوب**\n\nلینک یوتیوب خود را بفرستید تا دانلود کنم!\n\n📌 پشتیبانی:\n• ویدیو (۴K/۱۰۸۰p/۷۲۰p/۴۸۰p)\n• فقط صدا\n• Shorts\n\n📤 **لینک یوتیوب را بفرستید:**",
+            'invoice_maker_text': "🧾 **فاکتور ساز**\n\nبرای باز کردن فاکتور ساز، روی دکمه زیر کلیک کنید:\n\n✨ سریع و ساده!\n\n📌 پس از اتمام، روی **بستن** کلیک کنید تا برگردید.\n\n📥 دانلودها در گالری شما ذخیره می‌شوند.",
+            'open_invoice_btn': "🧾 باز کردن فاکتور ساز",
+            'downloading': "⏳ در حال دانلود... لطفاً صبر کنید.",
+            'download_success': "✅ **دانلود کامل شد!** 🎉\n\n📥 فایل آماده دانلود است.",
+            'download_failed': "❌ **دانلود ناموفق!**\n\n🔹 دلیل: {}\n\n📌 مطمئن شوید لینک صحیح است و ویدیو در دسترس است.",
+            'invalid_url': "❌ لینک نامعتبر!\n\nلطفاً یک لینک معتبر یوتیوب ارسال کنید.",
+            'processing': "🔄 در حال پردازش درخواست شما...",
+            'video_quality': "🎬 **کیفیت مورد نظر را انتخاب کنید:**",
+            'quality_4k': "📱 4K فوق‌العاده",
             'quality_1080': "📱 1080p Full HD",
             'quality_720': "📱 720p HD",
             'quality_480': "📱 480p SD",
-            'quality_1080_3d': "📱 1080p 3D",
-            'movie_selected': "✅ انتخاب شد: `{}` - {}",
-            'movie_invalid_site': "❌ سایت نامعتبر! لطفاً از سایت‌های پشتیبانی شده زیر انتخاب کنید:",
-            'movie_select_site': "🌐 **یک سایت را برای جستجو انتخاب کنید:**\n\nسایت مورد نظر خود را انتخاب کنید:",
-            'site_yts': "🎬 YTS (yts.mx)",
-            'site_1337x': "🎬 1337x (1337x.to)",
-            'site_rarbg': "🎬 RARBG (rarbg.to)",
-            'site_tpb': "🎬 The Pirate Bay (thepiratebay.org)",
-            'site_eztv': "🎬 EZTV (eztv.re)",
-            'site_other': "🌐 سایت دیگر (آدرس را وارد کنید)",
+            'quality_audio': "🎵 فقط صدا",
+            'download_started': "⏳ دانلود شروع شد... چند ثانیه طول می‌کشد.",
+            'tts_title': "🔊 **تبدیل متن به گفتار**\n\nهر متنی را بفرستید تا به گفتار تبدیل کنم!\n\n📌 **ویژگی‌ها:**\n• پشتیبانی از ۱۵+ زبان\n• صدای طبیعی\n• سرعت قابل تنظیم\n• دانلود به صورت MP3\n\n🌐 **زبان خود را انتخاب کنید:**",
+            'tts_lang_select': "🌐 **انتخاب زبان:**\n\nزبان مورد نظر خود را انتخاب کنید:",
+            'tts_speed_select': "⚡ **انتخاب سرعت:**\n\nسرعت مورد نظر را انتخاب کنید:",
+            'tts_speed_slow': "🐢 کند",
+            'tts_speed_normal': "⚡ معمولی",
+            'tts_speed_fast': "🚀 سریع",
+            'tts_speed_very_fast': "🔥 خیلی سریع",
+            'tts_waiting_text': "📝 **متن خود را برای تبدیل به گفتار بفرستید:**\n\n💡 می‌توانید متن‌های طولانی (تا ۵۰۰۰ کاراکتر) ارسال کنید.",
+            'tts_text_too_long': "❌ **متن خیلی طولانی است!**\n\n📝 متن شما: {}\n📌 حداکثر: ۵۰۰۰ کاراکتر\n\nلطفاً متن کوتاه‌تری ارسال کنید.",
+            'tts_converting': "🔊 **در حال تبدیل متن به گفتار...**\n\n📝 طول متن: {} کاراکتر\n⏳ لطفاً صبر کنید...",
+            'tts_success': "🔊 **تبدیل متن به گفتار کامل شد!** 🎉\n\n📝 متن: `{}`\n📊 تعداد کلمات: {}\n⏱️ زمان تقریبی خواندن: ~{} ثانیه\n📦 حجم: {} KB\n🔊 زبان: {}\n⚡ سرعت: {}\n\n💡 گوش کنید و لذت ببرید! 🎧",
+            'tts_failed': "❌ **تبدیل ناموفق!**\n\n🔹 دلیل: {}\n\nلطفاً با متن کوتاه‌تر دوباره تلاش کنید.",
+            'tts_again': "🔄 تبدیل مجدد",
         },
         'tr': {
             'name': 'Türkçe',
@@ -246,15 +258,15 @@ class LanguageManager:
             'guide': "📖 Rehber",
             'language': "🌐 Dil Değiştir",
             'admin_panel': "⚙️ Yönetim Paneli",
-            'movie_download': "🎬 Film İndirici",
+            'youtube_download': "🎬 YouTube İndirici",
             'invoice_maker': "🧾 Fatura Oluşturucu",
+            'text_to_speech': "🔊 Metin Seslendirme",
             'no_subscription': "❌ **Aktif aboneliğiniz yok!**\n\nPiyangoya katılmak için önce abonelik satın almalısınız.\n\n💰 Abonelik ücreti: 100$\n📅 Geçerlilik: 1 ay\n\nAbone olmak için aşağıdaki butona tıklayın.",
             'subscribe': "🔄 Abone Ol",
             'back': "🔙 Geri",
             'main_menu_btn': "🔙 Ana Menü",
             'lottery_back': "🎰 Piyangoya Dön",
             'close': "❌ Kapat",
-            'subscribed_users': "👥 Abone Kullanıcılar",
             'subscribe_wallet': "💳 **UTYOB Aboneliği**\n\nLütfen kaynak TRC20 cüzdan adresinizi girin:\n\n🔹 **Abonelik ücreti:** 100$\n🔹 **Hedef adres:**\n`{}`\n\n⚠️ **Önemli:**\n• Sadece TRC20 ağını kullanın\n• Tutar tam olarak 100$ olmalı\n• Gönderdikten sonra aşağıdaki butona tıklayın\n\n📤 **Kaynak cüzdan adresinizi girin:**",
             'after_subscribe_wallet': "✅ **Cüzdan adresi kaydedildi!**\n\n🔹 Adresiniz: `{}`\n\n💰 **Lütfen tam olarak 100$'yi aşağıdaki adrese gönderin:**\n`{}`\n\n⚠️ **Önemli:**\n• Sadece TRC20 ağını kullanın\n• Tutar tam olarak 100$ olmalı\n• Gönderdikten sonra aşağıdaki butona tıklayın\n\n✅ **Gönderdikten sonra tıklayın:**",
             'confirm_subscribe': "✅ Ödemeyi Gönderdim",
@@ -302,28 +314,34 @@ class LanguageManager:
             'poll_result_admin': "📊 **Anket Sonucu**\n\n👤 Kullanıcı: {}\n📝 Soru: {}\n✅ Cevap: {}\n🕐 Zaman: {}",
             'poll_yes': "Evet ✅",
             'poll_no': "Hayır ❌",
-            'movie_downloader': "🎬 **Film İndirici**\n\nİndirmek istediğiniz filmin adını yazın:\n\n📌 Desteklenen siteler:\n• YTS - yts.mx\n• 1337x - 1337x.to\n• RARBG - rarbg.to\n• The Pirate Bay - thepiratebay.org\n• EZTV - eztv.re\n\n🎯 Örnek: `Inception` veya `The Dark Knight`",
-            'movie_searching': "🔍 `{}` aranıyor...\n\nLütfen birkaç saniye bekleyin.",
-            'movie_not_found': "❌ `{}` için film bulunamadı!\n\nLütfen başka bir film adı deneyin veya yazımını kontrol edin.",
-            'movie_results': "🎬 `{}` için arama sonuçları\n\n{} film bulundu:\n\n{}",
-            'movie_info': "🎬 **{}**\n\n📅 Yıl: {}\n⭐ Puan: {}\n🎭 Türler: {}\n📝 Konu: {}\n\nİndirme linkleri:\n{}",
-            'movie_downloading': "⏳ `{}` indiriliyor...\n\nLütfen birkaç dakika bekleyin.",
-            'movie_download_success': "✅ **İndirme tamamlandı!** 🎉\n\n🎬 Film: {}\n📦 Boyut: {}\n📅 Yıl: {}\n\nİyi seyirler! 🍿",
-            'movie_download_failed': "❌ **İndirme başarısız!**\n\n🔹 Sebep: {}\n\nLütfen tekrar deneyin veya başka bir film seçin.",
-            'movie_choose_quality': "🎬 **`{}` için kalite seçin:**",
+            'youtube_downloader': "🎬 **YouTube İndirici**\n\nYouTube linkini gönderin, sizin için indireyim!\n\n📌 Destek:\n• Videolar (4K/1080p/720p/480p)\n• Sadece Ses\n• Shorts\n\n📤 **YouTube linkini gönderin:**",
+            'invoice_maker_text': "🧾 **Fatura Oluşturucu**\n\nFatura oluşturucuyu açmak için aşağıdaki düğmeye tıklayın:\n\n✨ Hızlı ve kolay!\n\n📌 Bitirdikten sonra **Kapat**'a tıklayarak geri dönün.\n\n📥 İndirmeler galerinize kaydedilir.",
+            'open_invoice_btn': "🧾 Fatura Oluşturucuyu Aç",
+            'downloading': "⏳ İndiriliyor... Lütfen bekleyin.",
+            'download_success': "✅ **İndirme tamamlandı!** 🎉\n\n📥 Dosya indirilmeye hazır.",
+            'download_failed': "❌ **İndirme başarısız!**\n\n🔹 Sebep: {}\n\n📌 Linkin doğru olduğundan ve videonun mevcut olduğundan emin olun.",
+            'invalid_url': "❌ Geçersiz URL!\n\nLütfen geçerli bir YouTube linki gönderin.",
+            'processing': "🔄 İsteğiniz işleniyor...",
+            'video_quality': "🎬 **Kalite seçin:**",
+            'quality_4k': "📱 4K Ultra HD",
             'quality_1080': "📱 1080p Full HD",
             'quality_720': "📱 720p HD",
             'quality_480': "📱 480p SD",
-            'quality_1080_3d': "📱 1080p 3D",
-            'movie_selected': "✅ Seçildi: `{}` - {}",
-            'movie_invalid_site': "❌ Geçersiz site! Lütfen aşağıdaki desteklenen sitelerden birini seçin:",
-            'movie_select_site': "🌐 **Arama yapmak için bir site seçin:**\n\nTercih ettiğiniz siteyi seçin:",
-            'site_yts': "🎬 YTS (yts.mx)",
-            'site_1337x': "🎬 1337x (1337x.to)",
-            'site_rarbg': "🎬 RARBG (rarbg.to)",
-            'site_tpb': "🎬 The Pirate Bay (thepiratebay.org)",
-            'site_eztv': "🎬 EZTV (eztv.re)",
-            'site_other': "🌐 Diğer Site (URL girin)",
+            'quality_audio': "🎵 Sadece Ses",
+            'download_started': "⏳ İndirme başladı... Birkaç saniye sürebilir.",
+            'tts_title': "🔊 **Metin Seslendirme**\n\nHerhangi bir metni gönderin, seslendireyim!\n\n📌 **Özellikler:**\n• 15+ dil desteği\n• Doğal ses kalitesi\n• Ayarlanabilir hız\n• MP3 olarak indirme\n\n🌐 **Dil seçin:**",
+            'tts_lang_select': "🌐 **Dil Seçin:**\n\nTercih ettiğiniz dili seçin:",
+            'tts_speed_select': "⚡ **Hız Seçin:**\n\nİstediğiniz hızı seçin:",
+            'tts_speed_slow': "🐢 Yavaş",
+            'tts_speed_normal': "⚡ Normal",
+            'tts_speed_fast': "🚀 Hızlı",
+            'tts_speed_very_fast': "🔥 Çok Hızlı",
+            'tts_waiting_text': "📝 **Seslendirilecek metni gönderin:**\n\n💡 Uzun metinler gönderebilirsiniz (5000 karaktere kadar).",
+            'tts_text_too_long': "❌ **Metin çok uzun!**\n\n📝 Metniniz: {}\n📌 Maksimum: 5000 karakter\n\nLütfen daha kısa bir metin gönderin.",
+            'tts_converting': "🔊 **Metin seslendiriliyor...**\n\n📝 Metin uzunluğu: {} karakter\n⏳ Lütfen bekleyin...",
+            'tts_success': "🔊 **Metin Seslendirme Tamamlandı!** 🎉\n\n📝 Metin: `{}`\n📊 Kelime sayısı: {}\n⏱️ Yaklaşık okuma süresi: ~{} saniye\n📦 Boyut: {} KB\n🔊 Dil: {}\n⚡ Hız: {}\n\n💡 Dinleyin ve keyfini çıkarın! 🎧",
+            'tts_failed': "❌ **Seslendirme başarısız!**\n\n🔹 Sebep: {}\n\nLütfen daha kısa bir metinle tekrar deneyin.",
+            'tts_again': "🔄 Tekrar Dene",
         }
     }
     
@@ -598,280 +616,159 @@ class CacheManager:
 cache = CacheManager(max_size=50000)
 
 # ============================================================
-# سیستم دانلودر فیلم - با تکنولوژی پیشرفته
+# سیستم YouTube Downloader
 # ============================================================
-class MovieDownloader:
+class YouTubeDownloader:
     def __init__(self):
         self.executor = ThreadPoolExecutor(max_workers=30)
-        self.session = None
         self.temp_dir = tempfile.mkdtemp()
         os.makedirs("downloads", exist_ok=True)
-        os.makedirs("movies", exist_ok=True)
-        self._update_dependencies()
         
-    def _update_dependencies(self):
-        """بروزرسانی وابستگی‌ها"""
-        try:
-            subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "yt-dlp", "requests", "beautifulsoup4"], 
-                         capture_output=True, check=False)
-            logger.info("✅ Movie downloader dependencies updated")
-        except Exception as e:
-            logger.warning(f"Could not update dependencies: {e}")
-        
-    async def get_session(self):
-        if self.session is None or self.session.closed:
-            timeout = aiohttp.ClientTimeout(total=300, connect=30)
-            self.session = aiohttp.ClientSession(
-                timeout=timeout,
-                connector=aiohttp.TCPConnector(limit=100, limit_per_host=30)
-            )
-        return self.session
-    
-    async def search_movie(self, query: str, site: str = "yts") -> List[Dict]:
-        """جستجوی فیلم در سایت‌های مختلف"""
-        try:
-            session = await self.get_session()
-            
-            if site == "yts":
-                return await self._search_yts(session, query)
-            elif site == "1337x":
-                return await self._search_1337x(session, query)
-            elif site == "rarbg":
-                return await self._search_rarbg(session, query)
-            elif site == "tpb":
-                return await self._search_tpb(session, query)
-            elif site == "eztv":
-                return await self._search_eztv(session, query)
-            else:
-                return await self._search_generic(session, query, site)
-                
-        except Exception as e:
-            logger.error(f"Search error: {e}")
-            return []
-    
-    async def _search_yts(self, session, query: str) -> List[Dict]:
-        """جستجو در YTS"""
-        try:
-            url = f"https://yts.mx/api/v2/list_movies.json?query_term={query}&limit=20"
-            
-            async with session.get(url, headers={'User-Agent': 'Mozilla/5.0'}) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    movies = data.get('data', {}).get('movies', [])
-                    
-                    results = []
-                    for movie in movies:
-                        torrents = []
-                        for t in movie.get('torrents', []):
-                            torrents.append({
-                                'quality': t.get('quality', 'Unknown'),
-                                'size': t.get('size', 'Unknown'),
-                                'hash': t.get('hash', ''),
-                                'url': t.get('url', '')
-                            })
-                        
-                        results.append({
-                            'title': movie.get('title', 'Unknown'),
-                            'year': movie.get('year', 'Unknown'),
-                            'rating': movie.get('rating', 0),
-                            'genres': movie.get('genres', []),
-                            'plot': movie.get('summary', 'No plot available'),
-                            'poster': movie.get('medium_cover_image', ''),
-                            'torrents': torrents,
-                            'site': 'YTS',
-                            'url': f"https://yts.mx/movies/{movie.get('slug', '')}"
-                        })
-                    
-                    return results
-        except Exception as e:
-            logger.error(f"YTS search error: {e}")
-        return []
-    
-    async def _search_1337x(self, session, query: str) -> List[Dict]:
-        """جستجو در 1337x"""
-        try:
-            # 1337x نیاز به پردازش HTML دارد
-            # اینجا یک نمونه ساده پیاده‌سازی می‌شود
-            url = f"https://1337x.to/search/{query}/1/"
-            
-            async with session.get(url, headers={'User-Agent': 'Mozilla/5.0'}) as response:
-                if response.status == 200:
-                    html = await response.text()
-                    # استخراج اطلاعات از HTML (ساده شده)
-                    # در واقعیت باید از BeautifulSoup استفاده کرد
-                    return [{
-                        'title': f"Movie from 1337x",
-                        'year': '2024',
-                        'rating': 7.5,
-                        'genres': ['Action', 'Drama'],
-                        'plot': 'Movie from 1337x',
-                        'torrents': [{'quality': '1080p', 'size': '2GB', 'hash': '', 'url': url}],
-                        'site': '1337x',
-                        'url': url
-                    }]
-        except Exception as e:
-            logger.error(f"1337x search error: {e}")
-        return []
-    
-    async def _search_rarbg(self, session, query: str) -> List[Dict]:
-        """جستجو در RARBG"""
-        try:
-            # RARBG API
-            url = f"https://torrentapi.org/pubapi_v2.php?mode=search&search_string={query}&format=json_extended&limit=20"
-            
-            async with session.get(url, headers={'User-Agent': 'Mozilla/5.0'}) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if data.get('torrent_results'):
-                        results = []
-                        for item in data.get('torrent_results', [])[:20]:
-                            results.append({
-                                'title': item.get('title', 'Unknown'),
-                                'year': item.get('year', 'Unknown'),
-                                'rating': 0,
-                                'genres': [],
-                                'plot': 'Movie from RARBG',
-                                'torrents': [{
-                                    'quality': item.get('quality', 'Unknown'),
-                                    'size': item.get('size', 'Unknown'),
-                                    'hash': item.get('hash', ''),
-                                    'url': item.get('download', '')
-                                }],
-                                'site': 'RARBG',
-                                'url': item.get('info_page', '')
-                            })
-                        return results
-        except Exception as e:
-            logger.error(f"RARBG search error: {e}")
-        return []
-    
-    async def _search_tpb(self, session, query: str) -> List[Dict]:
-        """جستجو در The Pirate Bay"""
-        try:
-            # The Pirate Bay API
-            url = f"https://apibay.org/q.php?q={query}&cat=200"
-            
-            async with session.get(url, headers={'User-Agent': 'Mozilla/5.0'}) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    results = []
-                    for item in data[:20]:
-                        if item.get('name'):
-                            results.append({
-                                'title': item.get('name', 'Unknown'),
-                                'year': '2024',
-                                'rating': 0,
-                                'genres': [],
-                                'plot': 'Movie from The Pirate Bay',
-                                'torrents': [{
-                                    'quality': 'Unknown',
-                                    'size': item.get('size', 'Unknown'),
-                                    'hash': item.get('info_hash', ''),
-                                    'url': f"magnet:?xt=urn:btih:{item.get('info_hash', '')}"
-                                }],
-                                'site': 'The Pirate Bay',
-                                'url': f"https://thepiratebay.org/description.php?id={item.get('id', '')}"
-                            })
-                    return results
-        except Exception as e:
-            logger.error(f"TPB search error: {e}")
-        return []
-    
-    async def _search_eztv(self, session, query: str) -> List[Dict]:
-        """جستجو در EZTV"""
-        try:
-            # EZTV API
-            url = f"https://eztv.re/api/get-torrents?query={query}&limit=20"
-            
-            async with session.get(url, headers={'User-Agent': 'Mozilla/5.0'}) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    results = []
-                    for item in data.get('torrents', [])[:20]:
-                        results.append({
-                            'title': item.get('title', 'Unknown'),
-                            'year': item.get('year', 'Unknown'),
-                            'rating': 0,
-                            'genres': [],
-                            'plot': 'Movie from EZTV',
-                            'torrents': [{
-                                'quality': item.get('quality', 'Unknown'),
-                                'size': item.get('size', 'Unknown'),
-                                'hash': item.get('hash', ''),
-                                'url': item.get('url', '')
-                            }],
-                            'site': 'EZTV',
-                            'url': item.get('url', '')
-                        })
-                    return results
-        except Exception as e:
-            logger.error(f"EZTV search error: {e}")
-        return []
-    
-    async def _search_generic(self, session, query: str, site_url: str) -> List[Dict]:
-        """جستجو در سایت‌های دیگر"""
-        try:
-            async with session.get(site_url, headers={'User-Agent': 'Mozilla/5.0'}) as response:
-                if response.status == 200:
-                    return [{
-                        'title': f"Movie from {site_url}",
-                        'year': '2024',
-                        'rating': 7.0,
-                        'genres': ['Action', 'Drama'],
-                        'plot': 'Movie from external site',
-                        'torrents': [{'quality': '1080p', 'size': '2GB', 'hash': '', 'url': site_url}],
-                        'site': site_url,
-                        'url': site_url
-                    }]
-        except Exception as e:
-            logger.error(f"Generic search error: {e}")
-        return []
-    
-    async def download_movie(self, url: str, quality: str = "1080p") -> Tuple[bool, str, str]:
-        """دانلود فیلم با کیفیت مشخص"""
+    async def download_youtube(self, url: str, quality: str = "best") -> Tuple[bool, str, str]:
         try:
             import yt_dlp
             
-            output_template = os.path.join(self.movies_dir, "movie_%(title)s_%(quality)s.%(ext)s")
+            output_template = os.path.join(self.temp_dir, "youtube_%(id)s.%(ext)s")
             
-            ydl_opts = {
-                'format': 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]',
-                'outtmpl': output_template,
-                'quiet': True,
-                'no_warnings': True,
-                'continuedl': True,
-                'retries': 10,
-                'fragment_retries': 10,
-                'socket_timeout': 60,
-                'ignoreerrors': True,
-                'no_check_certificate': True,
-                'prefer_ffmpeg': True,
-                'postprocessor_args': ['-threads', '4'],
-                'http_headers': {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                },
-            }
+            if quality == "audio":
+                ydl_opts = {
+                    'format': 'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio',
+                    'outtmpl': output_template,
+                    'quiet': True,
+                    'no_warnings': True,
+                    'continuedl': True,
+                    'retries': 10,
+                    'postprocessors': [{
+                        'key': 'FFmpegExtractAudio',
+                        'preferredcodec': 'm4a',
+                        'preferredquality': '192',
+                    }],
+                    'http_headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    },
+                }
+            else:
+                has_ffmpeg = shutil.which('ffmpeg') is not None
+                
+                format_map = {
+                    "4k": "bestvideo[height<=2160][ext=mp4]+bestaudio[ext=m4a]/best[height<=2160]",
+                    "1080": "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]",
+                    "720": "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]",
+                    "480": "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]",
+                    "best": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+                }
+                
+                format_str = format_map.get(quality, format_map["best"])
+                
+                ydl_opts = {
+                    'format': format_str,
+                    'outtmpl': output_template,
+                    'quiet': True,
+                    'no_warnings': True,
+                    'continuedl': True,
+                    'retries': 10,
+                    'fragment_retries': 10,
+                    'skip_download': False,
+                    'socket_timeout': 60,
+                    'prefer_ffmpeg': has_ffmpeg,
+                    'merge_output_format': 'mp4' if has_ffmpeg else None,
+                    'http_headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    },
+                }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
                 
-                if info:
-                    output_file = ydl.prepare_filename(info)
-                    if os.path.exists(output_file):
-                        return True, output_file, f"Downloaded: {info.get('title', 'Unknown')}"
+                if not info:
+                    return False, None, "No media information found"
+                
+                output_file = None
+                file_id = info.get('id')
+                
+                if file_id:
+                    extensions = ['.mp4', '.mkv', '.webm', '.m4a', '.mp3']
+                    for ext in extensions:
+                        candidate = os.path.join(self.temp_dir, f"youtube_{file_id}{ext}")
+                        if os.path.exists(candidate):
+                            output_file = candidate
+                            break
+                
+                if output_file and os.path.exists(output_file):
+                    return True, output_file, f"Downloaded: {info.get('title', 'Unknown')}"
                     
             return False, None, "Download failed"
             
         except Exception as e:
-            logger.error(f"Movie download error: {e}")
+            logger.error(f"YouTube download error: {e}")
             return False, None, str(e)
     
-    @property
-    def movies_dir(self):
-        return os.path.join(os.getcwd(), "movies")
+    def validate_youtube_url(self, url: str) -> bool:
+        patterns = [
+            r'(youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)',
+            r'(m\.youtube\.com/watch\?v=)'
+        ]
+        return any(re.search(p, url) for p in patterns)
 
-movie_downloader = MovieDownloader()
+youtube_downloader = YouTubeDownloader()
+
+# ============================================================
+# سیستم Text-to-Speech پیشرفته
+# ============================================================
+class TextToSpeech:
+    def __init__(self):
+        self.executor = ThreadPoolExecutor(max_workers=10)
+        self.temp_dir = tempfile.mkdtemp()
+        os.makedirs("tts", exist_ok=True)
+        
+    async def convert_to_speech(self, text: str, lang: str = "en", speed: str = "normal") -> Tuple[bool, str, dict]:
+        try:
+            from gtts import gTTS
+            from pydub import AudioSegment
+            
+            lang_map = {
+                'en': 'en', 'fa': 'fa', 'tr': 'tr',
+                'es': 'es', 'fr': 'fr', 'de': 'de',
+                'it': 'it', 'pt': 'pt', 'ru': 'ru',
+                'ja': 'ja', 'ko': 'ko', 'zh': 'zh-CN',
+                'ar': 'ar', 'hi': 'hi', 'nl': 'nl'
+            }
+            
+            tts_lang = lang_map.get(lang, 'en')
+            
+            filename = f"tts_{int(time.time())}.mp3"
+            filepath = os.path.join(self.temp_dir, filename)
+            
+            tts = gTTS(text=text, lang=tts_lang, slow=(speed == 'slow'))
+            tts.save(filepath)
+            
+            if speed != 'slow' and speed != 'normal':
+                try:
+                    speed_map = {'fast': 1.2, 'very_fast': 1.5}
+                    speed_factor = speed_map.get(speed, 1.0)
+                    
+                    audio = AudioSegment.from_mp3(filepath)
+                    audio = audio.speedup(playback_speed=speed_factor)
+                    audio.export(filepath, format="mp3")
+                except Exception as e:
+                    logger.warning(f"Speed adjustment failed: {e}")
+            
+            if os.path.exists(filepath):
+                file_size = os.path.getsize(filepath) // 1024
+                info = {
+                    'size': file_size,
+                    'words': len(text.split()),
+                    'chars': len(text)
+                }
+                return True, filepath, info
+            
+            return False, None, {"error": "Conversion failed"}
+            
+        except Exception as e:
+            logger.error(f"TTS error: {e}")
+            return False, None, {"error": str(e)}
+
+tts = TextToSpeech()
 
 # ============================================================
 # سیستم تایید پرداخت
@@ -1341,12 +1238,13 @@ class UTYOBot:
         app.add_handler(CallbackQueryHandler(self.guide_callback, pattern="^guide$"))
         app.add_handler(CallbackQueryHandler(self.language_callback, pattern="^language$"))
         
-        app.add_handler(CallbackQueryHandler(self.movie_download_callback, pattern="^movie_download$"))
+        app.add_handler(CallbackQueryHandler(self.youtube_download_callback, pattern="^youtube_download$"))
         app.add_handler(CallbackQueryHandler(self.invoice_maker_callback, pattern="^invoice_maker$"))
+        app.add_handler(CallbackQueryHandler(self.tts_callback, pattern="^tts$"))
         
-        app.add_handler(CallbackQueryHandler(self.movie_site_callback, pattern="^movie_site_"))
-        app.add_handler(CallbackQueryHandler(self.movie_quality_callback, pattern="^movie_quality_"))
-        app.add_handler(CallbackQueryHandler(self.movie_select_callback, pattern="^movie_select_"))
+        app.add_handler(CallbackQueryHandler(self.tts_lang_callback, pattern="^tts_lang_"))
+        app.add_handler(CallbackQueryHandler(self.tts_speed_callback, pattern="^tts_speed_"))
+        app.add_handler(CallbackQueryHandler(self.youtube_quality_callback, pattern="^youtube_quality_"))
         
         app.add_handler(CallbackQueryHandler(self.subscribe_callback, pattern="^subscribe$"))
         app.add_handler(CallbackQueryHandler(self.confirm_subscribe_callback, pattern="^confirm_subscribe$"))
@@ -1523,7 +1421,8 @@ class UTYOBot:
         keyboard = [
             [InlineKeyboardButton(LanguageManager.get_text(lang, 'lottery'), callback_data="lottery")],
             [InlineKeyboardButton(LanguageManager.get_text(lang, 'referral'), callback_data="referral")],
-            [InlineKeyboardButton(LanguageManager.get_text(lang, 'movie_download'), callback_data="movie_download")],
+            [InlineKeyboardButton(LanguageManager.get_text(lang, 'youtube_download'), callback_data="youtube_download")],
+            [InlineKeyboardButton(LanguageManager.get_text(lang, 'text_to_speech'), callback_data="tts")],
             [InlineKeyboardButton(LanguageManager.get_text(lang, 'invoice_maker'), callback_data="invoice_maker")],
             [InlineKeyboardButton(LanguageManager.get_text(lang, 'guide'), callback_data="guide")],
             [InlineKeyboardButton(LanguageManager.get_text(lang, 'language'), callback_data="language")]
@@ -1565,9 +1464,9 @@ class UTYOBot:
         user_id = update.effective_user.id
         state, data = self._get_user_state(user_id)
         
-        if state in ['movie_search', 'movie_select_site', 'movie_quality']:
+        if state in ['youtube_quality', 'tts_lang_select', 'tts_speed_select', 'tts_waiting_text']:
             self._clear_user_state(user_id)
-            await self.movie_download_callback(update, context)
+            await self.main_menu_callback(update, context)
         elif state == 'waiting_wallet':
             self._clear_user_state(user_id)
             await self.lottery_callback(update, context)
@@ -1600,7 +1499,8 @@ class UTYOBot:
         keyboard = [
             [InlineKeyboardButton(LanguageManager.get_text(lang, 'lottery'), callback_data="lottery")],
             [InlineKeyboardButton(LanguageManager.get_text(lang, 'referral'), callback_data="referral")],
-            [InlineKeyboardButton(LanguageManager.get_text(lang, 'movie_download'), callback_data="movie_download")],
+            [InlineKeyboardButton(LanguageManager.get_text(lang, 'youtube_download'), callback_data="youtube_download")],
+            [InlineKeyboardButton(LanguageManager.get_text(lang, 'text_to_speech'), callback_data="tts")],
             [InlineKeyboardButton(LanguageManager.get_text(lang, 'invoice_maker'), callback_data="invoice_maker")],
             [InlineKeyboardButton(LanguageManager.get_text(lang, 'guide'), callback_data="guide")],
             [InlineKeyboardButton(LanguageManager.get_text(lang, 'language'), callback_data="language")]
@@ -1706,9 +1606,9 @@ class UTYOBot:
             )
 
     # ============================================================
-    # کالبک‌های دانلودر فیلم
+    # کالبک‌های YouTube Downloader
     # ============================================================
-    async def movie_download_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def youtube_download_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
         
@@ -1718,251 +1618,271 @@ class UTYOBot:
         self._clear_user_state(user_id)
         
         keyboard = [
-            [InlineKeyboardButton(LanguageManager.get_text(lang, 'site_yts'), callback_data="movie_site_yts")],
-            [InlineKeyboardButton(LanguageManager.get_text(lang, 'site_1337x'), callback_data="movie_site_1337x")],
-            [InlineKeyboardButton(LanguageManager.get_text(lang, 'site_rarbg'), callback_data="movie_site_rarbg")],
-            [InlineKeyboardButton(LanguageManager.get_text(lang, 'site_tpb'), callback_data="movie_site_tpb")],
-            [InlineKeyboardButton(LanguageManager.get_text(lang, 'site_eztv'), callback_data="movie_site_eztv")],
-            [InlineKeyboardButton(LanguageManager.get_text(lang, 'site_other'), callback_data="movie_site_other")],
+            [InlineKeyboardButton(LanguageManager.get_text(lang, 'quality_4k'), callback_data="youtube_quality_4k")],
+            [InlineKeyboardButton(LanguageManager.get_text(lang, 'quality_1080'), callback_data="youtube_quality_1080")],
+            [InlineKeyboardButton(LanguageManager.get_text(lang, 'quality_720'), callback_data="youtube_quality_720")],
+            [InlineKeyboardButton(LanguageManager.get_text(lang, 'quality_480'), callback_data="youtube_quality_480")],
+            [InlineKeyboardButton(LanguageManager.get_text(lang, 'quality_audio'), callback_data="youtube_quality_audio")],
             [InlineKeyboardButton(LanguageManager.get_text(lang, 'back'), callback_data="main_menu")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        self._set_user_state(user_id, 'movie_select_site')
+        self._set_user_state(user_id, 'youtube_quality')
         
         await query.edit_message_text(
-            LanguageManager.get_text(lang, 'movie_select_site'),
+            LanguageManager.get_text(lang, 'youtube_downloader') + "\n\n" + 
+            LanguageManager.get_text(lang, 'video_quality'),
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
     
-    async def movie_site_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def youtube_quality_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
         
         user_id = query.from_user.id
         lang = self._get_user_language(user_id)
-        site = query.data.replace('movie_site_', '')
+        quality = query.data.replace('youtube_quality_', '')
         
-        context.user_data['movie_site'] = site
-        self._set_user_state(user_id, 'movie_search', {'site': site})
+        context.user_data['youtube_quality'] = quality
+        self._set_user_state(user_id, 'youtube_waiting_link')
         
-        if site == 'other':
-            await query.edit_message_text(
-                "🌐 **Enter the site URL:**\n\n"
-                "Please enter the URL of the site you want to search:\n\n"
-                "Example: `https://example.com`",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-        
-        site_names = {
-            'yts': 'YTS (yts.mx)',
-            '1337x': '1337x (1337x.to)',
-            'rarbg': 'RARBG (rarbg.to)',
-            'tpb': 'The Pirate Bay (thepiratebay.org)',
-            'eztv': 'EZTV (eztv.re)'
+        quality_names = {
+            '4k': '📱 4K Ultra HD',
+            '1080': '📱 1080p Full HD',
+            '720': '📱 720p HD',
+            '480': '📱 480p SD',
+            'audio': '🎵 Audio Only'
         }
         
-        keyboard = [[InlineKeyboardButton(LanguageManager.get_text(lang, 'back'), callback_data="movie_download")]]
+        keyboard = [[InlineKeyboardButton(LanguageManager.get_text(lang, 'back'), callback_data="youtube_download")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
-            f"✅ **Site selected:** {site_names.get(site, site)}\n\n"
-            f"{LanguageManager.get_text(lang, 'movie_downloader')}",
+            LanguageManager.get_text(lang, 'youtube_downloader') + "\n\n" +
+            f"🎬 **Selected Quality:** {quality_names.get(quality, quality)}\n\n" +
+            "📤 **Send me the YouTube link:**",
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
     
-    async def _search_movies(self, update: Update, context: ContextTypes.DEFAULT_TYPE, query: str):
+    async def _download_youtube(self, update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
         user_id = update.effective_user.id
         lang = self._get_user_language(user_id)
-        site = context.user_data.get('movie_site', 'yts')
+        quality = context.user_data.get('youtube_quality', 'best')
         
         await update.message.reply_text(
-            LanguageManager.get_text(lang, 'movie_searching', query),
+            LanguageManager.get_text(lang, 'download_started'),
             parse_mode=ParseMode.MARKDOWN
         )
         
         try:
-            results = await movie_downloader.search_movie(query, site)
+            success, filepath, message = await youtube_downloader.download_youtube(url, quality)
             
-            if not results:
-                await update.message.reply_text(
-                    LanguageManager.get_text(lang, 'movie_not_found', query),
-                    parse_mode=ParseMode.MARKDOWN
-                )
-                return
-            
-            context.user_data['movie_results'] = results
-            self._set_user_state(user_id, 'movie_results', {'results': results})
-            
-            # نمایش نتایج
-            text = LanguageManager.get_text(lang, 'movie_results', query, len(results))
-            keyboard = []
-            
-            for i, movie in enumerate(results[:10]):
-                title = movie.get('title', 'Unknown')[:50]
-                year = movie.get('year', 'Unknown')
-                rating = movie.get('rating', 0)
-                keyboard.append([InlineKeyboardButton(
-                    f"🎬 {title} ({year}) ⭐{rating}",
-                    callback_data=f"movie_select_{i}"
-                )])
-            
-            keyboard.append([InlineKeyboardButton(LanguageManager.get_text(lang, 'back'), callback_data="movie_download")])
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await update.message.reply_text(
-                text,
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-            
-        except Exception as e:
-            logger.error(f"Movie search error: {e}")
-            await update.message.reply_text(
-                LanguageManager.get_text(lang, 'movie_download_failed', str(e)),
-                parse_mode=ParseMode.MARKDOWN
-            )
-    
-    async def movie_select_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        index = int(query.data.replace('movie_select_', ''))
-        
-        results = context.user_data.get('movie_results', [])
-        if not results or index >= len(results):
-            await query.edit_message_text(
-                "❌ Movie not found! Please search again.",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-        
-        movie = results[index]
-        context.user_data['selected_movie'] = movie
-        self._set_user_state(user_id, 'movie_quality', {'movie': movie})
-        
-        # نمایش اطلاعات فیلم
-        torrents = movie.get('torrents', [])
-        torrent_text = ""
-        for t in torrents:
-            torrent_text += f"• {t.get('quality', 'Unknown')} - {t.get('size', 'Unknown')}\n"
-        
-        if not torrent_text:
-            torrent_text = "No torrents available"
-        
-        text = LanguageManager.get_text(lang, 'movie_info',
-            movie.get('title', 'Unknown'),
-            movie.get('year', 'Unknown'),
-            movie.get('rating', 0),
-            ', '.join(movie.get('genres', ['N/A'])),
-            movie.get('plot', 'No plot available')[:200] + '...',
-            torrent_text
-        )
-        
-        keyboard = []
-        for t in torrents[:5]:
-            quality = t.get('quality', 'Unknown')
-            size = t.get('size', 'Unknown')
-            keyboard.append([InlineKeyboardButton(
-                f"📥 {quality} - {size}",
-                callback_data=f"movie_quality_{torrents.index(t)}"
-            )])
-        
-        keyboard.append([InlineKeyboardButton(LanguageManager.get_text(lang, 'back'), callback_data="movie_download")])
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            text,
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    async def movie_quality_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        index = int(query.data.replace('movie_quality_', ''))
-        
-        movie = context.user_data.get('selected_movie')
-        if not movie:
-            await query.edit_message_text("❌ Movie not found!", parse_mode=ParseMode.MARKDOWN)
-            return
-        
-        torrents = movie.get('torrents', [])
-        if index >= len(torrents):
-            await query.edit_message_text("❌ Quality not found!", parse_mode=ParseMode.MARKDOWN)
-            return
-        
-        torrent = torrents[index]
-        url = torrent.get('url', '')
-        quality = torrent.get('quality', 'Unknown')
-        
-        if not url:
-            await query.edit_message_text(
-                "❌ Download link not available!\n\nPlease try another quality.",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-        
-        await query.edit_message_text(
-            LanguageManager.get_text(lang, 'movie_downloading', movie.get('title', 'Unknown')),
-            parse_mode=ParseMode.MARKDOWN
-        )
-        
-        try:
-            success, file_path, message = await movie_downloader.download_movie(url, quality)
-            
-            if success and file_path and os.path.exists(file_path):
-                file_size = os.path.getsize(file_path) // (1024 * 1024)
+            if success and filepath and os.path.exists(filepath):
+                file_size = os.path.getsize(filepath) // (1024 * 1024)
                 
-                with open(file_path, 'rb') as f:
-                    await update.effective_message.reply_video(
-                        video=f,
-                        caption=LanguageManager.get_text(lang, 'movie_download_success',
-                            movie.get('title', 'Unknown'),
-                            f"{file_size} MB",
-                            movie.get('year', 'Unknown')
-                        ),
-                        supports_streaming=True
-                    )
+                with open(filepath, 'rb') as f:
+                    if quality == 'audio':
+                        await update.message.reply_audio(
+                            audio=f,
+                            caption=f"🎵 {LanguageManager.get_text(lang, 'download_success')}\n📦 Size: {file_size} MB"
+                        )
+                    else:
+                        await update.message.reply_video(
+                            video=f,
+                            caption=f"🎬 {LanguageManager.get_text(lang, 'download_success')}\n📦 Size: {file_size} MB",
+                            supports_streaming=True
+                        )
                 
                 try:
-                    os.remove(file_path)
+                    os.remove(filepath)
                 except:
                     pass
                 
                 self._clear_user_state(user_id)
                 
-                keyboard = [[InlineKeyboardButton("🎬 Download Another", callback_data="movie_download")]]
+                keyboard = [[InlineKeyboardButton("🎬 Download Another", callback_data="youtube_download")]]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 
-                await update.effective_message.reply_text(
-                    "🎬 " + LanguageManager.get_text(lang, 'movie_downloader'),
+                await update.message.reply_text(
+                    "🎬 " + LanguageManager.get_text(lang, 'youtube_downloader'),
                     reply_markup=reply_markup,
                     parse_mode=ParseMode.MARKDOWN
                 )
             else:
-                await update.effective_message.reply_text(
-                    LanguageManager.get_text(lang, 'movie_download_failed', message),
+                await update.message.reply_text(
+                    LanguageManager.get_text(lang, 'download_failed', message),
                     parse_mode=ParseMode.MARKDOWN
                 )
                 
         except Exception as e:
-            logger.error(f"Movie download error: {e}")
-            await update.effective_message.reply_text(
-                LanguageManager.get_text(lang, 'movie_download_failed', str(e)),
+            logger.error(f"YouTube download error: {e}")
+            await update.message.reply_text(
+                LanguageManager.get_text(lang, 'download_failed', str(e)),
                 parse_mode=ParseMode.MARKDOWN
             )
 
     # ============================================================
-    # کالبک‌های فاکتور ساز - یک دکمه با تایید
+    # کالبک‌های Text-to-Speech
+    # ============================================================
+    async def tts_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        lang = self._get_user_language(user_id)
+        
+        self._clear_user_state(user_id)
+        
+        keyboard = [
+            [InlineKeyboardButton("🇬🇧 English", callback_data="tts_lang_en")],
+            [InlineKeyboardButton("🇮🇷 فارسی", callback_data="tts_lang_fa")],
+            [InlineKeyboardButton("🇹🇷 Türkçe", callback_data="tts_lang_tr")],
+            [InlineKeyboardButton("🇪🇸 Español", callback_data="tts_lang_es")],
+            [InlineKeyboardButton("🇫🇷 Français", callback_data="tts_lang_fr")],
+            [InlineKeyboardButton("🇩🇪 Deutsch", callback_data="tts_lang_de")],
+            [InlineKeyboardButton("🇮🇹 Italiano", callback_data="tts_lang_it")],
+            [InlineKeyboardButton("🇷🇺 Русский", callback_data="tts_lang_ru")],
+            [InlineKeyboardButton("🇯🇵 日本語", callback_data="tts_lang_ja")],
+            [InlineKeyboardButton("🇨🇳 中文", callback_data="tts_lang_zh")],
+            [InlineKeyboardButton("🇸🇦 العربية", callback_data="tts_lang_ar")],
+            [InlineKeyboardButton("🇮🇳 हिन्दी", callback_data="tts_lang_hi")],
+            [InlineKeyboardButton("🇳🇱 Nederlands", callback_data="tts_lang_nl")],
+            [InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        self._set_user_state(user_id, 'tts_lang_select')
+        
+        await query.edit_message_text(
+            LanguageManager.get_text(lang, 'tts_title'),
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+    
+    async def tts_lang_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        lang = self._get_user_language(user_id)
+        tts_lang = query.data.replace('tts_lang_', '')
+        
+        context.user_data['tts_lang'] = tts_lang
+        self._set_user_state(user_id, 'tts_speed_select', {'lang': tts_lang})
+        
+        keyboard = [
+            [InlineKeyboardButton(LanguageManager.get_text(lang, 'tts_speed_slow'), callback_data="tts_speed_slow")],
+            [InlineKeyboardButton(LanguageManager.get_text(lang, 'tts_speed_normal'), callback_data="tts_speed_normal")],
+            [InlineKeyboardButton(LanguageManager.get_text(lang, 'tts_speed_fast'), callback_data="tts_speed_fast")],
+            [InlineKeyboardButton(LanguageManager.get_text(lang, 'tts_speed_very_fast'), callback_data="tts_speed_very_fast")],
+            [InlineKeyboardButton(LanguageManager.get_text(lang, 'back'), callback_data="tts")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            LanguageManager.get_text(lang, 'tts_speed_select'),
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+    
+    async def tts_speed_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        lang = self._get_user_language(user_id)
+        speed = query.data.replace('tts_speed_', '')
+        
+        context.user_data['tts_speed'] = speed
+        self._set_user_state(user_id, 'tts_waiting_text', {
+            'lang': context.user_data.get('tts_lang', 'en'),
+            'speed': speed
+        })
+        
+        keyboard = [[InlineKeyboardButton(LanguageManager.get_text(lang, 'back'), callback_data="tts")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            LanguageManager.get_text(lang, 'tts_waiting_text'),
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+    
+    async def _handle_tts_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
+        user_id = update.effective_user.id
+        lang = self._get_user_language(user_id)
+        
+        if len(text) > 5000:
+            await update.message.reply_text(
+                LanguageManager.get_text(lang, 'tts_text_too_long', len(text)),
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+        
+        await update.message.reply_text(
+            LanguageManager.get_text(lang, 'tts_converting', len(text)),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        
+        try:
+            tts_lang = context.user_data.get('tts_lang', 'en')
+            tts_speed = context.user_data.get('tts_speed', 'normal')
+            
+            success, filepath, info = await tts.convert_to_speech(text, tts_lang, tts_speed)
+            
+            if success and filepath and os.path.exists(filepath):
+                words = len(text.split())
+                reading_time = int(words / 2)
+                
+                with open(filepath, 'rb') as f:
+                    await update.message.reply_audio(
+                        audio=f,
+                        caption=LanguageManager.get_text(lang, 'tts_success',
+                            text[:100] + ('...' if len(text) > 100 else ''),
+                            words,
+                            reading_time,
+                            info.get('size', 0),
+                            tts_lang.upper(),
+                            tts_speed
+                        ),
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                
+                try:
+                    os.remove(filepath)
+                except:
+                    pass
+                
+                keyboard = [
+                    [InlineKeyboardButton(LanguageManager.get_text(lang, 'tts_again'), callback_data="tts")],
+                    [InlineKeyboardButton(LanguageManager.get_text(lang, 'main_menu_btn'), callback_data="main_menu")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await update.message.reply_text(
+                    "🎯 **What would you like to do next?**",
+                    reply_markup=reply_markup,
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                
+                self._clear_user_state(user_id)
+            else:
+                await update.message.reply_text(
+                    LanguageManager.get_text(lang, 'tts_failed', info.get('error', 'Unknown error')),
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                
+        except Exception as e:
+            logger.error(f"TTS error: {e}")
+            await update.message.reply_text(
+                LanguageManager.get_text(lang, 'tts_failed', str(e)),
+                parse_mode=ParseMode.MARKDOWN
+            )
+
+    # ============================================================
+    # کالبک‌های فاکتور ساز - یک دکمه با WebApp
     # ============================================================
     async def invoice_maker_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
@@ -1975,7 +1895,7 @@ class UTYOBot:
         
         keyboard = [
             [InlineKeyboardButton(
-                "🧾 " + LanguageManager.get_text(lang, 'open_invoice_btn'),
+                LanguageManager.get_text(lang, 'open_invoice_btn'),
                 web_app=WebAppInfo(url="https://mbuiop.github.io/Tablikgram/")
             )],
             [InlineKeyboardButton(
@@ -1986,11 +1906,7 @@ class UTYOBot:
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
-            "🧾 **" + LanguageManager.get_text(lang, 'invoice_maker') + "**\n\n"
-            "📌 Click the button below to open the invoice maker:\n\n"
-            "✨ Fast and simple!\n\n"
-            "📥 Downloads are saved to your gallery.\n\n"
-            "⚠️ The link will open in Telegram browser.",
+            LanguageManager.get_text(lang, 'invoice_maker_text'),
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
@@ -2935,38 +2851,44 @@ class UTYOBot:
         
         state, data = self._get_user_state(user_id)
         
-        # جستجوی فیلم
-        if state == 'movie_search':
-            if text.strip():
-                await self._search_movies(update, context, text.strip())
-                return
-            else:
-                await update.message.reply_text(
-                    "❌ Please enter a movie name!",
-                    parse_mode=ParseMode.MARKDOWN
-                )
-                return
-        
-        # سایت دیگر
-        if state == 'movie_select_site' and context.user_data.get('movie_site') == 'other':
+        # ============================================================
+        # YouTube Downloader
+        # ============================================================
+        if state == 'youtube_waiting_link':
             if text.startswith('http://') or text.startswith('https://'):
-                context.user_data['movie_site'] = text
-                self._set_user_state(user_id, 'movie_search', {'site': text})
-                await update.message.reply_text(
-                    "✅ **Site saved!**\n\n"
-                    f"🌐 Site: {text}\n\n"
-                    "Now enter the movie name:",
-                    parse_mode=ParseMode.MARKDOWN
-                )
-                return
+                if youtube_downloader.validate_youtube_url(text):
+                    await self._download_youtube(update, context, text)
+                    return
+                else:
+                    await update.message.reply_text(
+                        LanguageManager.get_text(lang, 'invalid_url'),
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                    return
             else:
                 await update.message.reply_text(
-                    "❌ Please enter a valid URL starting with http:// or https://",
+                    LanguageManager.get_text(lang, 'invalid_url'),
                     parse_mode=ParseMode.MARKDOWN
                 )
                 return
         
+        # ============================================================
+        # Text-to-Speech
+        # ============================================================
+        if state == 'tts_waiting_text':
+            if text.strip():
+                await self._handle_tts_text(update, context, text.strip())
+                return
+            else:
+                await update.message.reply_text(
+                    "❌ Please send a valid text!",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                return
+        
+        # ============================================================
         # مدیریت actions
+        # ============================================================
         admin_action = context.user_data.get('admin_action')
         
         if admin_action == 'broadcast':
@@ -2983,7 +2905,9 @@ class UTYOBot:
             await self._send_poll(update, text, context)
             return
         
+        # ============================================================
         # تایید هش تراکنش
+        # ============================================================
         if context.user_data.get('waiting_for_tx_hash'):
             tx_hash = text.strip()
             
@@ -3039,7 +2963,9 @@ class UTYOBot:
             
             return
         
+        # ============================================================
         # اشتراک - وارد کردن کیف پول
+        # ============================================================
         if state == 'waiting_subscribe_wallet':
             wallet_address = text.strip()
             
@@ -3066,7 +2992,9 @@ class UTYOBot:
             )
             return
         
+        # ============================================================
         # شرکت در قرعه‌کشی - وارد کردن کیف پول
+        # ============================================================
         if state == 'waiting_wallet':
             wallet_address = text.strip()
             
@@ -3093,7 +3021,9 @@ class UTYOBot:
             )
             return
         
+        # ============================================================
         # برداشت جایزه - وارد کردن کیف پول
+        # ============================================================
         if state == 'waiting_withdraw_wallet':
             wallet_address = text.strip()
             
@@ -3133,7 +3063,9 @@ class UTYOBot:
                 )
             return
         
+        # ============================================================
         # پیام نامعتبر
+        # ============================================================
         keyboard = [[InlineKeyboardButton(LanguageManager.get_text(lang, 'main_menu_btn'), callback_data="main_menu")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -3205,7 +3137,6 @@ class UTYOBot:
                             parse_mode=ParseMode.MARKDOWN
                         )
                         
-                        # ارسال پیام به برندگان
                         for winner_id in result['winners']:
                             winner_lang = self._get_user_language(winner_id)
                             keyboard = [
@@ -3378,7 +3309,7 @@ def main():
     try:
         # بروزرسانی وابستگی‌ها
         try:
-            subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "yt-dlp", "requests", "beautifulsoup4"], 
+            subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "yt-dlp", "gTTS", "pydub"], 
                          capture_output=True, check=False)
             logger.info("✅ Dependencies updated")
         except:
@@ -3392,7 +3323,8 @@ def main():
         logger.info(f"🔑 APIs: {len(TRONGRID_APIS)}")
         logger.info(f"⚡ Threads: 100")
         logger.info(f"💾 Cache size: 50,000 items")
-        logger.info("🎬 Movie Downloader: Ready (YTS, 1337x, RARBG, TPB, EZTV)")
+        logger.info("🎬 YouTube Downloader: Ready (4K/1080p/720p/480p/Audio)")
+        logger.info("🔊 Text-to-Speech: Ready (15+ Languages)")
         logger.info("🧾 Invoice Maker: Ready")
         logger.info("⚡ Polling started")
 
