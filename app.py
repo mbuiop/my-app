@@ -1,5 +1,5 @@
 # ============================================================
-# ربات قرعه‌کشی هوشمند UTYOB - نسخه نهایی با بهینه‌سازی سرعت
+# ربات قرعه‌کشی هوشمند UTYOB - نسخه فوق‌سریع با فاکتور ساز پیشرفته
 # ============================================================
 
 import asyncio
@@ -27,7 +27,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 from telegram.constants import ParseMode
 
 # ============================================================
-# تنظیمات اولیه
+# تنظیمات اولیه - بهینه برای سرعت بالا
 # ============================================================
 logging.basicConfig(
     level=logging.INFO,
@@ -75,6 +75,7 @@ class LanguageManager:
             'main_menu_btn': "🔙 Main Menu",
             'lottery_back': "🎰 Back to Lottery",
             'close': "❌ Close",
+            'subscribed_users': "👥 Subscribed Users",
             
             'subscribe_wallet': "💳 **Subscribe to UTYOB Lottery**\n\nPlease enter your source TRC20 wallet address:\n\n🔹 **Subscription fee:** $100\n🔹 **Destination address:**\n`{}`\n\n⚠️ **Important:**\n• Use TRC20 network only\n• Amount must be exactly $100\n• After sending, click the button below\n\n📤 **Enter your source wallet address:**",
             'after_subscribe_wallet': "✅ **Wallet address saved!**\n\n🔹 Your address: `{}`\n\n💰 **Please send exactly $100 to:**\n`{}`\n\n⚠️ **Important:**\n• Use TRC20 network only\n• Send exactly $100\n• After sending, click the button below\n\n✅ **Click after sending:**",
@@ -103,11 +104,12 @@ class LanguageManager:
             'no_winner': "❌ You don't have any prize!\n\nParticipate in future lotteries.",
             'next_lottery': "🎰 Next Lottery",
             
-            'referral_text': "🔗 **UTYOB Referral System**\n\n👤 You: {}\n📊 Invites: {}\n💰 Rewards: ${}\n\n🔑 **Your referral code:**\n`{}`\n\n🔗 **Referral link:**\n{}\n\n💰 **Referral reward:**\n• 5% of deposit per invite\n• Instant reward after verification\n\n📤 Share this link with your friends!",
+            'referral_text': "🔗 **UTYOB Referral System**\n\n👤 You: {}\n📊 Invites: {}\n💰 Rewards: ${}\n\n🔑 **Your referral code:**\n`{}`\n\n🔗 **Referral link:**\n{}\n\n💰 **Referral reward:**\n• 5% discount for you\n• 5% discount for your friend\n• Instant reward after verification\n\n📤 Share this link with your friends!",
             'share': "📤 Share",
-            'referral_joined': "🎉 **New referral joined!**\n\n👤 {}\n🔗 Referred by: {}\n💰 Your reward: ${:.2f}",
+            'referral_joined': "🎉 **New referral joined!**\n\n👤 {}\n🔗 Referred by: {}\n💰 You both got 5% discount!",
+            'referral_discount': "🎉 **You got 5% discount!**\n\n👤 {}\n🔗 Referred by: {}\n💰 5% discount applied to your subscription!",
             
-            'guide_text': "📖 **UTYOB Bot Complete Guide**\n\n🎯 **How it works:**\n1. **Register**: Use /start to register\n2. **Subscription**: Purchase subscription to participate\n3. **Deposit**: Send $100 to the specified address\n4. **Participate**: Join the lottery after verification\n5. **Win**: Receive prize if you win\n\n💰 **Deposit amount:**\n- Fixed amount: $100\n- Deposit address: TV61aTh98MGqmteYzda5AaBzdXgGqreG6A\n- Network: TRC20\n\n🎁 **Prizes:**\n- 1st prize: 50% of total\n- 2nd prize: 30% of total\n- 3rd prize: 20% of total\n\n🔗 **Referral system:**\n- Each user has unique referral code\n- 5% reward per invite\n\n⚠️ **Rules:**\n- One participation per lottery per user\n- Previous winners have lower chance\n- All transactions verified automatically\n\n📞 **Support:**\nContact admin for questions.",
+            'guide_text': "📖 **UTYOB Bot Complete Guide**\n\n🎯 **How it works:**\n1. **Register**: Use /start to register\n2. **Subscription**: Purchase subscription to participate\n3. **Deposit**: Send $100 to the specified address\n4. **Participate**: Join the lottery after verification\n5. **Win**: Receive prize if you win\n\n💰 **Deposit amount:**\n- Fixed amount: $100\n- Deposit address: TV61aTh98MGqmteYzda5AaBzdXgGqreG6A\n- Network: TRC20\n\n🎁 **Prizes:**\n- 1st prize: 50% of total\n- 2nd prize: 30% of total\n- 3rd prize: 20% of total\n\n🔗 **Referral system:**\n- Each user has unique referral code\n- 5% discount for both you and your friend\n\n⚠️ **Rules:**\n- One participation per lottery per user\n- Previous winners have lower chance\n- All transactions verified automatically\n\n📞 **Support:**\nContact admin for questions.",
             
             'language_selector': "🌐 **Change Language**\n\nCurrent language: {}",
             
@@ -127,15 +129,38 @@ class LanguageManager:
             'poll_message': "📊 **Poll**\n\n{}",
             'poll_option_1': "✅ Yes",
             'poll_option_2': "❌ No",
+            'poll_thanks': "✅ Thank you for your vote!\n\nYou selected: {}\n📊 Your opinion matters!",
+            'poll_result_admin': "📊 **Poll Result**\n\n👤 User: {}\n📝 Question: {}\n✅ Answer: {}\n🕐 Time: {}",
+            'poll_yes': "Yes ✅",
+            'poll_no': "No ❌",
 
             'instagram_downloader': "📸 **Instagram Downloader**\n\nSend me an Instagram post/reel URL and I'll download it for you!\n\n📤 Send the link:",
-            'invoice_maker_text': "🧾 **Invoice Maker**\n\nClick the button below to open the invoice maker tool:\n\n✨ Fast and simple!\n\n📌 After finishing, click **Close** to return.",
+            'invoice_maker_text': "🧾 **Invoice Maker**\n\nClick the button below to open the invoice maker tool:\n\n✨ Fast and simple!\n\n📌 After finishing, click **Close** to return.\n\n📥 Downloads are saved to your gallery.",
             'open_invoice_btn': "🧾 Open Invoice Maker",
             'downloading': "⏳ Downloading... Please wait.",
             'download_success': "✅ **Download completed!**\n\n📥 File ready for download.",
             'download_failed': "❌ **Download failed!**\n\n🔹 Reason: {}\n\n📌 Make sure the link is correct and the video is available.",
             'invalid_url': "❌ Invalid URL!\n\nPlease send a valid Instagram link.",
             'processing': "🔄 Processing your request...",
+
+            'lottery_announcement': "🎰 **Lottery Announcement**\n\n📅 Date: {}\n💰 Prize: ${}\n👥 Winners: {}\n\n📤 To participate, please send $100 to:\n`{}`\n\n⚠️ **Important:**\n• Use TRC20 network only\n• Enter your source wallet address\n• Make sure your subscription is active\n\n🎯 Good luck to everyone!",
+            'lottery_winner_announcement': "🎉 **Lottery Winner!**\n\n🏆 Congratulations!\n👤 User: {}\n💰 Prize: ${}\n📤 Wallet: {}\n🌍 Country: {}\n\n✅ Prize has been sent to your wallet!\n🙏 Enjoy your winnings!",
+            'lottery_winner_admin': "🏆 **Lottery Winners**\n\n📅 Date: {}\n💰 Total Prize: ${}\n👥 Winners:\n{}\n\n✅ All winners have been paid.",
+            'lottery_no_winners': "❌ No eligible users for lottery.",
+            'lottery_paid': "✅ Winners paid successfully!",
+            
+            'enter_lottery_date': "📅 **Enter Lottery Date**\n\nPlease enter the lottery date (YYYY-MM-DD):\nExample: `2024-12-31`",
+            'enter_lottery_prize': "💰 **Enter Prize Amount**\n\nPlease enter the prize amount for each winner:\nExample: `500`",
+            'enter_lottery_winners': "👥 **Enter Number of Winners**\n\nPlease enter the number of winners:\nExample: `3`",
+            'lottery_confirm': "✅ **Lottery Confirmation**\n\n📅 Date: {}\n💰 Prize: ${}\n👥 Winners: {}\n\n⚠️ Are you sure you want to start the lottery?",
+            'lottery_started': "🎰 **Lottery Started!**\n\n📅 Date: {}\n💰 Prize: ${}\n👥 Winners: {}\n\n🎯 Selecting winners...",
+            'lottery_completed': "✅ **Lottery Completed!**\n\n📅 Date: {}\n💰 Prize: ${}\n👥 Winners: {}\n\n🏆 Winners have been selected and notified.",
+            
+            'pay_winners_confirm': "💰 **Pay Winners**\n\nTotal winners: {}\nTotal prize: ${}\n\n⚠️ Are you sure you want to pay all winners?",
+            'pay_winners_success': "✅ **Winners Paid!**\n\nTotal winners: {}\nTotal prize: ${}\n\n📢 All winners have been notified.",
+            
+            'subscribed_users_list': "👥 **Subscribed Users**\n\nTotal: {}\n\n{}",
+            'no_subscribed_users': "❌ No subscribed users found.",
         },
         'fa': {
             'name': 'فارسی',
@@ -155,6 +180,7 @@ class LanguageManager:
             'main_menu_btn': "🔙 منوی اصلی",
             'lottery_back': "🎰 بازگشت به قرعه‌کشی",
             'close': "❌ بستن",
+            'subscribed_users': "👥 کاربران اشتراکی",
             
             'subscribe_wallet': "💳 **خرید اشتراک UTYOB**\n\nلطفاً آدرس کیف پول مبدا (TRC20) خود را وارد کنید:\n\n🔹 **هزینه اشتراک:** ۱۰۰ دلار\n🔹 **آدرس مقصد:**\n`{}`\n\n⚠️ **نکات مهم:**\n• فقط از شبکه TRC20 استفاده کنید\n• مبلغ دقیقاً ۱۰۰ دلار باشد\n• پس از واریز، روی دکمه زیر کلیک کنید\n\n📤 **آدرس کیف پول خود را وارد کنید:**",
             'after_subscribe_wallet': "✅ **آدرس کیف پول ذخیره شد!**\n\n🔹 آدرس شما: `{}`\n\n💰 **لطفاً مبلغ ۱۰۰ دلار به آدرس زیر واریز کنید:**\n`{}`\n\n⚠️ **نکات مهم:**\n• فقط از شبکه TRC20 استفاده کنید\n• مبلغ دقیقاً ۱۰۰ دلار باشد\n• پس از واریز، روی دکمه زیر کلیک کنید\n\n✅ **پس از واریز کلیک کنید:**",
@@ -183,11 +209,12 @@ class LanguageManager:
             'no_winner': "❌ شما برنده‌ای ندارید!\n\nدر قرعه‌کشی‌های بعدی شرکت کنید.",
             'next_lottery': "🎰 قرعه‌کشی بعدی",
             
-            'referral_text': "🔗 **سیستم رفرال UTYOB**\n\n👤 شما: {}\n📊 تعداد دعوت‌ها: {}\n💰 پاداش: ${}\n\n🔑 **کد رفرال شما:**\n`{}`\n\n🔗 **لینک دعوت:**\n{}\n\n💰 **پاداش دعوت:**\n• به ازای هر دعوت: ۵٪ از واریز\n• پاداش فوری پس از تایید\n\n📤 لینک را برای دوستان خود ارسال کنید!",
+            'referral_text': "🔗 **سیستم رفرال UTYOB**\n\n👤 شما: {}\n📊 تعداد دعوت‌ها: {}\n💰 پاداش: ${}\n\n🔑 **کد رفرال شما:**\n`{}`\n\n🔗 **لینک دعوت:**\n{}\n\n💰 **پاداش دعوت:**\n• ۵٪ تخفیف برای شما\n• ۵٪ تخفیف برای دوست شما\n• پاداش فوری پس از تایید\n\n📤 لینک را برای دوستان خود ارسال کنید!",
             'share': "📤 اشتراک‌گذاری",
-            'referral_joined': "🎉 **دعوت جدید!**\n\n👤 {}\n🔗 دعوت کننده: {}\n💰 پاداش شما: ${:.2f}",
+            'referral_joined': "🎉 **دعوت جدید!**\n\n👤 {}\n🔗 دعوت کننده: {}\n💰 هر دو ۵٪ تخفیف گرفتید!",
+            'referral_discount': "🎉 **۵٪ تخفیف گرفتید!**\n\n👤 {}\n🔗 دعوت کننده: {}\n💰 ۵٪ تخفیف به اشتراک شما اعمال شد!",
             
-            'guide_text': "📖 **راهنمای کامل ربات UTYOB**\n\n🎯 **نحوه کار:**\n1. **ثبت‌نام**: با دستور /start ثبت‌نام کنید\n2. **اشتراک**: برای شرکت در قرعه‌کشی، اشتراک تهیه کنید\n3. **واریز**: مبلغ ۱۰۰ دلار به آدرس مشخص واریز کنید\n4. **شرکت**: پس از تایید، در قرعه‌کشی شرکت کنید\n5. **برنده**: در صورت برنده شدن، جایزه دریافت کنید\n\n💰 **مبلغ واریز:**\n- مبلغ ثابت: ۱۰۰ دلار\n- آدرس واریز: TV61aTh98MGqmteYzda5AaBzdXgGqreG6A\n- شبکه: TRC20\n\n🎁 **جوایز:**\n- جایزه اول: ۵۰٪ از کل مبلغ\n- جایزه دوم: ۳۰٪ از کل مبلغ\n- جایزه سوم: ۲۰٪ از کل مبلغ\n\n🔗 **سیستم رفرال:**\n- هر کاربر کد رفرال اختصاصی دارد\n- به ازای هر دعوت، ۵٪ پاداش دریافت کنید\n\n⚠️ **قوانین:**\n- هر کاربر فقط یک بار در هر قرعه‌کشی شرکت می‌کند\n- برندگان قبلی شانس کمتری در قرعه‌کشی‌های بعدی دارند\n- تمامی تراکنش‌ها به صورت خودکار تایید می‌شوند\n\n📞 **پشتیبانی:**\nبرای سوالات و مشکلات با مدیریت تماس بگیرید.",
+            'guide_text': "📖 **راهنمای کامل ربات UTYOB**\n\n🎯 **نحوه کار:**\n1. **ثبت‌نام**: با دستور /start ثبت‌نام کنید\n2. **اشتراک**: برای شرکت در قرعه‌کشی، اشتراک تهیه کنید\n3. **واریز**: مبلغ ۱۰۰ دلار به آدرس مشخص واریز کنید\n4. **شرکت**: پس از تایید، در قرعه‌کشی شرکت کنید\n5. **برنده**: در صورت برنده شدن، جایزه دریافت کنید\n\n💰 **مبلغ واریز:**\n- مبلغ ثابت: ۱۰۰ دلار\n- آدرس واریز: TV61aTh98MGqmteYzda5AaBzdXgGqreG6A\n- شبکه: TRC20\n\n🎁 **جوایز:**\n- جایزه اول: ۵۰٪ از کل مبلغ\n- جایزه دوم: ۳۰٪ از کل مبلغ\n- جایزه سوم: ۲۰٪ از کل مبلغ\n\n🔗 **سیستم رفرال:**\n- هر کاربر کد رفرال اختصاصی دارد\n- ۵٪ تخفیف برای شما و دوستتان\n\n⚠️ **قوانین:**\n- هر کاربر فقط یک بار در هر قرعه‌کشی شرکت می‌کند\n- برندگان قبلی شانس کمتری در قرعه‌کشی‌های بعدی دارند\n- تمامی تراکنش‌ها به صورت خودکار تایید می‌شوند\n\n📞 **پشتیبانی:**\nبرای سوالات و مشکلات با مدیریت تماس بگیرید.",
             
             'language_selector': "🌐 **تغییر زبان**\n\nزبان فعلی: {}",
             
@@ -207,15 +234,38 @@ class LanguageManager:
             'poll_message': "📊 **نظرسنجی**\n\n{}",
             'poll_option_1': "✅ بله",
             'poll_option_2': "❌ خیر",
+            'poll_thanks': "✅ از رای شما متشکریم!\n\nشما انتخاب کردید: {}\n📊 نظر شما برای ما مهم است!",
+            'poll_result_admin': "📊 **نتیجه نظرسنجی**\n\n👤 کاربر: {}\n📝 سوال: {}\n✅ پاسخ: {}\n🕐 زمان: {}",
+            'poll_yes': "بله ✅",
+            'poll_no': "خیر ❌",
 
             'instagram_downloader': "📸 **دانلودر اینستاگرام**\n\nلینک پست یا ریل اینستاگرام را ارسال کنید تا آن را دانلود کنم!\n\n📤 لینک را ارسال کنید:",
-            'invoice_maker_text': "🧾 **فاکتور ساز**\n\nبرای ساخت فاکتور، روی دکمه زیر کلیک کنید:\n\n✨ سریع و ساده!\n\n📌 پس از اتمام، روی **بستن** کلیک کنید تا برگردید.",
+            'invoice_maker_text': "🧾 **فاکتور ساز**\n\nبرای ساخت فاکتور، روی دکمه زیر کلیک کنید:\n\n✨ سریع و ساده!\n\n📌 پس از اتمام، روی **بستن** کلیک کنید تا برگردید.\n\n📥 دانلودها در گالری شما ذخیره می‌شوند.",
             'open_invoice_btn': "🧾 باز کردن فاکتور ساز",
             'downloading': "⏳ در حال دانلود... لطفاً صبر کنید.",
             'download_success': "✅ **دانلود کامل شد!**\n\n📥 فایل آماده دانلود است.",
             'download_failed': "❌ **دانلود ناموفق!**\n\n🔹 دلیل: {}\n\n📌 مطمئن شوید لینک صحیح است و ویدیو در دسترس است.",
             'invalid_url': "❌ لینک نامعتبر!\n\nلطفاً یک لینک معتبر از اینستاگرام ارسال کنید.",
             'processing': "🔄 در حال پردازش درخواست شما...",
+
+            'lottery_announcement': "🎰 **اطلاعیه قرعه‌کشی**\n\n📅 تاریخ: {}\n💰 جایزه: ${}\n👥 تعداد برندگان: {}\n\n📤 برای شرکت، لطفاً مبلغ ۱۰۰ دلار به آدرس زیر واریز کنید:\n`{}`\n\n⚠️ **نکات مهم:**\n• فقط از شبکه TRC20 استفاده کنید\n• آدرس کیف پول مبدا خود را وارد کنید\n• اشتراک شما باید فعال باشد\n\n🎯 برای همه آرزوی موفقیت داریم!",
+            'lottery_winner_announcement': "🎉 **برنده قرعه‌کشی!**\n\n🏆 تبریک!\n👤 کاربر: {}\n💰 جایزه: ${}\n📤 کیف پول: {}\n🌍 کشور: {}\n\n✅ جایزه به کیف پول شما واریز شد!\n🙏 از برداشت خود لذت ببرید!",
+            'lottery_winner_admin': "🏆 **برندگان قرعه‌کشی**\n\n📅 تاریخ: {}\n💰 کل جایزه: ${}\n👥 برندگان:\n{}\n\n✅ تمام برندگان پرداخت شدند.",
+            'lottery_no_winners': "❌ کاربران واجد شرایطی برای قرعه‌کشی وجود ندارد.",
+            'lottery_paid': "✅ برندگان با موفقیت پرداخت شدند!",
+            
+            'enter_lottery_date': "📅 **تاریخ قرعه‌کشی را وارد کنید**\n\nلطفاً تاریخ قرعه‌کشی را وارد کنید (YYYY-MM-DD):\nمثال: `1403-10-11`",
+            'enter_lottery_prize': "💰 **مبلغ جایزه را وارد کنید**\n\nلطفاً مبلغ جایزه برای هر برنده را وارد کنید:\nمثال: `500`",
+            'enter_lottery_winners': "👥 **تعداد برندگان را وارد کنید**\n\nلطفاً تعداد برندگان را وارد کنید:\nمثال: `3`",
+            'lottery_confirm': "✅ **تایید قرعه‌کشی**\n\n📅 تاریخ: {}\n💰 جایزه: ${}\n👥 تعداد برندگان: {}\n\n⚠️ آیا مطمئن هستید که می‌خواهید قرعه‌کشی را شروع کنید؟",
+            'lottery_started': "🎰 **قرعه‌کشی شروع شد!**\n\n📅 تاریخ: {}\n💰 جایزه: ${}\n👥 تعداد برندگان: {}\n\n🎯 در حال انتخاب برندگان...",
+            'lottery_completed': "✅ **قرعه‌کشی انجام شد!**\n\n📅 تاریخ: {}\n💰 جایزه: ${}\n👥 تعداد برندگان: {}\n\n🏆 برندگان انتخاب و مطلع شدند.",
+            
+            'pay_winners_confirm': "💰 **پرداخت به برندگان**\n\nتعداد برندگان: {}\nمجموع جایزه: ${}\n\n⚠️ آیا مطمئن هستید که می‌خواهید به همه برندگان پرداخت کنید؟",
+            'pay_winners_success': "✅ **برندگان پرداخت شدند!**\n\nتعداد برندگان: {}\nمجموع جایزه: ${}\n\n📢 همه برندگان مطلع شدند.",
+            
+            'subscribed_users_list': "👥 **کاربران اشتراکی**\n\nتعداد: {}\n\n{}",
+            'no_subscribed_users': "❌ کاربر اشتراکی یافت نشد.",
         },
         'tr': {
             'name': 'Türkçe',
@@ -235,6 +285,7 @@ class LanguageManager:
             'main_menu_btn': "🔙 Ana Menü",
             'lottery_back': "🎰 Piyangoya Dön",
             'close': "❌ Kapat",
+            'subscribed_users': "👥 Abone Kullanıcılar",
             
             'subscribe_wallet': "💳 **UTYOB Aboneliği**\n\nLütfen kaynak TRC20 cüzdan adresinizi girin:\n\n🔹 **Abonelik ücreti:** 100$\n🔹 **Hedef adres:**\n`{}`\n\n⚠️ **Önemli:**\n• Sadece TRC20 ağını kullanın\n• Tutar tam olarak 100$ olmalı\n• Gönderdikten sonra aşağıdaki butona tıklayın\n\n📤 **Kaynak cüzdan adresinizi girin:**",
             'after_subscribe_wallet': "✅ **Cüzdan adresi kaydedildi!**\n\n🔹 Adresiniz: `{}`\n\n💰 **Lütfen tam olarak 100$'yi aşağıdaki adrese gönderin:**\n`{}`\n\n⚠️ **Önemli:**\n• Sadece TRC20 ağını kullanın\n• Tutar tam olarak 100$ olmalı\n• Gönderdikten sonra aşağıdaki butona tıklayın\n\n✅ **Gönderdikten sonra tıklayın:**",
@@ -263,11 +314,12 @@ class LanguageManager:
             'no_winner': "❌ Hiç ödülünüz yok!\n\nGelecek piyangolara katılın.",
             'next_lottery': "🎰 Sonraki Piyango",
             
-            'referral_text': "🔗 **UTYOB Referans Sistemi**\n\n👤 Siz: {}\n📊 Davetler: {}\n💰 Ödül: ${}\n\n🔑 **Referans kodunuz:**\n`{}`\n\n🔗 **Referans linki:**\n{}\n\n💰 **Referans ödülü:**\n• Her davet için %5 yatırım\n• Doğrulama sonrası anında ödül\n\n📤 Bu linki arkadaşlarınızla paylaşın!",
+            'referral_text': "🔗 **UTYOB Referans Sistemi**\n\n👤 Siz: {}\n📊 Davetler: {}\n💰 Ödül: ${}\n\n🔑 **Referans kodunuz:**\n`{}`\n\n🔗 **Referans linki:**\n{}\n\n💰 **Referans ödülü:**\n• Sizin için %5 indirim\n• Arkadaşınız için %5 indirim\n• Doğrulama sonrası anında ödül\n\n📤 Bu linki arkadaşlarınızla paylaşın!",
             'share': "📤 Paylaş",
-            'referral_joined': "🎉 **Yeni referans katıldı!**\n\n👤 {}\n🔗 Davet eden: {}\n💰 Ödülünüz: ${:.2f}",
+            'referral_joined': "🎉 **Yeni referans katıldı!**\n\n👤 {}\n🔗 Davet eden: {}\n💰 İkiniz de %5 indirim kazandınız!",
+            'referral_discount': "🎉 **%5 indirim kazandınız!**\n\n👤 {}\n🔗 Davet eden: {}\n💰 Aboneliğinize %5 indirim uygulandı!",
             
-            'guide_text': "📖 **UTYOB Bot Tam Rehber**\n\n🎯 **Nasıl çalışır:**\n1. **Kayıt**: /start ile kaydolun\n2. **Abonelik**: Katılmak için abonelik satın alın\n3. **Yatırım**: Belirtilen adrese 100$ gönderin\n4. **Katılım**: Doğrulama sonrası piyangoya katılın\n5. **Kazanç**: Kazanırsanız ödülü alın\n\n💰 **Yatırım tutarı:**\n- Sabit tutar: 100$\n- Yatırım adresi: TV61aTh98MGqmteYzda5AaBzdXgGqreG6A\n- Ağ: TRC20\n\n🎁 **Ödüller:**\n- 1. ödül: Toplamın %50'si\n- 2. ödül: Toplamın %30'u\n- 3. ödül: Toplamın %20'si\n\n🔗 **Referans sistemi:**\n- Her kullanıcının benzersiz referans kodu vardır\n- Davet başına %5 ödül\n\n⚠️ **Kurallar:**\n- Her piyangoda kullanıcı başına bir katılım\n- Önceki kazananların şansı daha düşük\n- Tüm işlemler otomatik doğrulanır\n\n📞 **Destek:**\nSorularınız için yöneticiye başvurun.",
+            'guide_text': "📖 **UTYOB Bot Tam Rehber**\n\n🎯 **Nasıl çalışır:**\n1. **Kayıt**: /start ile kaydolun\n2. **Abonelik**: Katılmak için abonelik satın alın\n3. **Yatırım**: Belirtilen adrese 100$ gönderin\n4. **Katılım**: Doğrulama sonrası piyangoya katılın\n5. **Kazanç**: Kazanırsanız ödülü alın\n\n💰 **Yatırım tutarı:**\n- Sabit tutar: 100$\n- Yatırım adresi: TV61aTh98MGqmteYzda5AaBzdXgGqreG6A\n- Ağ: TRC20\n\n🎁 **Ödüller:**\n- 1. ödül: Toplamın %50'si\n- 2. ödül: Toplamın %30'u\n- 3. ödül: Toplamın %20'si\n\n🔗 **Referans sistemi:**\n- Her kullanıcının benzersiz referans kodu vardır\n- Sizin ve arkadaşınız için %5 indirim\n\n⚠️ **Kurallar:**\n- Her piyangoda kullanıcı başına bir katılım\n- Önceki kazananların şansı daha düşük\n- Tüm işlemler otomatik doğrulanır\n\n📞 **Destek:**\nSorularınız için yöneticiye başvurun.",
             
             'language_selector': "🌐 **Dil Değiştir**\n\nMevcut dil: {}",
             
@@ -287,15 +339,38 @@ class LanguageManager:
             'poll_message': "📊 **Anket**\n\n{}",
             'poll_option_1': "✅ Evet",
             'poll_option_2': "❌ Hayır",
+            'poll_thanks': "✅ Oyunuz için teşekkürler!\n\nSeçiminiz: {}\n📊 Görüşünüz bizim için önemli!",
+            'poll_result_admin': "📊 **Anket Sonucu**\n\n👤 Kullanıcı: {}\n📝 Soru: {}\n✅ Cevap: {}\n🕐 Zaman: {}",
+            'poll_yes': "Evet ✅",
+            'poll_no': "Hayır ❌",
 
             'instagram_downloader': "📸 **Instagram İndirici**\n\nBir Instagram gönderisi/reel URL'si gönderin, sizin için indireyim!\n\n📤 Linki gönder:",
-            'invoice_maker_text': "🧾 **Fatura Oluşturucu**\n\nFatura oluşturmak için aşağıdaki düğmeye tıklayın:\n\n✨ Hızlı ve kolay!\n\n📌 Bitirdikten sonra **Kapat**'a tıklayarak geri dönün.",
+            'invoice_maker_text': "🧾 **Fatura Oluşturucu**\n\nFatura oluşturmak için aşağıdaki düğmeye tıklayın:\n\n✨ Hızlı ve kolay!\n\n📌 Bitirdikten sonra **Kapat**'a tıklayarak geri dönün.\n\n📥 İndirmeler galerinize kaydedilir.",
             'open_invoice_btn': "🧾 Fatura Oluşturucuyu Aç",
             'downloading': "⏳ İndiriliyor... Lütfen bekleyin.",
             'download_success': "✅ **İndirme tamamlandı!**\n\n📥 Dosya indirilmeye hazır.",
             'download_failed': "❌ **İndirme başarısız!**\n\n🔹 Sebep: {}\n\n📌 Linkin doğru olduğundan ve videonun mevcut olduğundan emin olun.",
             'invalid_url': "❌ Geçersiz URL!\n\nLütfen geçerli bir Instagram linki gönderin.",
             'processing': "🔄 İsteğiniz işleniyor...",
+
+            'lottery_announcement': "🎰 **Piyango Duyurusu**\n\n📅 Tarih: {}\n💰 Ödül: ${}\n👥 Kazananlar: {}\n\n📤 Katılmak için lütfen aşağıdaki adrese 100$ gönderin:\n`{}`\n\n⚠️ **Önemli:**\n• Sadece TRC20 ağını kullanın\n• Kaynak cüzdan adresinizi girin\n• Aboneliğiniz aktif olmalı\n\n🎯 Herkese iyi şanslar!",
+            'lottery_winner_announcement': "🎉 **Piyango Kazananı!**\n\n🏆 Tebrikler!\n👤 Kullanıcı: {}\n💰 Ödül: ${}\n📤 Cüzdan: {}\n🌍 Ülke: {}\n\n✅ Ödül cüzdanınıza gönderildi!\n🙏 Kazancınızın tadını çıkarın!",
+            'lottery_winner_admin': "🏆 **Piyango Kazananları**\n\n📅 Tarih: {}\n💰 Toplam Ödül: ${}\n👥 Kazananlar:\n{}\n\n✅ Tüm kazananlara ödeme yapıldı.",
+            'lottery_no_winners': "❌ Piyango için uygun kullanıcı yok.",
+            'lottery_paid': "✅ Kazananlara başarıyla ödeme yapıldı!",
+            
+            'enter_lottery_date': "📅 **Piyango Tarihi Girin**\n\nLütfen piyango tarihini girin (YYYY-MM-DD):\nÖrnek: `2024-12-31`",
+            'enter_lottery_prize': "💰 **Ödül Miktarını Girin**\n\nLütfen her kazanan için ödül miktarını girin:\nÖrnek: `500`",
+            'enter_lottery_winners': "👥 **Kazanan Sayısını Girin**\n\nLütfen kazanan sayısını girin:\nÖrnek: `3`",
+            'lottery_confirm': "✅ **Piyango Onayı**\n\n📅 Tarih: {}\n💰 Ödül: ${}\n👥 Kazananlar: {}\n\n⚠️ Piyangoyu başlatmak istediğinize emin misiniz?",
+            'lottery_started': "🎰 **Piyango Başladı!**\n\n📅 Tarih: {}\n💰 Ödül: ${}\n👥 Kazananlar: {}\n\n🎯 Kazananlar seçiliyor...",
+            'lottery_completed': "✅ **Piyango Tamamlandı!**\n\n📅 Tarih: {}\n💰 Ödül: ${}\n👥 Kazananlar: {}\n\n🏆 Kazananlar seçildi ve bilgilendirildi.",
+            
+            'pay_winners_confirm': "💰 **Kazananlara Ödeme**\n\nKazanan sayısı: {}\nToplam ödül: ${}\n\n⚠️ Tüm kazananlara ödeme yapmak istediğinize emin misiniz?",
+            'pay_winners_success': "✅ **Kazananlara Ödeme Yapıldı!**\n\nKazanan sayısı: {}\nToplam ödül: ${}\n\n📢 Tüm kazananlar bilgilendirildi.",
+            
+            'subscribed_users_list': "👥 **Abone Kullanıcılar**\n\nToplam: {}\n\n{}",
+            'no_subscribed_users': "❌ Abone kullanıcı bulunamadı.",
         }
     }
     
@@ -372,6 +447,7 @@ class DatabaseManager:
                 total_participations INTEGER DEFAULT 0,
                 wins_count INTEGER DEFAULT 0,
                 last_win_date TEXT,
+                country TEXT DEFAULT 'Unknown',
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
@@ -408,13 +484,14 @@ class DatabaseManager:
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS lotteries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                winners_count INTEGER,
+                lottery_date TEXT,
                 prize_per_winner REAL,
+                winners_count INTEGER,
                 total_prize REAL,
                 status TEXT DEFAULT 'pending',
-                started_at TEXT,
-                ended_at TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                winners_list TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                ended_at TEXT
             )
         ''')
         
@@ -451,6 +528,16 @@ class DatabaseManager:
             )
         ''')
         
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS poll_responses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                poll_question TEXT,
+                answer TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_referral ON users(referral_code)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_subscription ON users(has_subscription, subscription_end)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id)')
@@ -462,6 +549,9 @@ class DatabaseManager:
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_created ON users(created_at)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_subscription_end ON users(subscription_end)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_downloads_user ON downloads(user_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_poll_user ON poll_responses(user_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_lotteries_date ON lotteries(lottery_date)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_lotteries_status ON lotteries(status)')
         
         conn.commit()
         
@@ -769,7 +859,7 @@ class PaymentVerifier:
 payment_verifier = PaymentVerifier()
 
 # ============================================================
-# سیستم قرعه‌کشی با الگوریتم هوش مصنوعی
+# سیستم قرعه‌کشی با الگوریتم هوش مصنوعی پیشرفته
 # ============================================================
 class LotterySystem:
     def __init__(self):
@@ -778,7 +868,7 @@ class LotterySystem:
         self.lock = threading.RLock()
         self.executor = ThreadPoolExecutor(max_workers=10)
         
-    def start_lottery(self, winners_count, prize_per_winner):
+    def start_lottery(self, lottery_date, prize_per_winner, winners_count):
         with self.lock:
             if self.is_running:
                 return False, "Lottery is already running"
@@ -796,7 +886,7 @@ class LotterySystem:
             if not winners or len(winners) < winners_count:
                 return False, "Error selecting winners"
                 
-            lottery_id = self._save_lottery(winners_count, prize_per_winner, winners)
+            lottery_id = self._save_lottery(lottery_date, prize_per_winner, winners_count, winners)
             
             if not lottery_id:
                 return False, "Error saving lottery"
@@ -808,6 +898,7 @@ class LotterySystem:
                 
             self.current_lottery = {
                 'id': lottery_id,
+                'date': lottery_date,
                 'winners': winners,
                 'prize_per_winner': prize_per_winner,
                 'winners_count': winners_count,
@@ -818,30 +909,35 @@ class LotterySystem:
             
             return True, {
                 'lottery_id': lottery_id,
+                'date': lottery_date,
                 'winners': winners,
-                'prize_per_winner': prize_per_winner
+                'prize_per_winner': prize_per_winner,
+                'winners_count': winners_count
             }
             
     def _get_eligible_users(self):
         cursor = db.execute_global(
-            """SELECT user_id FROM users 
+            """SELECT user_id, wallet_address, first_name, username, country 
+               FROM users 
                WHERE has_subscription = 1 
                AND subscription_end >= date('now')"""
         )
-        return [row['user_id'] for row in cursor]
+        return cursor
         
     def _ai_smart_select(self, eligible_users, winners_count):
         if not eligible_users:
             return []
             
         user_scores = []
-        for user_id in eligible_users:
+        for user in eligible_users:
+            user_id = user['user_id']
             score = self._calculate_ai_score(user_id)
             if score > 0:
-                user_scores.append((user_id, score))
+                user_scores.append((user_id, score, user))
                 
         if not user_scores:
-            return random.sample(eligible_users, min(winners_count, len(eligible_users)))
+            selected = random.sample([u['user_id'] for u in eligible_users], min(winners_count, len(eligible_users)))
+            return selected
             
         user_scores.sort(key=lambda x: x[1], reverse=True)
         
@@ -852,7 +948,7 @@ class LotterySystem:
             if not temp_users:
                 break
                 
-            tournament_size = min(3, len(temp_users))
+            tournament_size = min(5, len(temp_users))
             tournament = random.sample(temp_users, tournament_size)
             winner = max(tournament, key=lambda x: x[1])
             
@@ -864,7 +960,8 @@ class LotterySystem:
     def _calculate_ai_score(self, user_id):
         try:
             cursor = db.execute(user_id,
-                """SELECT total_participations, wins_count, last_win_date, created_at 
+                """SELECT total_participations, wins_count, last_win_date, created_at, 
+                          referral_rewards, has_subscription 
                    FROM users WHERE user_id = ?""",
                 (user_id,)
             )
@@ -876,21 +973,21 @@ class LotterySystem:
             score = 50
             
             if user_data['total_participations'] > 0:
-                score += min(user_data['total_participations'] * 2, 30)
+                score += min(user_data['total_participations'] * 3, 30)
                 
             if user_data['wins_count'] > 0:
-                score -= user_data['wins_count'] * 15
+                score -= user_data['wins_count'] * 20
                 
             if user_data['last_win_date']:
                 try:
                     last_win = datetime.strptime(user_data['last_win_date'], '%Y-%m-%d')
                     days_since_win = (datetime.now() - last_win).days
-                    if days_since_win < 3:
-                        score *= 0.2
-                    elif days_since_win < 7:
-                        score *= 0.5
+                    if days_since_win < 7:
+                        score *= 0.1
                     elif days_since_win < 14:
-                        score *= 0.7
+                        score *= 0.3
+                    elif days_since_win < 30:
+                        score *= 0.6
                 except:
                     pass
                     
@@ -898,25 +995,34 @@ class LotterySystem:
                 try:
                     created = datetime.strptime(user_data['created_at'], '%Y-%m-%d %H:%M:%S')
                     days_old = (datetime.now() - created).days
-                    if days_old > 30:
-                        score += min(days_old / 10, 20)
+                    if days_old > 90:
+                        score += min(days_old / 20, 25)
+                    elif days_old > 30:
+                        score += min(days_old / 30, 10)
                 except:
                     pass
                     
-            return max(1, int(score))
+            if user_data['referral_rewards'] > 0:
+                score += min(user_data['referral_rewards'] * 2, 15)
+                
+            if user_data['has_subscription'] == 1:
+                score += 10
+                
+            return max(1, min(100, int(score)))
             
         except Exception as e:
             logger.error(f"Error calculating AI score for {user_id}: {e}")
             return 1
             
-    def _save_lottery(self, winners_count, prize_per_winner, winners):
+    def _save_lottery(self, lottery_date, prize_per_winner, winners_count, winners):
         try:
             total_prize = winners_count * prize_per_winner
+            winners_list = ",".join([str(w) for w in winners])
             cursor = db.execute(0,
                 """INSERT INTO lotteries 
-                   (winners_count, prize_per_winner, total_prize, status, started_at) 
-                   VALUES (?, ?, ?, 'running', CURRENT_TIMESTAMP)""",
-                (winners_count, prize_per_winner, total_prize)
+                   (lottery_date, prize_per_winner, winners_count, total_prize, status, winners_list, created_at) 
+                   VALUES (?, ?, ?, ?, 'completed', ?, CURRENT_TIMESTAMP)""",
+                (lottery_date, prize_per_winner, winners_count, total_prize, winners_list)
             )
             return cursor.lastrowid
         except Exception as e:
@@ -927,11 +1033,12 @@ class LotterySystem:
         try:
             for user_id in winners:
                 cursor = db.execute(user_id,
-                    "SELECT wallet_address FROM users WHERE user_id = ?",
+                    "SELECT wallet_address, first_name, country FROM users WHERE user_id = ?",
                     (user_id,)
                 )
                 user_data = cursor.fetchone()
                 wallet_address = user_data['wallet_address'] if user_data else None
+                country = user_data['country'] if user_data else 'Unknown'
                 
                 db.execute(user_id,
                     """INSERT INTO winners 
@@ -956,6 +1063,13 @@ class LotterySystem:
             )
         except Exception as e:
             logger.error(f"Error updating winner stats for {user_id}: {e}")
+            
+    def get_lottery_winners(self, lottery_id):
+        cursor = db.execute_global(
+            """SELECT * FROM winners WHERE lottery_id = ? AND paid_status = 0""",
+            (lottery_id,)
+        )
+        return cursor
 
 lottery_system = LotterySystem()
 
@@ -981,7 +1095,7 @@ class UserManager:
                            VALUES (?, ?, ?, ?, ?, ?, 'en')""",
                         (user_id, username, first_name, last_name, referral_code, referred_by)
                     )
-                    UserManager._add_referral_reward(referred_by, user_id, first_name or username or str(user_id))
+                    UserManager._add_referral_rewards(referred_by, user_id, first_name or username or str(user_id))
                 else:
                     db.execute(user_id,
                         """INSERT INTO users 
@@ -996,9 +1110,10 @@ class UserManager:
             return False
             
     @staticmethod
-    def _add_referral_reward(referrer_id, new_user_id, new_user_name):
+    def _add_referral_rewards(referrer_id, new_user_id, new_user_name):
         try:
             reward_amount = 5.0
+            
             db.execute(referrer_id,
                 "UPDATE users SET referral_rewards = referral_rewards + ? WHERE user_id = ?",
                 (reward_amount, referrer_id)
@@ -1007,11 +1122,24 @@ class UserManager:
                 """INSERT INTO transactions 
                    (user_id, from_address, to_address, amount, tx_id, status, verified_at) 
                    VALUES (?, 'referral', 'reward', ?, ?, 'verified', CURRENT_TIMESTAMP)""",
-                (referrer_id, reward_amount, f"REFERRAL_{new_user_id}_{int(time.time())}")
+                (referrer_id, reward_amount, f"REFERRAL_REWARD_{new_user_id}_{int(time.time())}")
             )
-            logger.info(f"Referral reward added: {reward_amount} for user {referrer_id} from {new_user_id}")
+            
+            db.execute(new_user_id,
+                "UPDATE users SET referral_rewards = referral_rewards + ? WHERE user_id = ?",
+                (reward_amount, new_user_id)
+            )
+            db.execute(new_user_id,
+                """INSERT INTO transactions 
+                   (user_id, from_address, to_address, amount, tx_id, status, verified_at) 
+                   VALUES (?, 'referral', 'discount', ?, ?, 'verified', CURRENT_TIMESTAMP)""",
+                (new_user_id, reward_amount, f"REFERRAL_DISCOUNT_{referrer_id}_{int(time.time())}")
+            )
+            
+            logger.info(f"Referral rewards added: {reward_amount} for user {referrer_id} and {new_user_id}")
+            
         except Exception as e:
-            logger.error(f"Error adding referral reward: {e}")
+            logger.error(f"Error adding referral rewards: {e}")
             
     @staticmethod
     def _generate_referral_code(user_id):
@@ -1084,10 +1212,24 @@ class UserManager:
     @staticmethod
     def get_all_users():
         try:
-            results = db.execute_global("SELECT user_id, username, first_name, referral_rewards FROM users")
+            results = db.execute_global("SELECT user_id, username, first_name, referral_rewards, has_subscription FROM users")
             return results
         except Exception as e:
             logger.error(f"Error getting all users: {e}")
+            return []
+            
+    @staticmethod
+    def get_subscribed_users():
+        try:
+            results = db.execute_global(
+                """SELECT user_id, username, first_name, wallet_address, subscription_end, country 
+                   FROM users 
+                   WHERE has_subscription = 1 
+                   AND subscription_end >= date('now')"""
+            )
+            return results
+        except Exception as e:
+            logger.error(f"Error getting subscribed users: {e}")
             return []
 
 user_manager = UserManager()
@@ -1147,12 +1289,16 @@ class UTYOBot:
         app.add_handler(CallbackQueryHandler(self.admin_stats_callback, pattern="^admin_stats$"))
         app.add_handler(CallbackQueryHandler(self.admin_user_list_callback, pattern="^admin_user_list$"))
         app.add_handler(CallbackQueryHandler(self.admin_reset_user_callback, pattern="^admin_reset_user$"))
+        app.add_handler(CallbackQueryHandler(self.admin_subscribed_users_callback, pattern="^admin_subscribed_users$"))
+        
+        app.add_handler(CallbackQueryHandler(self.poll_response_callback, pattern="^poll_yes$"))
+        app.add_handler(CallbackQueryHandler(self.poll_response_callback, pattern="^poll_no$"))
         
         app.add_handler(CallbackQueryHandler(self.admin_verify_approve_callback, pattern="^admin_verify_approve_"))
         app.add_handler(CallbackQueryHandler(self.admin_verify_reject_callback, pattern="^admin_verify_reject_"))
         
         app.add_handler(CallbackQueryHandler(self.start_lottery_confirm_callback, pattern="^start_lottery_confirm$"))
-        app.add_handler(CallbackQueryHandler(self.start_lottery_final_callback, pattern="^start_lottery_final$"))
+        app.add_handler(CallbackQueryHandler(self.pay_winners_confirm_callback, pattern="^pay_winners_confirm$"))
         
         app.add_handler(CallbackQueryHandler(self.withdraw_prize_callback, pattern="^withdraw_prize$"))
         app.add_handler(CallbackQueryHandler(self.confirm_withdraw_callback, pattern="^confirm_withdraw$"))
@@ -1165,7 +1311,7 @@ class UTYOBot:
         app.add_error_handler(self.error_handler)
 
     # ============================================================
-    # توابع کمکی
+    # توابع کمکی - بهینه برای سرعت
     # ============================================================
     
     def _get_user_language(self, user_id):
@@ -1296,13 +1442,13 @@ class UTYOBot:
         cursor = db.execute(0, "SELECT COUNT(*) as total_winners FROM winners")
         total_winners = cursor.fetchone()['total_winners']
         
-        cursor = db.execute(0, "SELECT started_at FROM lotteries ORDER BY started_at DESC LIMIT 1")
+        cursor = db.execute(0, "SELECT created_at FROM lotteries ORDER BY created_at DESC LIMIT 1")
         last = cursor.fetchone()
         
         return {
             'total': total,
             'total_winners': total_winners,
-            'last': last['started_at'] if last else None
+            'last': last['created_at'] if last else None
         }
     
     async def _get_winner_amount(self, user_id):
@@ -1314,7 +1460,7 @@ class UTYOBot:
         return result['prize_amount'] if result else 0
 
     # ============================================================
-    # دستورات عمومی
+    # دستورات عمومی - سریع
     # ============================================================
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1323,14 +1469,15 @@ class UTYOBot:
         referred_by = None
         if context.args and context.args[0].startswith('ref_'):
             ref_code = context.args[0].replace('ref_', '')
-            cursor = db.execute(0,
+            cursor = db.execute_global(
                 "SELECT user_id FROM users WHERE referral_code = ?",
                 (ref_code,)
             )
-            ref_user = cursor.fetchone()
-            if ref_user and ref_user['user_id'] != user.id:
-                referred_by = ref_user['user_id']
-                logger.info(f"User {user.id} referred by {referred_by}")
+            if cursor:
+                for row in cursor:
+                    if row['user_id'] != user.id:
+                        referred_by = row['user_id']
+                        break
         
         user_manager.register_user(
             user.id,
@@ -1349,15 +1496,21 @@ class UTYOBot:
                     chat_id=referred_by,
                     text=LanguageManager.get_text(referrer_lang, 'referral_joined',
                         user.first_name or user.username or str(user.id),
-                        str(user.id),
-                        5.0
+                        str(user.id)
+                    ),
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                await update.message.reply_text(
+                    LanguageManager.get_text(lang, 'referral_discount',
+                        user.first_name or user.username or str(user.id),
+                        str(referred_by)
                     ),
                     parse_mode=ParseMode.MARKDOWN
                 )
             except Exception as e:
                 logger.error(f"Error sending referral notification: {e}")
         
-        # منوی اصلی
+        # منوی سریع
         keyboard = [
             [InlineKeyboardButton(
                 LanguageManager.get_text(lang, 'lottery'),
@@ -1424,7 +1577,7 @@ class UTYOBot:
         await self._show_language_selector(update, user_id)
 
     # ============================================================
-    # کالبک‌های منوی اصلی
+    # کالبک‌های منوی اصلی - سریع
     # ============================================================
     
     async def main_menu_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1527,14 +1680,12 @@ class UTYOBot:
     async def referral_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
-        
         user_id = query.from_user.id
         await self._show_referral(update, user_id)
     
     async def guide_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
-        
         user_id = query.from_user.id
         lang = self._get_user_language(user_id)
         
@@ -1553,14 +1704,12 @@ class UTYOBot:
     async def language_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
-        
         user_id = query.from_user.id
         await self._show_language_selector(update, user_id)
     
     async def set_language_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
-        
         user_id = query.from_user.id
         lang_code = query.data.replace('set_lang_', '')
         
@@ -1579,7 +1728,52 @@ class UTYOBot:
             )
 
     # ============================================================
-    # کالبک‌های دانلودر و فاکتور ساز
+    # کالبک‌های نظرسنجی
+    # ============================================================
+    
+    async def poll_response_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        lang = self._get_user_language(user_id)
+        
+        answer = query.data
+        poll_question = context.user_data.get('poll_question', 'Unknown question')
+        
+        if answer == 'poll_yes':
+            display_answer = LanguageManager.get_text(lang, 'poll_yes')
+        else:
+            display_answer = LanguageManager.get_text(lang, 'poll_no')
+        
+        db.execute(user_id,
+            "INSERT INTO poll_responses (user_id, poll_question, answer) VALUES (?, ?, ?)",
+            (user_id, poll_question, display_answer)
+        )
+        
+        await query.edit_message_text(
+            LanguageManager.get_text(lang, 'poll_thanks', display_answer),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        
+        user = user_manager.get_user(user_id)
+        user_name = user['first_name'] or user['username'] or str(user_id)
+        
+        for admin_id in ADMIN_IDS:
+            try:
+                admin_lang = self._get_user_language(admin_id)
+                await self.application.bot.send_message(
+                    chat_id=admin_id,
+                    text=LanguageManager.get_text(admin_lang, 'poll_result_admin',
+                        user_name, poll_question, display_answer, datetime.now().strftime('%Y-%m-%d %H:%M')
+                    ),
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            except Exception as e:
+                logger.error(f"Error sending poll result to admin {admin_id}: {e}")
+
+    # ============================================================
+    # کالبک‌های دانلودر و فاکتور ساز - با Web App
     # ============================================================
     
     async def instagram_download_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1610,7 +1804,7 @@ class UTYOBot:
         user_id = query.from_user.id
         lang = self._get_user_language(user_id)
         
-        # دکمه فاکتور ساز با Web App و دکمه بستن
+        # دکمه Web App با قابلیت ذخیره در گالری
         keyboard = [
             [InlineKeyboardButton(
                 LanguageManager.get_text(lang, 'open_invoice_btn'),
@@ -1650,10 +1844,12 @@ class UTYOBot:
                     parse_mode=ParseMode.MARKDOWN
                 )
                 
+                # ارسال فایل با قابلیت ذخیره در گالری
                 with open(file_path, 'rb') as f:
                     await update.message.reply_video(
                         video=f,
-                        caption=LanguageManager.get_text(lang, 'download_success')
+                        caption=LanguageManager.get_text(lang, 'download_success'),
+                        supports_streaming=True
                     )
                 
                 try:
@@ -2100,6 +2296,7 @@ class UTYOBot:
         
         pending_count = len(self._get_pending_transactions())
         unpaid_winners = len(self._get_unpaid_winners())
+        subscribed_count = len(user_manager.get_subscribed_users())
         
         keyboard = [
             [InlineKeyboardButton("📢 ارسال پیام همگانی", callback_data="admin_broadcast")],
@@ -2107,6 +2304,7 @@ class UTYOBot:
             [InlineKeyboardButton(f"✅ تایید دستی ({pending_count})", callback_data="admin_manual_verify")],
             [InlineKeyboardButton("📊 ارسال نظرسنجی", callback_data="admin_poll")],
             [InlineKeyboardButton(f"💰 واریز به برندگان ({unpaid_winners})", callback_data="admin_pay_winners")],
+            [InlineKeyboardButton(f"👥 کاربران اشتراکی ({subscribed_count})", callback_data="admin_subscribed_users")],
             [InlineKeyboardButton("👥 لیست کاربران", callback_data="admin_user_list")],
             [InlineKeyboardButton("🔑 اضافه کردن API", callback_data="admin_add_api")],
             [InlineKeyboardButton("📈 آمار و اطلاعات", callback_data="admin_stats")],
@@ -2132,6 +2330,50 @@ class UTYOBot:
             parse_mode=ParseMode.MARKDOWN
         )
     
+    async def admin_subscribed_users_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        if user_id not in ADMIN_IDS:
+            return
+        
+        subscribed_users = user_manager.get_subscribed_users()
+        
+        if not subscribed_users:
+            text = LanguageManager.get_text('fa', 'no_subscribed_users')
+        else:
+            users_text = ""
+            for user in subscribed_users[:50]:
+                users_text += f"👤 {user['user_id']} - {user['first_name'] or user['username'] or 'Unknown'}\n"
+                users_text += f"📤 {user['wallet_address'] or 'Not set'}\n"
+                users_text += f"📅 {user['subscription_end']}\n"
+                users_text += f"🌍 {user['country'] or 'Unknown'}\n\n"
+            
+            if len(subscribed_users) > 50:
+                users_text += f"... و {len(subscribed_users) - 50} نفر دیگر"
+            
+            text = LanguageManager.get_text('fa', 'subscribed_users_list', len(subscribed_users), users_text)
+        
+        keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        if len(text) > 4000:
+            parts = [text[i:i+4000] for i in range(0, len(text), 4000)]
+            for part in parts:
+                await query.message.reply_text(
+                    part,
+                    reply_markup=reply_markup if part == parts[-1] else None,
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            await query.delete_message()
+        else:
+            await query.edit_message_text(
+                text,
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN
+            )
+    
     async def admin_user_list_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -2148,7 +2390,8 @@ class UTYOBot:
             text = "👥 **لیست کامل کاربران:**\n\n"
             for i, user in enumerate(users, 1):
                 text += f"{i}. {user['user_id']} - {user['first_name'] or user['username'] or 'Unknown'}\n"
-                text += f"   💰 پاداش رفرال: ${user['referral_rewards']:.2f}\n\n"
+                text += f"   💰 پاداش رفرال: ${user['referral_rewards']:.2f}\n"
+                text += f"   ✅ اشتراک: {'فعال' if user['has_subscription'] else 'غیرفعال'}\n\n"
                 if i >= 50:
                     text += f"... و {len(users) - 50} نفر دیگر"
                     break
@@ -2243,22 +2486,13 @@ class UTYOBot:
         context.user_data['admin_action'] = 'start_lottery'
         context.user_data['lottery_step'] = 1
         
-        eligible = lottery_system._get_eligible_users()
-        
         keyboard = [
-            [InlineKeyboardButton("✅ تایید شروع", callback_data="start_lottery_confirm")],
             [InlineKeyboardButton("❌ انصراف", callback_data="admin_panel")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
-            f"🎰 **شروع قرعه‌کشی جدید**\n\n"
-            f"👥 کاربران واجد شرایط: {len(eligible)} نفر\n\n"
-            f"آیا مطمئن هستید که می‌خواهید قرعه‌کشی را شروع کنید؟\n\n"
-            f"⚠️ **توجه:**\n"
-            f"• تمام کاربران دارای اشتراک شرکت می‌کنند\n"
-            f"• برندگان قبلی شانس کمتری دارند\n"
-            f"• قرعه‌کشی به صورت عادلانه انجام می‌شود",
+            LanguageManager.get_text('fa', 'enter_lottery_date'),
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
@@ -2348,21 +2582,93 @@ class UTYOBot:
             await query.edit_message_text("✅ همه برندگان پرداخت شده‌اند!", reply_markup=reply_markup)
             return
         
-        text = "💰 **واریز به برندگان**\n\n"
-        for winner in winners:
-            text += f"👤 کاربر: {winner['user_id']}\n"
-            text += f"💰 مبلغ: ${winner['prize_amount']}\n"
-            text += f"📤 آدرس: {winner['wallet_address'] or 'نامشخص'}\n"
-            text += f"🏆 قرعه‌کشی: #{winner['lottery_id']}\n\n"
+        total_prize = sum(w['prize_amount'] for w in winners)
         
-        text += f"📊 تعداد کل: {len(winners)}\n\n"
-        text += "برای پرداخت، از پنل مدیریت استفاده کنید."
+        keyboard = [
+            [InlineKeyboardButton("✅ تایید پرداخت", callback_data="pay_winners_confirm")],
+            [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            LanguageManager.get_text('fa', 'pay_winners_confirm', len(winners), total_prize),
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+    
+    async def pay_winners_confirm_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        if user_id not in ADMIN_IDS:
+            return
+        
+        winners = self._get_unpaid_winners()
+        
+        if not winners:
+            await query.edit_message_text("❌ برنده‌ای برای پرداخت وجود ندارد!")
+            return
+        
+        for winner in winners:
+            db.execute(winner['user_id'],
+                "UPDATE winners SET paid_status = 1, paid_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (winner['id'],)
+            )
+            
+            user_lang = self._get_user_language(winner['user_id'])
+            user = user_manager.get_user(winner['user_id'])
+            user_name = user['first_name'] or user['username'] or str(winner['user_id'])
+            
+            keyboard = [[InlineKeyboardButton(
+                LanguageManager.get_text(user_lang, 'main_menu_btn'),
+                callback_data="main_menu"
+            )]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            try:
+                await self.application.bot.send_message(
+                    chat_id=winner['user_id'],
+                    text=LanguageManager.get_text(user_lang, 'lottery_winner_announcement',
+                        user_name,
+                        winner['prize_amount'],
+                        winner['wallet_address'] or 'Unknown',
+                        user['country'] if user else 'Unknown'
+                    ),
+                    reply_markup=reply_markup,
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            except Exception as e:
+                logger.error(f"Error sending to winner {winner['user_id']}: {e}")
+        
+        users = db.execute_global("SELECT user_id, language FROM users")
+        
+        winners_list = ""
+        for winner in winners:
+            user = user_manager.get_user(winner['user_id'])
+            user_name = user['first_name'] or user['username'] or str(winner['user_id'])
+            winners_list += f"• {user_name} - ${winner['prize_amount']}\n"
+        
+        for user in users:
+            try:
+                user_lang = user['language'] if user['language'] else 'en'
+                await self.application.bot.send_message(
+                    chat_id=user['user_id'],
+                    text=LanguageManager.get_text(user_lang, 'lottery_winner_admin',
+                        datetime.now().strftime('%Y-%m-%d'),
+                        sum(w['prize_amount'] for w in winners),
+                        winners_list
+                    ),
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            except Exception as e:
+                logger.error(f"Error sending to user {user['user_id']}: {e}")
         
         keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
-            text,
+            LanguageManager.get_text('fa', 'pay_winners_success', len(winners), sum(w['prize_amount'] for w in winners)),
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
@@ -2448,7 +2754,7 @@ class UTYOBot:
         )
 
     # ============================================================
-    # کالبک‌های مراحل قرعه‌کشی
+    # کالبک‌های شروع قرعه‌کشی (تایید نهایی)
     # ============================================================
     
     async def start_lottery_confirm_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2459,72 +2765,68 @@ class UTYOBot:
         if user_id not in ADMIN_IDS:
             return
         
-        context.user_data['lottery_step'] = 2
+        lottery_date = context.user_data.get('lottery_date')
+        prize_per_winner = context.user_data.get('lottery_prize')
+        winners_count = context.user_data.get('lottery_winners')
         
-        keyboard = [[InlineKeyboardButton("🔙 انصراف", callback_data="admin_panel")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            "🎯 **تعداد برندگان**\n\n"
-            "لطفاً تعداد برندگان این قرعه‌کشی را وارد کنید:\n"
-            "(حداکثر ۱۰۰ نفر)\n\n"
-            "مثال: `5`",
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    async def start_lottery_final_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        if user_id not in ADMIN_IDS:
+        if not all([lottery_date, prize_per_winner, winners_count]):
+            await query.edit_message_text("❌ اطلاعات قرعه‌کشی کامل نیست! لطفاً دوباره تلاش کنید.")
             return
         
-        winners_count = context.user_data.get('lottery_winners', 1)
-        prize_per_winner = context.user_data.get('lottery_prize', 100)
-        
-        success, result = lottery_system.start_lottery(winners_count, prize_per_winner)
+        success, result = lottery_system.start_lottery(lottery_date, prize_per_winner, winners_count)
         
         if success:
-            for winner_id in result['winners']:
-                winner_lang = self._get_user_language(winner_id)
-                keyboard = [
-                    [InlineKeyboardButton(
-                        LanguageManager.get_text(winner_lang, 'withdraw_prize'),
-                        callback_data="withdraw_prize"
-                    )],
-                    [InlineKeyboardButton(
-                        LanguageManager.get_text(winner_lang, 'next_lottery'),
-                        callback_data="main_menu"
-                    )]
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                
+            users = db.execute_global("SELECT user_id, language FROM users")
+            
+            for user in users:
                 try:
+                    user_lang = user['language'] if user['language'] else 'en'
+                    
+                    keyboard = [
+                        [InlineKeyboardButton(
+                            LanguageManager.get_text(user_lang, 'lottery'),
+                            callback_data="join_lottery"
+                        )],
+                        [InlineKeyboardButton(
+                            LanguageManager.get_text(user_lang, 'subscribe'),
+                            callback_data="subscribe"
+                        )]
+                    ]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                    
                     await self.application.bot.send_message(
-                        chat_id=winner_id,
-                        text=f"🎉 **تبریک! شما برنده شدید!**\n💰 جایزه: ${prize_per_winner}\n🏆 قرعه‌کشی #{result['lottery_id']}",
+                        chat_id=user['user_id'],
+                        text=LanguageManager.get_text(user_lang, 'lottery_announcement',
+                            lottery_date,
+                            prize_per_winner,
+                            winners_count,
+                            DESTINATION_WALLET
+                        ),
                         reply_markup=reply_markup,
                         parse_mode=ParseMode.MARKDOWN
                     )
                 except Exception as e:
-                    logger.error(f"Error sending to {winner_id}: {e}")
+                    logger.error(f"Error sending to user {user['user_id']}: {e}")
             
-            winners_list = "\n".join([f"• کاربر {uid}" for uid in result['winners']])
+            winners_list = ""
+            for winner_id in result['winners']:
+                user = user_manager.get_user(winner_id)
+                user_name = user['first_name'] or user['username'] or str(winner_id)
+                wallet = user['wallet_address'] if user else 'No wallet'
+                winners_list += f"• {user_name} - {wallet}\n"
             
-            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]]
+            keyboard = [
+                [InlineKeyboardButton("💰 پرداخت به برندگان", callback_data="admin_pay_winners")],
+                [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]
+            ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
-                f"✅ **قرعه‌کشی با موفقیت انجام شد!** 🎉\n\n"
-                f"📊 **جزئیات:**\n"
-                f"• شماره قرعه‌کشی: {result['lottery_id']}\n"
-                f"• تعداد برندگان: {winners_count}\n"
-                f"• جایزه هر نفر: ${prize_per_winner:,}\n"
-                f"• کل جایزه: ${winners_count * prize_per_winner:,}\n\n"
-                f"👥 **برندگان:**\n{winners_list}\n\n"
-                f"✅ پیام‌های تبریک به برندگان ارسال شد.",
+                LanguageManager.get_text('fa', 'lottery_winner_admin',
+                    lottery_date,
+                    winners_count * prize_per_winner,
+                    winners_list
+                ),
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN
             )
@@ -2536,8 +2838,7 @@ class UTYOBot:
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
-                f"❌ **خطا در اجرای قرعه‌کشی**\n\n"
-                f"🔹 دلیل: {result}",
+                f"❌ **خطا در اجرای قرعه‌کشی**\n\n🔹 دلیل: {result}",
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN
             )
@@ -2693,8 +2994,8 @@ class UTYOBot:
         
         lang = self._get_user_language(user_id)
         referral_code = user['referral_code']
-        bot_username = "UTYOB_Bot"
-        referral_link = f"https://t.me/{bot_username}?start=ref_{referral_code}"
+        bot = await self.application.bot.get_me()
+        referral_link = f"https://t.me/{bot.username}?start=ref_{referral_code}"
         
         referred_count = len(db.execute_global(
             "SELECT user_id FROM users WHERE referred_by = ?",
@@ -2824,6 +3125,7 @@ class UTYOBot:
             return
         
         elif admin_action == 'poll':
+            context.user_data['poll_question'] = text
             await self._send_poll(update, text, context)
             return
         
@@ -3021,55 +3323,68 @@ class UTYOBot:
         lang = self._get_user_language(user_id)
         step = context.user_data.get('lottery_step', 1)
         
-        if step == 2:
+        if step == 1:
             try:
-                winners_count = int(text)
-                if 1 <= winners_count <= 100:
-                    context.user_data['lottery_winners'] = winners_count
-                    context.user_data['lottery_step'] = 3
-                    
-                    await update.message.reply_text(
-                        f"✅ تعداد برندگان: {winners_count}\n\n"
-                        f"💰 **مبلغ جایزه هر نفر**\n\n"
-                        f"لطفاً مبلغ جایزه برای هر برنده را وارد کنید:\n"
-                        f"(حداقل ۱۰ دلار)\n\n"
-                        f"مثال: `100`",
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-                else:
-                    await update.message.reply_text(
-                        "❌ تعداد نامعتبر!\nلطفاً عددی بین ۱ تا ۱۰۰ وارد کنید."
-                    )
-            except ValueError:
-                await update.message.reply_text("❌ لطفاً یک عدد معتبر وارد کنید!")
-        
-        elif step == 3:
+                lottery_date = text.strip()
+                context.user_data['lottery_date'] = lottery_date
+                context.user_data['lottery_step'] = 2
+                
+                keyboard = [[InlineKeyboardButton("🔙 انصراف", callback_data="admin_panel")]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await update.message.reply_text(
+                    LanguageManager.get_text('fa', 'enter_lottery_prize'),
+                    reply_markup=reply_markup,
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            except Exception as e:
+                await update.message.reply_text("❌ فرمت تاریخ نامعتبر! لطفاً دوباره وارد کنید.")
+                
+        elif step == 2:
             try:
                 prize = float(text)
-                if prize >= 10:
-                    context.user_data['lottery_prize'] = prize
-                    context.user_data['lottery_step'] = 4
-                    
-                    winners = context.user_data['lottery_winners']
-                    total_prize = winners * prize
-                    
-                    keyboard = [
-                        [InlineKeyboardButton("✅ تایید نهایی", callback_data="start_lottery_final")],
-                        [InlineKeyboardButton("❌ انصراف", callback_data="admin_panel")]
-                    ]
-                    reply_markup = InlineKeyboardMarkup(keyboard)
-                    
-                    await update.message.reply_text(
-                        f"✅ **اطلاعات قرعه‌کشی:**\n\n"
-                        f"• تعداد برندگان: {winners}\n"
-                        f"• جایزه هر نفر: ${prize:,}\n"
-                        f"• کل جایزه: ${total_prize:,}\n\n"
-                        f"⚠️ آیا مطمئن هستید که می‌خواهید قرعه‌کشی را شروع کنید؟",
-                        reply_markup=reply_markup,
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-                else:
+                if prize < 10:
                     await update.message.reply_text("❌ مبلغ جایزه باید حداقل ۱۰ دلار باشد!")
+                    return
+                    
+                context.user_data['lottery_prize'] = prize
+                context.user_data['lottery_step'] = 3
+                
+                keyboard = [[InlineKeyboardButton("🔙 انصراف", callback_data="admin_panel")]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await update.message.reply_text(
+                    LanguageManager.get_text('fa', 'enter_lottery_winners'),
+                    reply_markup=reply_markup,
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            except ValueError:
+                await update.message.reply_text("❌ لطفاً یک عدد معتبر وارد کنید!")
+                
+        elif step == 3:
+            try:
+                winners_count = int(text)
+                if winners_count < 1 or winners_count > 100:
+                    await update.message.reply_text("❌ تعداد برندگان باید بین ۱ تا ۱۰۰ باشد!")
+                    return
+                    
+                context.user_data['lottery_winners'] = winners_count
+                context.user_data['lottery_step'] = 4
+                
+                lottery_date = context.user_data.get('lottery_date')
+                prize = context.user_data.get('lottery_prize')
+                
+                keyboard = [
+                    [InlineKeyboardButton("✅ تایید و شروع", callback_data="start_lottery_confirm")],
+                    [InlineKeyboardButton("❌ انصراف", callback_data="admin_panel")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await update.message.reply_text(
+                    LanguageManager.get_text('fa', 'lottery_confirm', lottery_date, prize, winners_count),
+                    reply_markup=reply_markup,
+                    parse_mode=ParseMode.MARKDOWN
+                )
             except ValueError:
                 await update.message.reply_text("❌ لطفاً یک عدد معتبر وارد کنید!")
     
