@@ -1,5 +1,5 @@
 # ============================================================
-# ربات قرعه‌کشی هوشمند UTYOB - نسخه نهایی با قرعه‌کشی کامل
+# ربات قرعه‌کشی هوشمند UTYOB - نسخه نهایی کامل
 # ============================================================
 
 import asyncio
@@ -143,7 +143,6 @@ class LanguageManager:
             'invalid_url': "❌ Invalid URL!\n\nPlease send a valid Instagram link.",
             'processing': "🔄 Processing your request...",
 
-            # بخش قرعه‌کشی
             'lottery_announcement': "🎰 **Lottery Announcement**\n\n📅 Date: {}\n💰 Prize: ${}\n👥 Winners: {}\n\n📤 To participate, please send $100 to:\n`{}`\n\n⚠️ **Important:**\n• Use TRC20 network only\n• Enter your source wallet address\n• Make sure your subscription is active\n\n🎯 Good luck to everyone!",
             'lottery_winner_announcement': "🎉 **Lottery Winner!**\n\n🏆 Congratulations!\n👤 User: {}\n💰 Prize: ${}\n📤 Wallet: {}\n🌍 Country: {}\n\n✅ Prize has been sent to your wallet!\n🙏 Enjoy your winnings!",
             'lottery_winner_admin': "🏆 **Lottery Winners**\n\n📅 Date: {}\n💰 Total Prize: ${}\n👥 Winners:\n{}\n\n✅ All winners have been paid.",
@@ -249,7 +248,6 @@ class LanguageManager:
             'invalid_url': "❌ لینک نامعتبر!\n\nلطفاً یک لینک معتبر از اینستاگرام ارسال کنید.",
             'processing': "🔄 در حال پردازش درخواست شما...",
 
-            # بخش قرعه‌کشی
             'lottery_announcement': "🎰 **اطلاعیه قرعه‌کشی**\n\n📅 تاریخ: {}\n💰 جایزه: ${}\n👥 تعداد برندگان: {}\n\n📤 برای شرکت، لطفاً مبلغ ۱۰۰ دلار به آدرس زیر واریز کنید:\n`{}`\n\n⚠️ **نکات مهم:**\n• فقط از شبکه TRC20 استفاده کنید\n• آدرس کیف پول مبدا خود را وارد کنید\n• اشتراک شما باید فعال باشد\n\n🎯 برای همه آرزوی موفقیت داریم!",
             'lottery_winner_announcement': "🎉 **برنده قرعه‌کشی!**\n\n🏆 تبریک!\n👤 کاربر: {}\n💰 جایزه: ${}\n📤 کیف پول: {}\n🌍 کشور: {}\n\n✅ جایزه به کیف پول شما واریز شد!\n🙏 از برداشت خود لذت ببرید!",
             'lottery_winner_admin': "🏆 **برندگان قرعه‌کشی**\n\n📅 تاریخ: {}\n💰 کل جایزه: ${}\n👥 برندگان:\n{}\n\n✅ تمام برندگان پرداخت شدند.",
@@ -355,7 +353,6 @@ class LanguageManager:
             'invalid_url': "❌ Geçersiz URL!\n\nLütfen geçerli bir Instagram linki gönderin.",
             'processing': "🔄 İsteğiniz işleniyor...",
 
-            # Piyango bölümü
             'lottery_announcement': "🎰 **Piyango Duyurusu**\n\n📅 Tarih: {}\n💰 Ödül: ${}\n👥 Kazananlar: {}\n\n📤 Katılmak için lütfen aşağıdaki adrese 100$ gönderin:\n`{}`\n\n⚠️ **Önemli:**\n• Sadece TRC20 ağını kullanın\n• Kaynak cüzdan adresinizi girin\n• Aboneliğiniz aktif olmalı\n\n🎯 Herkese iyi şanslar!",
             'lottery_winner_announcement': "🎉 **Piyango Kazananı!**\n\n🏆 Tebrikler!\n👤 Kullanıcı: {}\n💰 Ödül: ${}\n📤 Cüzdan: {}\n🌍 Ülke: {}\n\n✅ Ödül cüzdanınıza gönderildi!\n🙏 Kazancınızın tadını çıkarın!",
             'lottery_winner_admin': "🏆 **Piyango Kazananları**\n\n📅 Tarih: {}\n💰 Toplam Ödül: ${}\n👥 Kazananlar:\n{}\n\n✅ Tüm kazananlara ödeme yapıldı.",
@@ -884,7 +881,6 @@ class LotterySystem:
             if len(eligible_users) < winners_count:
                 return False, f"Eligible users ({len(eligible_users)}) less than winners ({winners_count})"
                 
-            # الگوریتم هوشمند پیشرفته
             winners = self._ai_smart_select(eligible_users, winners_count)
             
             if not winners or len(winners) < winners_count:
@@ -929,14 +925,9 @@ class LotterySystem:
         return cursor
         
     def _ai_smart_select(self, eligible_users, winners_count):
-        """
-        الگوریتم هوشمند پیشرفته برای انتخاب برندگان
-        با استفاده از روش‌های چندمعیاره و تورنمنت
-        """
         if not eligible_users:
             return []
             
-        # محاسبه امتیاز هر کاربر با الگوریتم چندمعیاره
         user_scores = []
         for user in eligible_users:
             user_id = user['user_id']
@@ -945,14 +936,11 @@ class LotterySystem:
                 user_scores.append((user_id, score, user))
                 
         if not user_scores:
-            # اگر همه امتیاز صفر بود، به صورت تصادفی انتخاب کن
             selected = random.sample([u['user_id'] for u in eligible_users], min(winners_count, len(eligible_users)))
             return selected
             
-        # مرتب‌سازی بر اساس امتیاز (بالاترین اولویت)
         user_scores.sort(key=lambda x: x[1], reverse=True)
         
-        # انتخاب با روش تورنمنت پیشرفته
         selected = []
         temp_users = user_scores.copy()
         
@@ -960,23 +948,16 @@ class LotterySystem:
             if not temp_users:
                 break
                 
-            # انتخاب ۵ کاربر برتر به صورت تصادفی (تورنمنت بزرگتر = انتخاب بهتر)
             tournament_size = min(5, len(temp_users))
             tournament = random.sample(temp_users, tournament_size)
-            
-            # انتخاب برنده با بالاترین امتیاز از تورنمنت
             winner = max(tournament, key=lambda x: x[1])
             
-            # حذف برنده انتخاب شده
             temp_users = [u for u in temp_users if u[0] != winner[0]]
             selected.append(winner[0])
             
         return selected
         
     def _calculate_ai_score(self, user_id):
-        """
-        محاسبه امتیاز هوشمند با الگوریتم AI پیشرفته
-        """
         try:
             cursor = db.execute(user_id,
                 """SELECT total_participations, wins_count, last_win_date, created_at, 
@@ -989,51 +970,44 @@ class LotterySystem:
             if not user_data:
                 return 1
                 
-            score = 50  # امتیاز پایه
+            score = 50
             
-            # افزایش امتیاز برای مشارکت بالا (تا ۳۰ امتیاز)
             if user_data['total_participations'] > 0:
                 score += min(user_data['total_participations'] * 3, 30)
                 
-            # کاهش شدید امتیاز برای برندگان قبلی (تا -۶۰ امتیاز)
             if user_data['wins_count'] > 0:
                 score -= user_data['wins_count'] * 20
                 
-            # کاهش برای برندگان اخیر (ضریب تناسب)
             if user_data['last_win_date']:
                 try:
                     last_win = datetime.strptime(user_data['last_win_date'], '%Y-%m-%d')
                     days_since_win = (datetime.now() - last_win).days
                     if days_since_win < 7:
-                        score *= 0.1  # کاهش ۹۰٪ برای برندگان یک هفته اخیر
+                        score *= 0.1
                     elif days_since_win < 14:
-                        score *= 0.3  # کاهش ۷۰٪ برای برندگان دو هفته اخیر
+                        score *= 0.3
                     elif days_since_win < 30:
-                        score *= 0.6  # کاهش ۴۰٪ برای برندگان یک ماه اخیر
+                        score *= 0.6
                 except:
                     pass
                     
-            # افزایش امتیاز برای کاربران قدیمی (وفاداری)
             if user_data['created_at']:
                 try:
                     created = datetime.strptime(user_data['created_at'], '%Y-%m-%d %H:%M:%S')
                     days_old = (datetime.now() - created).days
                     if days_old > 90:
-                        score += min(days_old / 20, 25)  # تا ۲۵ امتیاز برای وفاداری
+                        score += min(days_old / 20, 25)
                     elif days_old > 30:
                         score += min(days_old / 30, 10)
                 except:
                     pass
                     
-            # افزایش امتیاز برای کاربران با رفرال بالا (تاثیرگذاری)
             if user_data['referral_rewards'] > 0:
                 score += min(user_data['referral_rewards'] * 2, 15)
                 
-            # اشتراک فعال = +۱۰ امتیاز
             if user_data['has_subscription'] == 1:
                 score += 10
                 
-            # حداقل و حداکثر امتیاز
             return max(1, min(100, int(score)))
             
         except Exception as e:
@@ -1046,7 +1020,7 @@ class LotterySystem:
             winners_list = ",".join([str(w) for w in winners])
             cursor = db.execute(0,
                 """INSERT INTO lotteries 
-                   (lottery_date, prize_per_winner, winners_count, total_prize, status, winners_list, started_at) 
+                   (lottery_date, prize_per_winner, winners_count, total_prize, status, winners_list, created_at) 
                    VALUES (?, ?, ?, ?, 'completed', ?, CURRENT_TIMESTAMP)""",
                 (lottery_date, prize_per_winner, winners_count, total_prize, winners_list)
             )
@@ -1324,7 +1298,6 @@ class UTYOBot:
         app.add_handler(CallbackQueryHandler(self.admin_verify_reject_callback, pattern="^admin_verify_reject_"))
         
         app.add_handler(CallbackQueryHandler(self.start_lottery_confirm_callback, pattern="^start_lottery_confirm$"))
-        app.add_handler(CallbackQueryHandler(self.start_lottery_final_callback, pattern="^start_lottery_final$"))
         app.add_handler(CallbackQueryHandler(self.pay_winners_confirm_callback, pattern="^pay_winners_confirm$"))
         
         app.add_handler(CallbackQueryHandler(self.withdraw_prize_callback, pattern="^withdraw_prize$"))
@@ -1469,13 +1442,13 @@ class UTYOBot:
         cursor = db.execute(0, "SELECT COUNT(*) as total_winners FROM winners")
         total_winners = cursor.fetchone()['total_winners']
         
-        cursor = db.execute(0, "SELECT started_at FROM lotteries ORDER BY started_at DESC LIMIT 1")
+        cursor = db.execute(0, "SELECT created_at FROM lotteries ORDER BY created_at DESC LIMIT 1")
         last = cursor.fetchone()
         
         return {
             'total': total,
             'total_winners': total_winners,
-            'last': last['started_at'] if last else None
+            'last': last['created_at'] if last else None
         }
     
     async def _get_winner_amount(self, user_id):
@@ -2643,14 +2616,12 @@ class UTYOBot:
             await query.edit_message_text("❌ برنده‌ای برای پرداخت وجود ندارد!")
             return
         
-        # پرداخت به همه برندگان
         for winner in winners:
             db.execute(winner['user_id'],
                 "UPDATE winners SET paid_status = 1, paid_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (winner['id'],)
             )
             
-            # اعلان به برنده
             user_lang = self._get_user_language(winner['user_id'])
             user = user_manager.get_user(winner['user_id'])
             user_name = user['first_name'] or user['username'] or str(winner['user_id'])
@@ -2676,7 +2647,6 @@ class UTYOBot:
             except Exception as e:
                 logger.error(f"Error sending to winner {winner['user_id']}: {e}")
         
-        # اعلان عمومی به همه کاربران
         users = db.execute_global("SELECT user_id, language FROM users")
         
         winners_list = ""
@@ -2700,7 +2670,6 @@ class UTYOBot:
             except Exception as e:
                 logger.error(f"Error sending to user {user['user_id']}: {e}")
         
-        # اعلان به ادمین
         keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -2791,7 +2760,7 @@ class UTYOBot:
         )
 
     # ============================================================
-    # کالبک‌های مراحل قرعه‌کشی
+    # کالبک‌های شروع قرعه‌کشی (تایید نهایی)
     # ============================================================
     
     async def start_lottery_confirm_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2853,7 +2822,8 @@ class UTYOBot:
             for winner_id in result['winners']:
                 user = user_manager.get_user(winner_id)
                 user_name = user['first_name'] or user['username'] or str(winner_id)
-                winners_list += f"• {user_name} - {user['wallet_address'] or 'No wallet'}\n"
+                wallet = user['wallet_address'] if user else 'No wallet'
+                winners_list += f"• {user_name} - {wallet}\n"
             
             keyboard = [
                 [InlineKeyboardButton("💰 پرداخت به برندگان", callback_data="admin_pay_winners")],
@@ -3366,9 +3336,7 @@ class UTYOBot:
         if step == 1:
             # دریافت تاریخ قرعه‌کشی
             try:
-                # تبدیل تاریخ شمسی به میلادی اگر کاربر فارسی است
                 lottery_date = text.strip()
-                # ساده: قبول تاریخ به هر فرمت
                 context.user_data['lottery_date'] = lottery_date
                 context.user_data['lottery_step'] = 2
                 
