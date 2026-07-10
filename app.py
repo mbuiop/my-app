@@ -1,5 +1,5 @@
 # ============================================================
-# ربات قرعه‌کشی هوشمند UTYOB - نسخه نهایی کامل
+# ربات قرعه‌کشی هوشمند UTYOB - نسخه فوق‌سریع با فاکتور ساز پیشرفته
 # ============================================================
 
 import asyncio
@@ -27,7 +27,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 from telegram.constants import ParseMode
 
 # ============================================================
-# تنظیمات اولیه
+# تنظیمات اولیه - بهینه برای سرعت بالا
 # ============================================================
 logging.basicConfig(
     level=logging.INFO,
@@ -135,7 +135,7 @@ class LanguageManager:
             'poll_no': "No ❌",
 
             'instagram_downloader': "📸 **Instagram Downloader**\n\nSend me an Instagram post/reel URL and I'll download it for you!\n\n📤 Send the link:",
-            'invoice_maker_text': "🧾 **Invoice Maker**\n\nClick the button below to open the invoice maker tool:\n\n✨ Fast and simple!\n\n📌 After finishing, click **Close** to return.",
+            'invoice_maker_text': "🧾 **Invoice Maker**\n\nClick the button below to open the invoice maker tool:\n\n✨ Fast and simple!\n\n📌 After finishing, click **Close** to return.\n\n📥 Downloads are saved to your gallery.",
             'open_invoice_btn': "🧾 Open Invoice Maker",
             'downloading': "⏳ Downloading... Please wait.",
             'download_success': "✅ **Download completed!**\n\n📥 File ready for download.",
@@ -240,7 +240,7 @@ class LanguageManager:
             'poll_no': "خیر ❌",
 
             'instagram_downloader': "📸 **دانلودر اینستاگرام**\n\nلینک پست یا ریل اینستاگرام را ارسال کنید تا آن را دانلود کنم!\n\n📤 لینک را ارسال کنید:",
-            'invoice_maker_text': "🧾 **فاکتور ساز**\n\nبرای ساخت فاکتور، روی دکمه زیر کلیک کنید:\n\n✨ سریع و ساده!\n\n📌 پس از اتمام، روی **بستن** کلیک کنید تا برگردید.",
+            'invoice_maker_text': "🧾 **فاکتور ساز**\n\nبرای ساخت فاکتور، روی دکمه زیر کلیک کنید:\n\n✨ سریع و ساده!\n\n📌 پس از اتمام، روی **بستن** کلیک کنید تا برگردید.\n\n📥 دانلودها در گالری شما ذخیره می‌شوند.",
             'open_invoice_btn': "🧾 باز کردن فاکتور ساز",
             'downloading': "⏳ در حال دانلود... لطفاً صبر کنید.",
             'download_success': "✅ **دانلود کامل شد!**\n\n📥 فایل آماده دانلود است.",
@@ -345,7 +345,7 @@ class LanguageManager:
             'poll_no': "Hayır ❌",
 
             'instagram_downloader': "📸 **Instagram İndirici**\n\nBir Instagram gönderisi/reel URL'si gönderin, sizin için indireyim!\n\n📤 Linki gönder:",
-            'invoice_maker_text': "🧾 **Fatura Oluşturucu**\n\nFatura oluşturmak için aşağıdaki düğmeye tıklayın:\n\n✨ Hızlı ve kolay!\n\n📌 Bitirdikten sonra **Kapat**'a tıklayarak geri dönün.",
+            'invoice_maker_text': "🧾 **Fatura Oluşturucu**\n\nFatura oluşturmak için aşağıdaki düğmeye tıklayın:\n\n✨ Hızlı ve kolay!\n\n📌 Bitirdikten sonra **Kapat**'a tıklayarak geri dönün.\n\n📥 İndirmeler galerinize kaydedilir.",
             'open_invoice_btn': "🧾 Fatura Oluşturucuyu Aç",
             'downloading': "⏳ İndiriliyor... Lütfen bekleyin.",
             'download_success': "✅ **İndirme tamamlandı!**\n\n📥 Dosya indirilmeye hazır.",
@@ -1311,7 +1311,7 @@ class UTYOBot:
         app.add_error_handler(self.error_handler)
 
     # ============================================================
-    # توابع کمکی
+    # توابع کمکی - بهینه برای سرعت
     # ============================================================
     
     def _get_user_language(self, user_id):
@@ -1460,7 +1460,7 @@ class UTYOBot:
         return result['prize_amount'] if result else 0
 
     # ============================================================
-    # دستورات عمومی
+    # دستورات عمومی - سریع
     # ============================================================
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1469,8 +1469,6 @@ class UTYOBot:
         referred_by = None
         if context.args and context.args[0].startswith('ref_'):
             ref_code = context.args[0].replace('ref_', '')
-            logger.info(f"Referral code detected: {ref_code}")
-            
             cursor = db.execute_global(
                 "SELECT user_id FROM users WHERE referral_code = ?",
                 (ref_code,)
@@ -1479,7 +1477,6 @@ class UTYOBot:
                 for row in cursor:
                     if row['user_id'] != user.id:
                         referred_by = row['user_id']
-                        logger.info(f"User {user.id} referred by {referred_by}")
                         break
         
         user_manager.register_user(
@@ -1503,7 +1500,6 @@ class UTYOBot:
                     ),
                     parse_mode=ParseMode.MARKDOWN
                 )
-                
                 await update.message.reply_text(
                     LanguageManager.get_text(lang, 'referral_discount',
                         user.first_name or user.username or str(user.id),
@@ -1511,11 +1507,10 @@ class UTYOBot:
                     ),
                     parse_mode=ParseMode.MARKDOWN
                 )
-                
-                logger.info(f"Referral notification sent to {referred_by} and {user.id}")
             except Exception as e:
                 logger.error(f"Error sending referral notification: {e}")
         
+        # منوی سریع
         keyboard = [
             [InlineKeyboardButton(
                 LanguageManager.get_text(lang, 'lottery'),
@@ -1582,7 +1577,7 @@ class UTYOBot:
         await self._show_language_selector(update, user_id)
 
     # ============================================================
-    # کالبک‌های منوی اصلی
+    # کالبک‌های منوی اصلی - سریع
     # ============================================================
     
     async def main_menu_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1685,14 +1680,12 @@ class UTYOBot:
     async def referral_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
-        
         user_id = query.from_user.id
         await self._show_referral(update, user_id)
     
     async def guide_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
-        
         user_id = query.from_user.id
         lang = self._get_user_language(user_id)
         
@@ -1711,14 +1704,12 @@ class UTYOBot:
     async def language_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
-        
         user_id = query.from_user.id
         await self._show_language_selector(update, user_id)
     
     async def set_language_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
-        
         user_id = query.from_user.id
         lang_code = query.data.replace('set_lang_', '')
         
@@ -1782,7 +1773,7 @@ class UTYOBot:
                 logger.error(f"Error sending poll result to admin {admin_id}: {e}")
 
     # ============================================================
-    # کالبک‌های دانلودر و فاکتور ساز
+    # کالبک‌های دانلودر و فاکتور ساز - با Web App
     # ============================================================
     
     async def instagram_download_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1813,6 +1804,7 @@ class UTYOBot:
         user_id = query.from_user.id
         lang = self._get_user_language(user_id)
         
+        # دکمه Web App با قابلیت ذخیره در گالری
         keyboard = [
             [InlineKeyboardButton(
                 LanguageManager.get_text(lang, 'open_invoice_btn'),
@@ -1852,10 +1844,12 @@ class UTYOBot:
                     parse_mode=ParseMode.MARKDOWN
                 )
                 
+                # ارسال فایل با قابلیت ذخیره در گالری
                 with open(file_path, 'rb') as f:
                     await update.message.reply_video(
                         video=f,
-                        caption=LanguageManager.get_text(lang, 'download_success')
+                        caption=LanguageManager.get_text(lang, 'download_success'),
+                        supports_streaming=True
                     )
                 
                 try:
@@ -2771,7 +2765,6 @@ class UTYOBot:
         if user_id not in ADMIN_IDS:
             return
         
-        # دریافت اطلاعات قرعه‌کشی از context
         lottery_date = context.user_data.get('lottery_date')
         prize_per_winner = context.user_data.get('lottery_prize')
         winners_count = context.user_data.get('lottery_winners')
@@ -2780,11 +2773,9 @@ class UTYOBot:
             await query.edit_message_text("❌ اطلاعات قرعه‌کشی کامل نیست! لطفاً دوباره تلاش کنید.")
             return
         
-        # اجرای قرعه‌کشی
         success, result = lottery_system.start_lottery(lottery_date, prize_per_winner, winners_count)
         
         if success:
-            # ارسال اعلان قرعه‌کشی به همه کاربران
             users = db.execute_global("SELECT user_id, language FROM users")
             
             for user in users:
@@ -2817,7 +2808,6 @@ class UTYOBot:
                 except Exception as e:
                     logger.error(f"Error sending to user {user['user_id']}: {e}")
             
-            # ارسال لیست برندگان به ادمین
             winners_list = ""
             for winner_id in result['winners']:
                 user = user_manager.get_user(winner_id)
@@ -3334,7 +3324,6 @@ class UTYOBot:
         step = context.user_data.get('lottery_step', 1)
         
         if step == 1:
-            # دریافت تاریخ قرعه‌کشی
             try:
                 lottery_date = text.strip()
                 context.user_data['lottery_date'] = lottery_date
@@ -3352,7 +3341,6 @@ class UTYOBot:
                 await update.message.reply_text("❌ فرمت تاریخ نامعتبر! لطفاً دوباره وارد کنید.")
                 
         elif step == 2:
-            # دریافت مبلغ جایزه
             try:
                 prize = float(text)
                 if prize < 10:
@@ -3374,7 +3362,6 @@ class UTYOBot:
                 await update.message.reply_text("❌ لطفاً یک عدد معتبر وارد کنید!")
                 
         elif step == 3:
-            # دریافت تعداد برندگان
             try:
                 winners_count = int(text)
                 if winners_count < 1 or winners_count > 100:
@@ -3384,7 +3371,6 @@ class UTYOBot:
                 context.user_data['lottery_winners'] = winners_count
                 context.user_data['lottery_step'] = 4
                 
-                # نمایش تایید نهایی
                 lottery_date = context.user_data.get('lottery_date')
                 prize = context.user_data.get('lottery_prize')
                 
