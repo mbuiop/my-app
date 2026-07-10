@@ -1,5 +1,5 @@
 # ============================================================
-# ربات قرعه‌کشی هوشمند UTYOB - نسخه کامل و بدون خطا
+# ربات قرعه‌کشی هوشمند UTYOB - نسخه نهایی فوق‌پیشرفته
 # ============================================================
 
 import asyncio
@@ -17,6 +17,7 @@ import os
 import sys
 import re
 import tempfile
+import subprocess
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Optional, Any
 from concurrent.futures import ThreadPoolExecutor
@@ -131,7 +132,7 @@ class LanguageManager:
             'open_invoice_btn': "🧾 Open Invoice Maker",
             'downloading': "⏳ Downloading... Please wait.",
             'download_success': "✅ **Download completed!**\n\n📥 File ready for download.",
-            'download_failed': "❌ **Download failed!**\n\n🔹 Reason: {}\n\n📌 Make sure the link is correct and the video is available.",
+            'download_failed': "❌ **Download failed!**\n\n🔹 Reason: {}\n\n📌 Make sure the link is correct.",
             'invalid_url': "❌ Invalid URL!\n\nPlease send a valid Instagram link.",
             'processing': "🔄 Processing your request...",
             'lottery_announcement': "🎰 **Lottery Announcement**\n\n📅 Date: {}\n💰 Prize: ${}\n👥 Winners: {}\n\n📤 To participate, please send $100 to:\n`{}`\n\n⚠️ **Important:**\n• Use TRC20 network only\n• Enter your source wallet address\n• Make sure your subscription is active\n\n🎯 Good luck to everyone!",
@@ -240,7 +241,7 @@ class LanguageManager:
             'open_invoice_btn': "🧾 باز کردن فاکتور ساز",
             'downloading': "⏳ در حال دانلود... لطفاً صبر کنید.",
             'download_success': "✅ **دانلود کامل شد!**\n\n📥 فایل آماده دانلود است.",
-            'download_failed': "❌ **دانلود ناموفق!**\n\n🔹 دلیل: {}\n\n📌 مطمئن شوید لینک صحیح است و ویدیو در دسترس است.",
+            'download_failed': "❌ **دانلود ناموفق!**\n\n🔹 دلیل: {}\n\n📌 مطمئن شوید لینک صحیح است.",
             'invalid_url': "❌ لینک نامعتبر!\n\nلطفاً یک لینک معتبر از اینستاگرام ارسال کنید.",
             'processing': "🔄 در حال پردازش درخواست شما...",
             'lottery_announcement': "🎰 **اطلاعیه قرعه‌کشی**\n\n📅 تاریخ: {}\n💰 جایزه: ${}\n👥 تعداد برندگان: {}\n\n📤 برای شرکت، لطفاً مبلغ ۱۰۰ دلار به آدرس زیر واریز کنید:\n`{}`\n\n⚠️ **نکات مهم:**\n• فقط از شبکه TRC20 استفاده کنید\n• آدرس کیف پول مبدا خود را وارد کنید\n• اشتراک شما باید فعال باشد\n\n🎯 برای همه آرزوی موفقیت داریم!",
@@ -349,7 +350,7 @@ class LanguageManager:
             'open_invoice_btn': "🧾 Fatura Oluşturucuyu Aç",
             'downloading': "⏳ İndiriliyor... Lütfen bekleyin.",
             'download_success': "✅ **İndirme tamamlandı!**\n\n📥 Dosya indirilmeye hazır.",
-            'download_failed': "❌ **İndirme başarısız!**\n\n🔹 Sebep: {}\n\n📌 Linkin doğru olduğundan ve videonun mevcut olduğundan emin olun.",
+            'download_failed': "❌ **İndirme başarısız!**\n\n🔹 Sebep: {}\n\n📌 Linkin doğru olduğundan emin olun.",
             'invalid_url': "❌ Geçersiz URL!\n\nLütfen geçerli bir Instagram linki gönderin.",
             'processing': "🔄 İsteğiniz işleniyor...",
             'lottery_announcement': "🎰 **Piyango Duyurusu**\n\n📅 Tarih: {}\n💰 Ödül: ${}\n👥 Kazananlar: {}\n\n📤 Katılmak için lütfen aşağıdaki adrese 100$ gönderin:\n`{}`\n\n⚠️ **Önemli:**\n• Sadece TRC20 ağını kullanın\n• Kaynak cüzdan adresinizi girin\n• Aboneliğiniz aktif olmalı\n\n🎯 Herkese iyi şanslar!",
@@ -723,7 +724,7 @@ class CacheManager:
 cache = CacheManager(max_size=20000)
 
 # ============================================================
-# سیستم دانلودر
+# سیستم دانلودر - نسخه جدید بدون خطا
 # ============================================================
 class DownloadManager:
     def __init__(self):
@@ -743,59 +744,94 @@ class DownloadManager:
         
     async def download_instagram(self, url: str) -> Tuple[bool, str, str]:
         try:
-            import yt_dlp
-            output_template = os.path.join(self.temp_dir, "instagram_%(id)s.%(ext)s")
-
-            has_ffmpeg = shutil.which('ffmpeg') is not None
-            format_str = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo[ext=mp4]/best[ext=mp4]/best' if has_ffmpeg else 'best[ext=mp4]/best'
-
-            ydl_opts = {
-                'format': format_str,
-                'outtmpl': output_template,
-                'quiet': True,
-                'no_warnings': True,
-                'noplaylist': True,
-                'continuedl': True,
-                'retries': 3,
-                'socket_timeout': 30,
-                'http_headers': {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-                },
+            # روش جدید و ساده برای دانلود اینستاگرام
+            import requests
+            from bs4 import BeautifulSoup
+            import json
+            
+            # دریافت لینک مستقیم با استفاده از API ساده
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             }
-            if has_ffmpeg:
-                ydl_opts['merge_output_format'] = 'mp4'
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-
-                output_file = None
-                if info:
-                    file_id = info.get('id')
-                    for prefix in ['instagram_', '']:
-                        for ext in ['.mp4', '.mkv', '.webm']:
-                            candidate = os.path.join(self.temp_dir, f"{prefix}{file_id}{ext}") if prefix else os.path.join(self.temp_dir, f"{file_id}{ext}")
-                            if os.path.exists(candidate):
-                                output_file = candidate
-                                break
-                        if output_file:
-                            break
-
-                if not output_file:
-                    try:
-                        files = [os.path.join(self.temp_dir, f) for f in os.listdir(self.temp_dir) if f.startswith('instagram_') or f.endswith(('.mp4', '.mkv', '.webm'))]
-                        if files:
-                            files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
-                            output_file = files[0]
-                    except Exception:
-                        output_file = None
-
-                if output_file and os.path.exists(output_file):
-                    return True, output_file, "Downloaded successfully"
-            return False, None, "Download failed"
+            
+            # دریافت محتوای صفحه
+            response = requests.get(url, headers=headers, timeout=30)
+            if response.status_code != 200:
+                return False, None, "صفحه اینستاگرام یافت نشد"
+            
+            # استخراج ویدیو با regex
+            video_urls = re.findall(r'"video_url":"([^"]+)"', response.text)
+            if video_urls:
+                video_url = video_urls[0].replace('\\', '')
+                return await self._download_video_direct(video_url, url)
+            
+            # استخراج تصویر
+            image_urls = re.findall(r'"display_url":"([^"]+)"', response.text)
+            if image_urls:
+                image_url = image_urls[0].replace('\\', '')
+                return await self._download_image_direct(image_url, url)
+            
+            # روش دوم با استفاده از embed
+            embed_url = f"https://api.instagram.com/oembed?url={url}"
+            embed_response = requests.get(embed_url, headers=headers, timeout=10)
+            if embed_response.status_code == 200:
+                data = embed_response.json()
+                thumbnail = data.get('thumbnail_url')
+                if thumbnail:
+                    return await self._download_image_direct(thumbnail, url)
+            
+            return False, None, "محتوا یافت نشد. لطفاً لینک را بررسی کنید."
+            
+        except Exception as e:
+            logger.error(f"Instagram download error: {e}")
+            return False, None, str(e)
+    
+    async def _download_video_direct(self, video_url: str, original_url: str) -> Tuple[bool, str, str]:
+        try:
+            import requests
+            filename = f"instagram_video_{int(time.time())}.mp4"
+            filepath = os.path.join(self.temp_dir, filename)
+            
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            
+            response = requests.get(video_url, headers=headers, stream=True, timeout=60)
+            if response.status_code == 200:
+                with open(filepath, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                return True, filepath, "Downloaded successfully"
+            return False, None, "Failed to download video"
+        except Exception as e:
+            return False, None, str(e)
+    
+    async def _download_image_direct(self, image_url: str, original_url: str) -> Tuple[bool, str, str]:
+        try:
+            import requests
+            filename = f"instagram_image_{int(time.time())}.jpg"
+            filepath = os.path.join(self.temp_dir, filename)
+            
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            
+            response = requests.get(image_url, headers=headers, stream=True, timeout=60)
+            if response.status_code == 200:
+                with open(filepath, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                return True, filepath, "Downloaded successfully"
+            return False, None, "Failed to download image"
         except Exception as e:
             return False, None, str(e)
 
     def validate_instagram_url(self, url: str) -> bool:
-        patterns = [r'instagram\.com/(p|reel|tv)/[^/?]+', r'instagr\.am/p/[^/?]+']
+        patterns = [
+            r'instagram\.com/(p|reel|tv)/[^/?]+',
+            r'instagr\.am/p/[^/?]+',
+            r'instagram\.com/share/[^/?]+'
+        ]
         return any(re.search(p, url) for p in patterns)
 
 download_manager = DownloadManager()
@@ -1328,49 +1364,37 @@ class UTYOBot:
     def _setup_handlers(self):
         app = self.application
         
-        # ============================================================
         # دستورات
-        # ============================================================
         app.add_handler(CommandHandler("start", self.start_command))
         app.add_handler(CommandHandler("help", self.help_command))
         app.add_handler(CommandHandler("referral", self.referral_command))
         app.add_handler(CommandHandler("language", self.language_command))
         
-        # ============================================================
         # منوی اصلی
-        # ============================================================
         app.add_handler(CallbackQueryHandler(self.main_menu_callback, pattern="^main_menu$"))
         app.add_handler(CallbackQueryHandler(self.lottery_callback, pattern="^lottery$"))
         app.add_handler(CallbackQueryHandler(self.referral_callback, pattern="^referral$"))
         app.add_handler(CallbackQueryHandler(self.guide_callback, pattern="^guide$"))
         app.add_handler(CallbackQueryHandler(self.language_callback, pattern="^language$"))
         
-        # ============================================================
         # دانلودر و فاکتور ساز
-        # ============================================================
         app.add_handler(CallbackQueryHandler(self.instagram_download_callback, pattern="^instagram_download$"))
         app.add_handler(CallbackQueryHandler(self.invoice_maker_callback, pattern="^invoice_maker$"))
         
-        # ============================================================
         # اشتراک و قرعه‌کشی
-        # ============================================================
         app.add_handler(CallbackQueryHandler(self.subscribe_callback, pattern="^subscribe$"))
         app.add_handler(CallbackQueryHandler(self.confirm_subscribe_callback, pattern="^confirm_subscribe$"))
         app.add_handler(CallbackQueryHandler(self.join_lottery_callback, pattern="^join_lottery$"))
         app.add_handler(CallbackQueryHandler(self.confirm_payment_callback, pattern="^confirm_payment$"))
         
-        # ============================================================
-        # ساخت ربات - دکمه‌های جدید
-        # ============================================================
+        # ساخت ربات
         app.add_handler(CallbackQueryHandler(self.build_robot_callback, pattern="^build_robot$"))
         app.add_handler(CallbackQueryHandler(self.my_robots_callback, pattern="^my_robots$"))
         app.add_handler(CallbackQueryHandler(self.robot_delete_callback, pattern="^robot_delete_"))
         app.add_handler(CallbackQueryHandler(self.robot_confirm_delete_callback, pattern="^robot_confirm_delete_"))
         app.add_handler(CallbackQueryHandler(self.robot_cancel_delete_callback, pattern="^robot_cancel_delete$"))
         
-        # ============================================================
         # پنل مدیریت
-        # ============================================================
         app.add_handler(CallbackQueryHandler(self.admin_panel_callback, pattern="^admin_panel$"))
         app.add_handler(CallbackQueryHandler(self.admin_broadcast_callback, pattern="^admin_broadcast$"))
         app.add_handler(CallbackQueryHandler(self.admin_start_lottery_callback, pattern="^admin_start_lottery$"))
@@ -1389,45 +1413,36 @@ class UTYOBot:
         app.add_handler(CallbackQueryHandler(self.admin_manage_servers_callback, pattern="^admin_manage_servers$"))
         app.add_handler(CallbackQueryHandler(self.admin_server_delete_callback, pattern="^admin_server_delete_"))
         
-        # ============================================================
         # نظرسنجی
-        # ============================================================
         app.add_handler(CallbackQueryHandler(self.poll_response_callback, pattern="^poll_yes$"))
         app.add_handler(CallbackQueryHandler(self.poll_response_callback, pattern="^poll_no$"))
         
-        # ============================================================
         # تایید تراکنش
-        # ============================================================
         app.add_handler(CallbackQueryHandler(self.admin_verify_approve_callback, pattern="^admin_verify_approve_"))
         app.add_handler(CallbackQueryHandler(self.admin_verify_reject_callback, pattern="^admin_verify_reject_"))
         
-        # ============================================================
         # تایید قرعه‌کشی
-        # ============================================================
         app.add_handler(CallbackQueryHandler(self.start_lottery_confirm_callback, pattern="^start_lottery_confirm$"))
         app.add_handler(CallbackQueryHandler(self.pay_winners_confirm_callback, pattern="^pay_winners_confirm$"))
         
-        # ============================================================
         # برداشت جایزه
-        # ============================================================
         app.add_handler(CallbackQueryHandler(self.withdraw_prize_callback, pattern="^withdraw_prize$"))
         app.add_handler(CallbackQueryHandler(self.confirm_withdraw_callback, pattern="^confirm_withdraw$"))
         
-        # ============================================================
         # تغییر زبان
-        # ============================================================
         app.add_handler(CallbackQueryHandler(self.set_language_callback, pattern="^set_lang_"))
         
-        # ============================================================
+        # انتخاب زبان فایل
+        app.add_handler(CallbackQueryHandler(self.file_lang_callback, pattern="^file_lang_"))
+        
+        # انتخاب فایل ربات
+        app.add_handler(CallbackQueryHandler(self.robot_select_callback, pattern="^robot_select_"))
+        
         # پیام‌ها
-        # ============================================================
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         app.add_handler(MessageHandler(filters.PHOTO, self.handle_photo))
         app.add_handler(MessageHandler(filters.Document.ALL, self.handle_document))
         
-        # ============================================================
-        # خطاها
-        # ============================================================
         app.add_error_handler(self.error_handler)
 
     # ============================================================
@@ -1590,8 +1605,52 @@ class UTYOBot:
         return result['prize_amount'] if result else 0
 
     # ============================================================
-    # دستور start
+    # منوی اصلی
     # ============================================================
+    def _get_main_keyboard(self, user_id, lang):
+        keyboard = [
+            [InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'lottery'),
+                callback_data="lottery"
+            )],
+            [InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'referral'),
+                callback_data="referral"
+            )],
+            [InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'build_robot'),
+                callback_data="build_robot"
+            )],
+            [InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'my_robots'),
+                callback_data="my_robots"
+            )],
+            [InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'instagram_download'),
+                callback_data="instagram_download"
+            )],
+            [InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'invoice_maker'),
+                callback_data="invoice_maker"
+            )],
+            [InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'guide'),
+                callback_data="guide"
+            )],
+            [InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'language'),
+                callback_data="language"
+            )]
+        ]
+        
+        if user_id in ADMIN_IDS:
+            keyboard.append([InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'admin_panel'),
+                callback_data="admin_panel"
+            )])
+        
+        return keyboard
+
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         
@@ -1648,11 +1707,7 @@ class UTYOBot:
             parse_mode=ParseMode.MARKDOWN
         )
 
-    # ============================================================
-    # دستور help (مشکل اینجا بود)
-    # ============================================================
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """دستور راهنما"""
         user_id = update.effective_user.id
         lang = self._get_user_language(user_id)
         
@@ -1668,66 +1723,13 @@ class UTYOBot:
             parse_mode=ParseMode.MARKDOWN
         )
 
-    # ============================================================
-    # دستور referral
-    # ============================================================
     async def referral_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         await self._show_referral(update, user_id)
 
-    # ============================================================
-    # دستور language
-    # ============================================================
     async def language_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         await self._show_language_selector(update, user_id)
-
-    # ============================================================
-    # منوی اصلی
-    # ============================================================
-    def _get_main_keyboard(self, user_id, lang):
-        keyboard = [
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'lottery'),
-                callback_data="lottery"
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'referral'),
-                callback_data="referral"
-            )],
-            [InlineKeyboardButton(
-                "🤖 ساخت ربات",
-                callback_data="build_robot"
-            )],
-            [InlineKeyboardButton(
-                "📋 ربات‌های من",
-                callback_data="my_robots"
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'instagram_download'),
-                callback_data="instagram_download"
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'invoice_maker'),
-                callback_data="invoice_maker"
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'guide'),
-                callback_data="guide"
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'language'),
-                callback_data="language"
-            )]
-        ]
-        
-        if user_id in ADMIN_IDS:
-            keyboard.append([InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'admin_panel'),
-                callback_data="admin_panel"
-            )])
-        
-        return keyboard
 
     async def main_menu_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
@@ -1746,7 +1748,7 @@ class UTYOBot:
         )
 
     # ============================================================
-    # کالبک‌های قرعه‌کشی
+    # کالبک‌های قرعه‌کشی و رفرال
     # ============================================================
     async def lottery_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
@@ -1797,18 +1799,12 @@ class UTYOBot:
             parse_mode=ParseMode.MARKDOWN
         )
 
-    # ============================================================
-    # کالبک‌های رفرال
-    # ============================================================
     async def referral_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
         user_id = query.from_user.id
         await self._show_referral(update, user_id)
 
-    # ============================================================
-    # کالبک‌های راهنما
-    # ============================================================
     async def guide_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -1856,9 +1852,6 @@ class UTYOBot:
                 reply_markup=reply_markup
             )
 
-    # ============================================================
-    # نمایش رفرال و زبان
-    # ============================================================
     async def _show_referral(self, update, user_id):
         user = user_manager.get_user(user_id)
         if not user:
@@ -1954,7 +1947,120 @@ class UTYOBot:
                 )
 
     # ============================================================
-    # ساخت ربات - کالبک‌های جدید
+    # دانلودر اینستاگرام - جدید و بدون خطا
+    # ============================================================
+    async def instagram_download_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        lang = self._get_user_language(user_id)
+        
+        context.user_data['download_mode'] = 'instagram'
+        
+        keyboard = [[InlineKeyboardButton(
+            LanguageManager.get_text(lang, 'back'),
+            callback_data="main_menu"
+        )]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            LanguageManager.get_text(lang, 'instagram_downloader'),
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+    async def _download_media(self, update: Update, context: ContextTypes.DEFAULT_TYPE, url: str, media_type: str):
+        user_id = update.effective_user.id
+        lang = self._get_user_language(user_id)
+        
+        await update.message.reply_text(
+            LanguageManager.get_text(lang, 'processing'),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        
+        try:
+            if media_type == 'instagram':
+                success, file_path, message = await download_manager.download_instagram(url)
+            else:
+                success, file_path, message = False, None, "Unknown media type"
+            
+            if success and file_path and os.path.exists(file_path):
+                # تعیین نوع فایل
+                is_video = file_path.endswith('.mp4') or file_path.endswith('.mkv') or file_path.endswith('.webm')
+                
+                with open(file_path, 'rb') as f:
+                    if is_video:
+                        await update.message.reply_video(
+                            video=f,
+                            caption=LanguageManager.get_text(lang, 'download_success'),
+                            supports_streaming=True
+                        )
+                    else:
+                        await update.message.reply_photo(
+                            photo=f,
+                            caption=LanguageManager.get_text(lang, 'download_success')
+                        )
+                
+                try:
+                    os.remove(file_path)
+                except:
+                    pass
+                
+                db.execute(user_id,
+                    """INSERT INTO downloads 
+                       (user_id, url, media_type, file_path, status) 
+                       VALUES (?, ?, ?, ?, 'completed')""",
+                    (user_id, url, media_type, file_path)
+                )
+            else:
+                await update.message.reply_text(
+                    LanguageManager.get_text(lang, 'download_failed', message or "محتوا یافت نشد")
+                )
+                
+                db.execute(user_id,
+                    """INSERT INTO downloads 
+                       (user_id, url, media_type, status) 
+                       VALUES (?, ?, ?, 'failed')""",
+                    (user_id, url, media_type)
+                )
+                
+        except Exception as e:
+            logger.error(f"Download error: {e}")
+            await update.message.reply_text(
+                LanguageManager.get_text(lang, 'download_failed', str(e))
+            )
+
+    # ============================================================
+    # فاکتور ساز
+    # ============================================================
+    async def invoice_maker_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        lang = self._get_user_language(user_id)
+        
+        keyboard = [
+            [InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'open_invoice_btn'),
+                web_app=WebAppInfo(url="https://mbuiop.github.io/Tablikgram/")
+            )],
+            [InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'close'),
+                callback_data="main_menu"
+            )]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            LanguageManager.get_text(lang, 'invoice_maker_text'),
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+    # ============================================================
+    # ساخت ربات - کالبک‌ها
     # ============================================================
     async def build_robot_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
@@ -1969,7 +2075,10 @@ class UTYOBot:
         uploaded_files = cursor
         
         if not uploaded_files:
-            keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]]
+            keyboard = [[InlineKeyboardButton(
+                LanguageManager.get_text(lang, 'back'),
+                callback_data="main_menu"
+            )]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text(
                 LanguageManager.get_text(lang, 'no_uploaded_files'),
@@ -1986,7 +2095,10 @@ class UTYOBot:
                 callback_data=f"robot_select_{file['id']}"
             )])
         
-        keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")])
+        keyboard.append([InlineKeyboardButton(
+            LanguageManager.get_text(lang, 'back'),
+            callback_data="main_menu"
+        )])
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
@@ -1994,8 +2106,42 @@ class UTYOBot:
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
+
+    async def robot_select_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
         
-        context.user_data['selecting_robot_file'] = True
+        user_id = query.from_user.id
+        lang = self._get_user_language(user_id)
+        
+        file_id = int(query.data.replace('robot_select_', ''))
+        cursor = db.execute_global(
+            "SELECT * FROM uploaded_bot_files WHERE id = ?",
+            (file_id,)
+        )
+        file_info = cursor[0] if cursor else None
+        
+        if not file_info:
+            await query.edit_message_text("❌ فایل یافت نشد!")
+            return
+        
+        context.user_data['selected_robot_file'] = file_id
+        
+        keyboard = [[InlineKeyboardButton(
+            LanguageManager.get_text(lang, 'cancel'),
+            callback_data="main_menu"
+        )]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            LanguageManager.get_text(lang, 'build_robot_title') + "\n\n" +
+            LanguageManager.get_text(lang, 'build_robot_help') + "\n\n" +
+            f"📄 فایل انتخاب شده: {file_info['file_name']}",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+        
+        context.user_data['waiting_for_robot_token'] = True
 
     async def my_robots_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
@@ -2012,8 +2158,14 @@ class UTYOBot:
         
         if not robots:
             keyboard = [
-                [InlineKeyboardButton("🤖 ساخت ربات جدید", callback_data="build_robot")],
-                [InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]
+                [InlineKeyboardButton(
+                    LanguageManager.get_text(lang, 'build_new_robot'),
+                    callback_data="build_robot"
+                )],
+                [InlineKeyboardButton(
+                    LanguageManager.get_text(lang, 'back'),
+                    callback_data="main_menu"
+                )]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -2037,12 +2189,18 @@ class UTYOBot:
         keyboard = []
         for robot in robots:
             keyboard.append([InlineKeyboardButton(
-                f"🗑️ حذف ربات #{robot['id']}",
+                f"🗑️ {LanguageManager.get_text(lang, 'delete_robot')} #{robot['id']}",
                 callback_data=f"robot_delete_{robot['id']}"
             )])
         
-        keyboard.append([InlineKeyboardButton("🤖 ساخت ربات جدید", callback_data="build_robot")])
-        keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")])
+        keyboard.append([InlineKeyboardButton(
+            LanguageManager.get_text(lang, 'build_new_robot'),
+            callback_data="build_robot"
+        )])
+        keyboard.append([InlineKeyboardButton(
+            LanguageManager.get_text(lang, 'back'),
+            callback_data="main_menu"
+        )])
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
@@ -2061,8 +2219,8 @@ class UTYOBot:
         
         keyboard = [
             [
-                InlineKeyboardButton("✅ بله، حذف کن", callback_data=f"robot_confirm_delete_{robot_id}"),
-                InlineKeyboardButton("❌ نه، برگرد", callback_data="robot_cancel_delete")
+                InlineKeyboardButton("✅ بله", callback_data=f"robot_confirm_delete_{robot_id}"),
+                InlineKeyboardButton("❌ نه", callback_data="robot_cancel_delete")
             ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -2099,157 +2257,7 @@ class UTYOBot:
         await self.my_robots_callback(update, context)
 
     # ============================================================
-    # کالبک‌های نظرسنجی
-    # ============================================================
-    async def poll_response_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        
-        answer = query.data
-        poll_question = context.user_data.get('poll_question', 'Unknown question')
-        
-        if answer == 'poll_yes':
-            display_answer = LanguageManager.get_text(lang, 'poll_yes')
-        else:
-            display_answer = LanguageManager.get_text(lang, 'poll_no')
-        
-        db.execute(user_id,
-            "INSERT INTO poll_responses (user_id, poll_question, answer) VALUES (?, ?, ?)",
-            (user_id, poll_question, display_answer)
-        )
-        
-        await query.edit_message_text(
-            LanguageManager.get_text(lang, 'poll_thanks', display_answer),
-            parse_mode=ParseMode.MARKDOWN
-        )
-        
-        user = user_manager.get_user(user_id)
-        user_name = user['first_name'] or user['username'] or str(user_id)
-        
-        for admin_id in ADMIN_IDS:
-            try:
-                admin_lang = self._get_user_language(admin_id)
-                await self.application.bot.send_message(
-                    chat_id=admin_id,
-                    text=LanguageManager.get_text(admin_lang, 'poll_result_admin',
-                        user_name, poll_question, display_answer, datetime.now().strftime('%Y-%m-%d %H:%M')
-                    ),
-                    parse_mode=ParseMode.MARKDOWN
-                )
-            except Exception as e:
-                logger.error(f"Error sending poll result to admin {admin_id}: {e}")
-
-    # ============================================================
-    # کالبک‌های دانلودر و فاکتور ساز
-    # ============================================================
-    async def instagram_download_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        
-        context.user_data['download_mode'] = 'instagram'
-        
-        keyboard = [[InlineKeyboardButton(
-            LanguageManager.get_text(lang, 'back'),
-            callback_data="main_menu"
-        )]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            LanguageManager.get_text(lang, 'instagram_downloader'),
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-
-    async def invoice_maker_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        lang = self._get_user_language(user_id)
-        
-        keyboard = [
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'open_invoice_btn'),
-                web_app=WebAppInfo(url="https://mbuiop.github.io/Tablikgram/")
-            )],
-            [InlineKeyboardButton(
-                LanguageManager.get_text(lang, 'close'),
-                callback_data="main_menu"
-            )]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            LanguageManager.get_text(lang, 'invoice_maker_text'),
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-
-    async def _download_media(self, update: Update, context: ContextTypes.DEFAULT_TYPE, url: str, media_type: str):
-        user_id = update.effective_user.id
-        lang = self._get_user_language(user_id)
-        
-        await update.message.reply_text(
-            LanguageManager.get_text(lang, 'processing'),
-            parse_mode=ParseMode.MARKDOWN
-        )
-        
-        try:
-            if media_type == 'instagram':
-                success, file_path, message = await download_manager.download_instagram(url)
-            else:
-                success, file_path, message = False, None, "Unknown media type"
-            
-            if success and file_path and os.path.exists(file_path):
-                await update.message.reply_text(
-                    LanguageManager.get_text(lang, 'downloading'),
-                    parse_mode=ParseMode.MARKDOWN
-                )
-                
-                with open(file_path, 'rb') as f:
-                    await update.message.reply_video(
-                        video=f,
-                        caption=LanguageManager.get_text(lang, 'download_success'),
-                        supports_streaming=True
-                    )
-                
-                try:
-                    os.remove(file_path)
-                except:
-                    pass
-                
-                db.execute(user_id,
-                    """INSERT INTO downloads 
-                       (user_id, url, media_type, file_path, status) 
-                       VALUES (?, ?, ?, ?, 'completed')""",
-                    (user_id, url, media_type, file_path)
-                )
-            else:
-                await update.message.reply_text(
-                    LanguageManager.get_text(lang, 'download_failed', message)
-                )
-                
-                db.execute(user_id,
-                    """INSERT INTO downloads 
-                       (user_id, url, media_type, status) 
-                       VALUES (?, ?, ?, 'failed')""",
-                    (user_id, url, media_type)
-                )
-                
-        except Exception as e:
-            logger.error(f"Download error: {e}")
-            await update.message.reply_text(
-                LanguageManager.get_text(lang, 'download_failed', str(e))
-            )
-
-    # ============================================================
-    # کالبک‌های اشتراک
+    # کالبک‌های اشتراک و قرعه‌کشی
     # ============================================================
     async def subscribe_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
@@ -2377,9 +2385,6 @@ class UTYOBot:
                 parse_mode=ParseMode.MARKDOWN
             )
 
-    # ============================================================
-    # کالبک‌های شرکت در قرعه‌کشی
-    # ============================================================
     async def join_lottery_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -2493,6 +2498,50 @@ class UTYOBot:
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN
             )
+
+    # ============================================================
+    # کالبک‌های نظرسنجی
+    # ============================================================
+    async def poll_response_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        lang = self._get_user_language(user_id)
+        
+        answer = query.data
+        poll_question = context.user_data.get('poll_question', 'Unknown question')
+        
+        if answer == 'poll_yes':
+            display_answer = LanguageManager.get_text(lang, 'poll_yes')
+        else:
+            display_answer = LanguageManager.get_text(lang, 'poll_no')
+        
+        db.execute(user_id,
+            "INSERT INTO poll_responses (user_id, poll_question, answer) VALUES (?, ?, ?)",
+            (user_id, poll_question, display_answer)
+        )
+        
+        await query.edit_message_text(
+            LanguageManager.get_text(lang, 'poll_thanks', display_answer),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        
+        user = user_manager.get_user(user_id)
+        user_name = user['first_name'] or user['username'] or str(user_id)
+        
+        for admin_id in ADMIN_IDS:
+            try:
+                admin_lang = self._get_user_language(admin_id)
+                await self.application.bot.send_message(
+                    chat_id=admin_id,
+                    text=LanguageManager.get_text(admin_lang, 'poll_result_admin',
+                        user_name, poll_question, display_answer, datetime.now().strftime('%Y-%m-%d %H:%M')
+                    ),
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            except Exception as e:
+                logger.error(f"Error sending poll result to admin {admin_id}: {e}")
 
     # ============================================================
     # کالبک‌های تایید/رد توسط ادمین
@@ -2715,7 +2764,7 @@ class UTYOBot:
         )
 
     # ============================================================
-    # آپلود فایل ربات توسط ادمین
+    # آپلود فایل ربات
     # ============================================================
     async def admin_upload_file_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
@@ -2744,6 +2793,53 @@ class UTYOBot:
         )
         
         context.user_data['waiting_for_robot_file'] = True
+
+    async def file_lang_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        if user_id not in ADMIN_IDS:
+            return
+        
+        lang_code = query.data.replace('file_lang_', '')
+        file_content = context.user_data.get('pending_file_content')
+        file_name = context.user_data.get('pending_file_name')
+        
+        if not file_content or not file_name:
+            await query.edit_message_text("❌ خطا! فایل یافت نشد.")
+            return
+        
+        # ذخیره فایل
+        file_hash = hashlib.sha256(file_content.encode()).hexdigest()
+        file_path = os.path.join("robot_files", f"{file_hash}_{file_name}")
+        
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(file_content)
+        
+        db.execute(user_id,
+            """INSERT INTO uploaded_bot_files 
+               (file_name, file_path, language, file_hash, uploaded_by) 
+               VALUES (?, ?, ?, ?, ?)""",
+            (file_name, file_path, lang_code, file_hash, user_id)
+        )
+        
+        context.user_data['waiting_for_file_lang'] = False
+        context.user_data['pending_file_content'] = None
+        context.user_data['pending_file_name'] = None
+        
+        keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f"✅ **فایل با موفقیت آپلود شد!**\n\n"
+            f"📁 نام: {file_name}\n"
+            f"🌐 زبان: {lang_code}\n"
+            f"🔑 هش: `{file_hash[:20]}...`\n\n"
+            f"📌 کاربران می‌توانند از این فایل برای ساخت ربات استفاده کنند.",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
 
     # ============================================================
     # مدیریت سرورها
@@ -2793,9 +2889,6 @@ class UTYOBot:
             parse_mode=ParseMode.MARKDOWN
         )
 
-    # ============================================================
-    # افزودن سرور جدید
-    # ============================================================
     async def admin_add_server_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -2817,9 +2910,6 @@ class UTYOBot:
             parse_mode=ParseMode.MARKDOWN
         )
 
-    # ============================================================
-    # حذف سرور
-    # ============================================================
     async def admin_server_delete_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -3517,15 +3607,17 @@ class UTYOBot:
         text = update.message.text
         lang = self._get_user_language(user_id)
         
+        # دانلودر اینستاگرام
         download_mode = context.user_data.get('download_mode')
         if download_mode in ['instagram']:
             if text.startswith('http://') or text.startswith('https://'):
-                if download_mode == 'instagram' and not download_manager.validate_instagram_url(text):
-                    await update.message.reply_text(
-                        LanguageManager.get_text(lang, 'invalid_url'),
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-                    return
+                if download_mode == 'instagram':
+                    if not download_manager.validate_instagram_url(text):
+                        await update.message.reply_text(
+                            LanguageManager.get_text(lang, 'invalid_url'),
+                            parse_mode=ParseMode.MARKDOWN
+                        )
+                        return
                 
                 await self._download_media(update, context, text, download_mode)
                 context.user_data['download_mode'] = None
@@ -3536,39 +3628,6 @@ class UTYOBot:
                     parse_mode=ParseMode.MARKDOWN
                 )
                 return
-        
-        # مدیریت انتخاب فایل ربات
-        if context.user_data.get('selecting_robot_file'):
-            if text.startswith('robot_select_'):
-                try:
-                    file_id = int(text.replace('robot_select_', ''))
-                    cursor = db.execute_global(
-                        "SELECT * FROM uploaded_bot_files WHERE id = ?",
-                        (file_id,)
-                    )
-                    file_info = cursor[0] if cursor else None
-                    
-                    if not file_info:
-                        await update.message.reply_text("❌ فایل یافت نشد!")
-                        return
-                    
-                    context.user_data['selected_robot_file'] = file_id
-                    context.user_data['selecting_robot_file'] = False
-                    context.user_data['waiting_for_robot_token'] = True
-                    
-                    keyboard = [[InlineKeyboardButton("🔙 انصراف", callback_data="main_menu")]]
-                    reply_markup = InlineKeyboardMarkup(keyboard)
-                    
-                    await update.message.reply_text(
-                        LanguageManager.get_text(lang, 'build_robot_title') + "\n\n" +
-                        LanguageManager.get_text(lang, 'build_robot_help') + "\n\n" +
-                        f"📄 فایل انتخاب شده: {file_info['file_name']}",
-                        reply_markup=reply_markup,
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-                    return
-                except:
-                    pass
         
         # دریافت توکن ربات
         if context.user_data.get('waiting_for_robot_token'):
@@ -3597,6 +3656,7 @@ class UTYOBot:
                 await update.message.reply_text("❌ فایل ربات یافت نشد!")
                 return
             
+            # خواندن فایل
             file_content = None
             if os.path.exists(file_info['file_path']):
                 with open(file_info['file_path'], 'r', encoding='utf-8') as f:
@@ -3606,9 +3666,11 @@ class UTYOBot:
                 await update.message.reply_text("❌ خطا در خواندن فایل ربات!")
                 return
             
+            # جایگزینی توکن و ادمین
             file_content = file_content.replace('{BOT_TOKEN}', token)
             file_content = file_content.replace('{ADMIN_ID}', str(user_id))
             
+            # ذخیره در دیتابیس
             file_hash = hashlib.sha256(file_content.encode()).hexdigest()
             
             db.execute(user_id,
@@ -3622,8 +3684,14 @@ class UTYOBot:
             context.user_data['selected_robot_file'] = None
             
             keyboard = [
-                [InlineKeyboardButton("📋 ربات‌های من", callback_data="my_robots")],
-                [InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")]
+                [InlineKeyboardButton(
+                    LanguageManager.get_text(lang, 'my_robots'),
+                    callback_data="my_robots"
+                )],
+                [InlineKeyboardButton(
+                    LanguageManager.get_text(lang, 'back'),
+                    callback_data="main_menu"
+                )]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -3638,6 +3706,7 @@ class UTYOBot:
             )
             return
         
+        # مدیریت اقدامات ادمین
         admin_action = context.user_data.get('admin_action')
         
         if admin_action == 'broadcast':
@@ -3735,6 +3804,7 @@ class UTYOBot:
                 await update.message.reply_text("❌ لطفاً یک عدد معتبر وارد کنید!")
                 return
         
+        # مدیریت هش تراکنش
         if context.user_data.get('waiting_for_tx_hash'):
             tx_hash = text.strip()
             
@@ -3794,6 +3864,7 @@ class UTYOBot:
             
             return
         
+        # مدیریت اشتراک
         if context.user_data.get('waiting_for_subscribe'):
             wallet_address = text.strip()
             
@@ -3826,6 +3897,7 @@ class UTYOBot:
             )
             return
         
+        # مدیریت کیف پول برای قرعه‌کشی
         if context.user_data.get('waiting_for_wallet'):
             wallet_address = text.strip()
             
@@ -3858,6 +3930,7 @@ class UTYOBot:
             )
             return
         
+        # مدیریت برداشت جایزه
         if context.user_data.get('withdraw_pending'):
             wallet_address = text.strip()
             
@@ -3912,6 +3985,7 @@ class UTYOBot:
                         pass
             return
         
+        # دستور نامعتبر
         keyboard = [[InlineKeyboardButton(
             LanguageManager.get_text(lang, 'main_menu_btn'),
             callback_data="main_menu"
@@ -4167,49 +4241,6 @@ class UTYOBot:
             
             context.user_data['waiting_for_file_lang'] = True
             return
-        
-        # مدیریت انتخاب زبان فایل
-        if context.user_data.get('waiting_for_file_lang'):
-            if update.callback_query:
-                query = update.callback_query
-                await query.answer()
-                
-                lang_code = query.data.replace('file_lang_', '')
-                file_content = context.user_data.get('pending_file_content')
-                file_name = context.user_data.get('pending_file_name')
-                
-                if file_content and file_name:
-                    # ذخیره فایل
-                    file_hash = hashlib.sha256(file_content.encode()).hexdigest()
-                    file_path = os.path.join("robot_files", f"{file_hash}_{file_name}")
-                    
-                    with open(file_path, 'w', encoding='utf-8') as f:
-                        f.write(file_content)
-                    
-                    db.execute(user_id,
-                        """INSERT INTO uploaded_bot_files 
-                           (file_name, file_path, language, file_hash, uploaded_by) 
-                           VALUES (?, ?, ?, ?, ?)""",
-                        (file_name, file_path, lang_code, file_hash, user_id)
-                    )
-                    
-                    context.user_data['waiting_for_file_lang'] = False
-                    context.user_data['pending_file_content'] = None
-                    context.user_data['pending_file_name'] = None
-                    
-                    keyboard = [[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]]
-                    reply_markup = InlineKeyboardMarkup(keyboard)
-                    
-                    await query.edit_message_text(
-                        f"✅ **فایل با موفقیت آپلود شد!**\n\n"
-                        f"📁 نام: {file_name}\n"
-                        f"🌐 زبان: {lang_code}\n"
-                        f"🔑 هش: `{file_hash[:20]}...`\n\n"
-                        f"📌 کاربران می‌توانند از این فایل برای ساخت ربات استفاده کنند.",
-                        reply_markup=reply_markup,
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-                return
 
     async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Update {update} caused error {context.error}")
