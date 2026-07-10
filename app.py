@@ -1,5 +1,5 @@
 # ============================================================
-# ربات قرعه‌کشی هوشمند UTYOB - نسخه نهایی با بهینه‌سازی سرعت
+# ربات قرعه‌کشی هوشمند UTYOB - نسخه نهایی با نظرسنجی و رفرال کامل
 # ============================================================
 
 import asyncio
@@ -103,11 +103,12 @@ class LanguageManager:
             'no_winner': "❌ You don't have any prize!\n\nParticipate in future lotteries.",
             'next_lottery': "🎰 Next Lottery",
             
-            'referral_text': "🔗 **UTYOB Referral System**\n\n👤 You: {}\n📊 Invites: {}\n💰 Rewards: ${}\n\n🔑 **Your referral code:**\n`{}`\n\n🔗 **Referral link:**\n{}\n\n💰 **Referral reward:**\n• 5% of deposit per invite\n• Instant reward after verification\n\n📤 Share this link with your friends!",
+            'referral_text': "🔗 **UTYOB Referral System**\n\n👤 You: {}\n📊 Invites: {}\n💰 Rewards: ${}\n\n🔑 **Your referral code:**\n`{}`\n\n🔗 **Referral link:**\n{}\n\n💰 **Referral reward:**\n• 5% discount for you\n• 5% discount for your friend\n• Instant reward after verification\n\n📤 Share this link with your friends!",
             'share': "📤 Share",
-            'referral_joined': "🎉 **New referral joined!**\n\n👤 {}\n🔗 Referred by: {}\n💰 Your reward: ${:.2f}",
+            'referral_joined': "🎉 **New referral joined!**\n\n👤 {}\n🔗 Referred by: {}\n💰 You both got 5% discount!",
+            'referral_discount': "🎉 **You got 5% discount!**\n\n👤 {}\n🔗 Referred by: {}\n💰 5% discount applied to your subscription!",
             
-            'guide_text': "📖 **UTYOB Bot Complete Guide**\n\n🎯 **How it works:**\n1. **Register**: Use /start to register\n2. **Subscription**: Purchase subscription to participate\n3. **Deposit**: Send $100 to the specified address\n4. **Participate**: Join the lottery after verification\n5. **Win**: Receive prize if you win\n\n💰 **Deposit amount:**\n- Fixed amount: $100\n- Deposit address: TV61aTh98MGqmteYzda5AaBzdXgGqreG6A\n- Network: TRC20\n\n🎁 **Prizes:**\n- 1st prize: 50% of total\n- 2nd prize: 30% of total\n- 3rd prize: 20% of total\n\n🔗 **Referral system:**\n- Each user has unique referral code\n- 5% reward per invite\n\n⚠️ **Rules:**\n- One participation per lottery per user\n- Previous winners have lower chance\n- All transactions verified automatically\n\n📞 **Support:**\nContact admin for questions.",
+            'guide_text': "📖 **UTYOB Bot Complete Guide**\n\n🎯 **How it works:**\n1. **Register**: Use /start to register\n2. **Subscription**: Purchase subscription to participate\n3. **Deposit**: Send $100 to the specified address\n4. **Participate**: Join the lottery after verification\n5. **Win**: Receive prize if you win\n\n💰 **Deposit amount:**\n- Fixed amount: $100\n- Deposit address: TV61aTh98MGqmteYzda5AaBzdXgGqreG6A\n- Network: TRC20\n\n🎁 **Prizes:**\n- 1st prize: 50% of total\n- 2nd prize: 30% of total\n- 3rd prize: 20% of total\n\n🔗 **Referral system:**\n- Each user has unique referral code\n- 5% discount for both you and your friend\n\n⚠️ **Rules:**\n- One participation per lottery per user\n- Previous winners have lower chance\n- All transactions verified automatically\n\n📞 **Support:**\nContact admin for questions.",
             
             'language_selector': "🌐 **Change Language**\n\nCurrent language: {}",
             
@@ -127,6 +128,10 @@ class LanguageManager:
             'poll_message': "📊 **Poll**\n\n{}",
             'poll_option_1': "✅ Yes",
             'poll_option_2': "❌ No",
+            'poll_thanks': "✅ Thank you for your vote!\n\nYou selected: {}\n📊 Your opinion matters!",
+            'poll_result_admin': "📊 **Poll Result**\n\n👤 User: {}\n📝 Question: {}\n✅ Answer: {}\n🕐 Time: {}",
+            'poll_yes': "Yes ✅",
+            'poll_no': "No ❌",
 
             'instagram_downloader': "📸 **Instagram Downloader**\n\nSend me an Instagram post/reel URL and I'll download it for you!\n\n📤 Send the link:",
             'invoice_maker_text': "🧾 **Invoice Maker**\n\nClick the button below to open the invoice maker tool:\n\n✨ Fast and simple!\n\n📌 After finishing, click **Close** to return.",
@@ -183,11 +188,12 @@ class LanguageManager:
             'no_winner': "❌ شما برنده‌ای ندارید!\n\nدر قرعه‌کشی‌های بعدی شرکت کنید.",
             'next_lottery': "🎰 قرعه‌کشی بعدی",
             
-            'referral_text': "🔗 **سیستم رفرال UTYOB**\n\n👤 شما: {}\n📊 تعداد دعوت‌ها: {}\n💰 پاداش: ${}\n\n🔑 **کد رفرال شما:**\n`{}`\n\n🔗 **لینک دعوت:**\n{}\n\n💰 **پاداش دعوت:**\n• به ازای هر دعوت: ۵٪ از واریز\n• پاداش فوری پس از تایید\n\n📤 لینک را برای دوستان خود ارسال کنید!",
+            'referral_text': "🔗 **سیستم رفرال UTYOB**\n\n👤 شما: {}\n📊 تعداد دعوت‌ها: {}\n💰 پاداش: ${}\n\n🔑 **کد رفرال شما:**\n`{}`\n\n🔗 **لینک دعوت:**\n{}\n\n💰 **پاداش دعوت:**\n• ۵٪ تخفیف برای شما\n• ۵٪ تخفیف برای دوست شما\n• پاداش فوری پس از تایید\n\n📤 لینک را برای دوستان خود ارسال کنید!",
             'share': "📤 اشتراک‌گذاری",
-            'referral_joined': "🎉 **دعوت جدید!**\n\n👤 {}\n🔗 دعوت کننده: {}\n💰 پاداش شما: ${:.2f}",
+            'referral_joined': "🎉 **دعوت جدید!**\n\n👤 {}\n🔗 دعوت کننده: {}\n💰 هر دو ۵٪ تخفیف گرفتید!",
+            'referral_discount': "🎉 **۵٪ تخفیف گرفتید!**\n\n👤 {}\n🔗 دعوت کننده: {}\n💰 ۵٪ تخفیف به اشتراک شما اعمال شد!",
             
-            'guide_text': "📖 **راهنمای کامل ربات UTYOB**\n\n🎯 **نحوه کار:**\n1. **ثبت‌نام**: با دستور /start ثبت‌نام کنید\n2. **اشتراک**: برای شرکت در قرعه‌کشی، اشتراک تهیه کنید\n3. **واریز**: مبلغ ۱۰۰ دلار به آدرس مشخص واریز کنید\n4. **شرکت**: پس از تایید، در قرعه‌کشی شرکت کنید\n5. **برنده**: در صورت برنده شدن، جایزه دریافت کنید\n\n💰 **مبلغ واریز:**\n- مبلغ ثابت: ۱۰۰ دلار\n- آدرس واریز: TV61aTh98MGqmteYzda5AaBzdXgGqreG6A\n- شبکه: TRC20\n\n🎁 **جوایز:**\n- جایزه اول: ۵۰٪ از کل مبلغ\n- جایزه دوم: ۳۰٪ از کل مبلغ\n- جایزه سوم: ۲۰٪ از کل مبلغ\n\n🔗 **سیستم رفرال:**\n- هر کاربر کد رفرال اختصاصی دارد\n- به ازای هر دعوت، ۵٪ پاداش دریافت کنید\n\n⚠️ **قوانین:**\n- هر کاربر فقط یک بار در هر قرعه‌کشی شرکت می‌کند\n- برندگان قبلی شانس کمتری در قرعه‌کشی‌های بعدی دارند\n- تمامی تراکنش‌ها به صورت خودکار تایید می‌شوند\n\n📞 **پشتیبانی:**\nبرای سوالات و مشکلات با مدیریت تماس بگیرید.",
+            'guide_text': "📖 **راهنمای کامل ربات UTYOB**\n\n🎯 **نحوه کار:**\n1. **ثبت‌نام**: با دستور /start ثبت‌نام کنید\n2. **اشتراک**: برای شرکت در قرعه‌کشی، اشتراک تهیه کنید\n3. **واریز**: مبلغ ۱۰۰ دلار به آدرس مشخص واریز کنید\n4. **شرکت**: پس از تایید، در قرعه‌کشی شرکت کنید\n5. **برنده**: در صورت برنده شدن، جایزه دریافت کنید\n\n💰 **مبلغ واریز:**\n- مبلغ ثابت: ۱۰۰ دلار\n- آدرس واریز: TV61aTh98MGqmteYzda5AaBzdXgGqreG6A\n- شبکه: TRC20\n\n🎁 **جوایز:**\n- جایزه اول: ۵۰٪ از کل مبلغ\n- جایزه دوم: ۳۰٪ از کل مبلغ\n- جایزه سوم: ۲۰٪ از کل مبلغ\n\n🔗 **سیستم رفرال:**\n- هر کاربر کد رفرال اختصاصی دارد\n- ۵٪ تخفیف برای شما و دوستتان\n\n⚠️ **قوانین:**\n- هر کاربر فقط یک بار در هر قرعه‌کشی شرکت می‌کند\n- برندگان قبلی شانس کمتری در قرعه‌کشی‌های بعدی دارند\n- تمامی تراکنش‌ها به صورت خودکار تایید می‌شوند\n\n📞 **پشتیبانی:**\nبرای سوالات و مشکلات با مدیریت تماس بگیرید.",
             
             'language_selector': "🌐 **تغییر زبان**\n\nزبان فعلی: {}",
             
@@ -207,6 +213,10 @@ class LanguageManager:
             'poll_message': "📊 **نظرسنجی**\n\n{}",
             'poll_option_1': "✅ بله",
             'poll_option_2': "❌ خیر",
+            'poll_thanks': "✅ از رای شما متشکریم!\n\nشما انتخاب کردید: {}\n📊 نظر شما برای ما مهم است!",
+            'poll_result_admin': "📊 **نتیجه نظرسنجی**\n\n👤 کاربر: {}\n📝 سوال: {}\n✅ پاسخ: {}\n🕐 زمان: {}",
+            'poll_yes': "بله ✅",
+            'poll_no': "خیر ❌",
 
             'instagram_downloader': "📸 **دانلودر اینستاگرام**\n\nلینک پست یا ریل اینستاگرام را ارسال کنید تا آن را دانلود کنم!\n\n📤 لینک را ارسال کنید:",
             'invoice_maker_text': "🧾 **فاکتور ساز**\n\nبرای ساخت فاکتور، روی دکمه زیر کلیک کنید:\n\n✨ سریع و ساده!\n\n📌 پس از اتمام، روی **بستن** کلیک کنید تا برگردید.",
@@ -263,11 +273,12 @@ class LanguageManager:
             'no_winner': "❌ Hiç ödülünüz yok!\n\nGelecek piyangolara katılın.",
             'next_lottery': "🎰 Sonraki Piyango",
             
-            'referral_text': "🔗 **UTYOB Referans Sistemi**\n\n👤 Siz: {}\n📊 Davetler: {}\n💰 Ödül: ${}\n\n🔑 **Referans kodunuz:**\n`{}`\n\n🔗 **Referans linki:**\n{}\n\n💰 **Referans ödülü:**\n• Her davet için %5 yatırım\n• Doğrulama sonrası anında ödül\n\n📤 Bu linki arkadaşlarınızla paylaşın!",
+            'referral_text': "🔗 **UTYOB Referans Sistemi**\n\n👤 Siz: {}\n📊 Davetler: {}\n💰 Ödül: ${}\n\n🔑 **Referans kodunuz:**\n`{}`\n\n🔗 **Referans linki:**\n{}\n\n💰 **Referans ödülü:**\n• Sizin için %5 indirim\n• Arkadaşınız için %5 indirim\n• Doğrulama sonrası anında ödül\n\n📤 Bu linki arkadaşlarınızla paylaşın!",
             'share': "📤 Paylaş",
-            'referral_joined': "🎉 **Yeni referans katıldı!**\n\n👤 {}\n🔗 Davet eden: {}\n💰 Ödülünüz: ${:.2f}",
+            'referral_joined': "🎉 **Yeni referans katıldı!**\n\n👤 {}\n🔗 Davet eden: {}\n💰 İkiniz de %5 indirim kazandınız!",
+            'referral_discount': "🎉 **%5 indirim kazandınız!**\n\n👤 {}\n🔗 Davet eden: {}\n💰 Aboneliğinize %5 indirim uygulandı!",
             
-            'guide_text': "📖 **UTYOB Bot Tam Rehber**\n\n🎯 **Nasıl çalışır:**\n1. **Kayıt**: /start ile kaydolun\n2. **Abonelik**: Katılmak için abonelik satın alın\n3. **Yatırım**: Belirtilen adrese 100$ gönderin\n4. **Katılım**: Doğrulama sonrası piyangoya katılın\n5. **Kazanç**: Kazanırsanız ödülü alın\n\n💰 **Yatırım tutarı:**\n- Sabit tutar: 100$\n- Yatırım adresi: TV61aTh98MGqmteYzda5AaBzdXgGqreG6A\n- Ağ: TRC20\n\n🎁 **Ödüller:**\n- 1. ödül: Toplamın %50'si\n- 2. ödül: Toplamın %30'u\n- 3. ödül: Toplamın %20'si\n\n🔗 **Referans sistemi:**\n- Her kullanıcının benzersiz referans kodu vardır\n- Davet başına %5 ödül\n\n⚠️ **Kurallar:**\n- Her piyangoda kullanıcı başına bir katılım\n- Önceki kazananların şansı daha düşük\n- Tüm işlemler otomatik doğrulanır\n\n📞 **Destek:**\nSorularınız için yöneticiye başvurun.",
+            'guide_text': "📖 **UTYOB Bot Tam Rehber**\n\n🎯 **Nasıl çalışır:**\n1. **Kayıt**: /start ile kaydolun\n2. **Abonelik**: Katılmak için abonelik satın alın\n3. **Yatırım**: Belirtilen adrese 100$ gönderin\n4. **Katılım**: Doğrulama sonrası piyangoya katılın\n5. **Kazanç**: Kazanırsanız ödülü alın\n\n💰 **Yatırım tutarı:**\n- Sabit tutar: 100$\n- Yatırım adresi: TV61aTh98MGqmteYzda5AaBzdXgGqreG6A\n- Ağ: TRC20\n\n🎁 **Ödüller:**\n- 1. ödül: Toplamın %50'si\n- 2. ödül: Toplamın %30'u\n- 3. ödül: Toplamın %20'si\n\n🔗 **Referans sistemi:**\n- Her kullanıcının benzersiz referans kodu vardır\n- Sizin ve arkadaşınız için %5 indirim\n\n⚠️ **Kurallar:**\n- Her piyangoda kullanıcı başına bir katılım\n- Önceki kazananların şansı daha düşük\n- Tüm işlemler otomatik doğrulanır\n\n📞 **Destek:**\nSorularınız için yöneticiye başvurun.",
             
             'language_selector': "🌐 **Dil Değiştir**\n\nMevcut dil: {}",
             
@@ -287,6 +298,10 @@ class LanguageManager:
             'poll_message': "📊 **Anket**\n\n{}",
             'poll_option_1': "✅ Evet",
             'poll_option_2': "❌ Hayır",
+            'poll_thanks': "✅ Oyunuz için teşekkürler!\n\nSeçiminiz: {}\n📊 Görüşünüz bizim için önemli!",
+            'poll_result_admin': "📊 **Anket Sonucu**\n\n👤 Kullanıcı: {}\n📝 Soru: {}\n✅ Cevap: {}\n🕐 Zaman: {}",
+            'poll_yes': "Evet ✅",
+            'poll_no': "Hayır ❌",
 
             'instagram_downloader': "📸 **Instagram İndirici**\n\nBir Instagram gönderisi/reel URL'si gönderin, sizin için indireyim!\n\n📤 Linki gönder:",
             'invoice_maker_text': "🧾 **Fatura Oluşturucu**\n\nFatura oluşturmak için aşağıdaki düğmeye tıklayın:\n\n✨ Hızlı ve kolay!\n\n📌 Bitirdikten sonra **Kapat**'a tıklayarak geri dönün.",
@@ -451,6 +466,16 @@ class DatabaseManager:
             )
         ''')
         
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS poll_responses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                poll_question TEXT,
+                answer TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_referral ON users(referral_code)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_subscription ON users(has_subscription, subscription_end)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id)')
@@ -462,6 +487,7 @@ class DatabaseManager:
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_created ON users(created_at)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_subscription_end ON users(subscription_end)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_downloads_user ON downloads(user_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_poll_user ON poll_responses(user_id)')
         
         conn.commit()
         
@@ -975,13 +1001,15 @@ class UserManager:
                 referral_code = UserManager._generate_referral_code(user_id)
                 
                 if referred_by:
+                    # ثبت کاربر با رفرال
                     db.execute(user_id,
                         """INSERT INTO users 
                            (user_id, username, first_name, last_name, referral_code, referred_by, language) 
                            VALUES (?, ?, ?, ?, ?, ?, 'en')""",
                         (user_id, username, first_name, last_name, referral_code, referred_by)
                     )
-                    UserManager._add_referral_reward(referred_by, user_id, first_name or username or str(user_id))
+                    # پاداش رفرال برای هر دو طرف
+                    UserManager._add_referral_rewards(referred_by, user_id, first_name or username or str(user_id))
                 else:
                     db.execute(user_id,
                         """INSERT INTO users 
@@ -996,9 +1024,12 @@ class UserManager:
             return False
             
     @staticmethod
-    def _add_referral_reward(referrer_id, new_user_id, new_user_name):
+    def _add_referral_rewards(referrer_id, new_user_id, new_user_name):
+        """اضافه کردن پاداش رفرال به دعوت کننده و دعوت شونده"""
         try:
             reward_amount = 5.0
+            
+            # پاداش به دعوت کننده
             db.execute(referrer_id,
                 "UPDATE users SET referral_rewards = referral_rewards + ? WHERE user_id = ?",
                 (reward_amount, referrer_id)
@@ -1007,17 +1038,32 @@ class UserManager:
                 """INSERT INTO transactions 
                    (user_id, from_address, to_address, amount, tx_id, status, verified_at) 
                    VALUES (?, 'referral', 'reward', ?, ?, 'verified', CURRENT_TIMESTAMP)""",
-                (referrer_id, reward_amount, f"REFERRAL_{new_user_id}_{int(time.time())}")
+                (referrer_id, reward_amount, f"REFERRAL_REWARD_{new_user_id}_{int(time.time())}")
             )
-            logger.info(f"Referral reward added: {reward_amount} for user {referrer_id} from {new_user_id}")
+            
+            # پاداش به دعوت شونده (تخفیف ۵٪)
+            db.execute(new_user_id,
+                "UPDATE users SET referral_rewards = referral_rewards + ? WHERE user_id = ?",
+                (reward_amount, new_user_id)
+            )
+            db.execute(new_user_id,
+                """INSERT INTO transactions 
+                   (user_id, from_address, to_address, amount, tx_id, status, verified_at) 
+                   VALUES (?, 'referral', 'discount', ?, ?, 'verified', CURRENT_TIMESTAMP)""",
+                (new_user_id, reward_amount, f"REFERRAL_DISCOUNT_{referrer_id}_{int(time.time())}")
+            )
+            
+            logger.info(f"Referral rewards added: {reward_amount} for user {referrer_id} and {new_user_id}")
+            
         except Exception as e:
-            logger.error(f"Error adding referral reward: {e}")
+            logger.error(f"Error adding referral rewards: {e}")
             
     @staticmethod
     def _generate_referral_code(user_id):
         import hashlib
         base = f"UTYOB_{user_id}_{time.time()}_{random.randint(1000, 9999)}"
         hash_obj = hashlib.sha256(base.encode())
+        # حذف خط تیره برای لینک تمیز
         return hash_obj.hexdigest()[:10].upper()
         
     @staticmethod
@@ -1147,6 +1193,10 @@ class UTYOBot:
         app.add_handler(CallbackQueryHandler(self.admin_stats_callback, pattern="^admin_stats$"))
         app.add_handler(CallbackQueryHandler(self.admin_user_list_callback, pattern="^admin_user_list$"))
         app.add_handler(CallbackQueryHandler(self.admin_reset_user_callback, pattern="^admin_reset_user$"))
+        
+        # کالبک نظرسنجی
+        app.add_handler(CallbackQueryHandler(self.poll_response_callback, pattern="^poll_yes$"))
+        app.add_handler(CallbackQueryHandler(self.poll_response_callback, pattern="^poll_no$"))
         
         app.add_handler(CallbackQueryHandler(self.admin_verify_approve_callback, pattern="^admin_verify_approve_"))
         app.add_handler(CallbackQueryHandler(self.admin_verify_reject_callback, pattern="^admin_verify_reject_"))
@@ -1344,13 +1394,22 @@ class UTYOBot:
         
         if referred_by:
             try:
+                # پیام به دعوت کننده
                 referrer_lang = self._get_user_language(referred_by)
                 await self.application.bot.send_message(
                     chat_id=referred_by,
                     text=LanguageManager.get_text(referrer_lang, 'referral_joined',
                         user.first_name or user.username or str(user.id),
-                        str(user.id),
-                        5.0
+                        str(user.id)
+                    ),
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                
+                # پیام به دعوت شونده
+                await update.message.reply_text(
+                    LanguageManager.get_text(lang, 'referral_discount',
+                        user.first_name or user.username or str(user.id),
+                        str(referred_by)
                     ),
                     parse_mode=ParseMode.MARKDOWN
                 )
@@ -1579,6 +1638,58 @@ class UTYOBot:
             )
 
     # ============================================================
+    # کالبک‌های نظرسنجی
+    # ============================================================
+    
+    async def poll_response_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        lang = self._get_user_language(user_id)
+        
+        # دریافت پاسخ
+        answer = query.data  # poll_yes یا poll_no
+        
+        # دریافت سوال نظرسنجی از context
+        poll_question = context.user_data.get('poll_question', 'Unknown question')
+        
+        # ترجمه پاسخ به زبان کاربر
+        if answer == 'poll_yes':
+            display_answer = LanguageManager.get_text(lang, 'poll_yes')
+        else:
+            display_answer = LanguageManager.get_text(lang, 'poll_no')
+        
+        # ذخیره در دیتابیس
+        db.execute(user_id,
+            "INSERT INTO poll_responses (user_id, poll_question, answer) VALUES (?, ?, ?)",
+            (user_id, poll_question, display_answer)
+        )
+        
+        # پیام تشکر به کاربر
+        await query.edit_message_text(
+            LanguageManager.get_text(lang, 'poll_thanks', display_answer),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        
+        # ارسال نتیجه به ادمین‌ها
+        user = user_manager.get_user(user_id)
+        user_name = user['first_name'] or user['username'] or str(user_id)
+        
+        for admin_id in ADMIN_IDS:
+            try:
+                admin_lang = self._get_user_language(admin_id)
+                await self.application.bot.send_message(
+                    chat_id=admin_id,
+                    text=LanguageManager.get_text(admin_lang, 'poll_result_admin',
+                        user_name, poll_question, display_answer, datetime.now().strftime('%Y-%m-%d %H:%M')
+                    ),
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            except Exception as e:
+                logger.error(f"Error sending poll result to admin {admin_id}: {e}")
+
+    # ============================================================
     # کالبک‌های دانلودر و فاکتور ساز
     # ============================================================
     
@@ -1610,7 +1721,6 @@ class UTYOBot:
         user_id = query.from_user.id
         lang = self._get_user_language(user_id)
         
-        # دکمه فاکتور ساز با Web App و دکمه بستن
         keyboard = [
             [InlineKeyboardButton(
                 LanguageManager.get_text(lang, 'open_invoice_btn'),
@@ -2693,8 +2803,9 @@ class UTYOBot:
         
         lang = self._get_user_language(user_id)
         referral_code = user['referral_code']
-        bot_username = "UTYOB_Bot"
-        referral_link = f"https://t.me/{bot_username}?start=ref_{referral_code}"
+        bot = await self.application.bot.get_me()
+        # لینک رفرال بدون خط تیره و با فرمت استاندارد
+        referral_link = f"https://t.me/{bot.username}?start=ref_{referral_code}"
         
         referred_count = len(db.execute_global(
             "SELECT user_id FROM users WHERE referred_by = ?",
@@ -2824,6 +2935,8 @@ class UTYOBot:
             return
         
         elif admin_action == 'poll':
+            # ذخیره سوال نظرسنجی برای استفاده در کالبک
+            context.user_data['poll_question'] = text
             await self._send_poll(update, text, context)
             return
         
