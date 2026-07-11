@@ -16,13 +16,13 @@ const io = socketIo(server, {
 });
 
 app.use(cors());
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use(express.json({ limit: '500mb' }));
+app.use(express.urlencoded({ extended: true, limit: '500mb' }));
 app.use(express.static('public'));
 app.use('/uploads', express.static('uploads'));
 
 // ============================================
-// 📁 ایجاد پوشه‌ها
+// 📁 پوشه‌ها
 // ============================================
 const dirs = ['./uploads', './uploads/posts', './uploads/stories', './public'];
 dirs.forEach(dir => {
@@ -32,39 +32,18 @@ dirs.forEach(dir => {
 // ============================================
 // 🔐 رمزنگاری
 // ============================================
-const SECRET_KEY = process.env.SECRET_KEY || 'super-secret-key-2024';
-const USER_KEYS = new Map();
-
-function generateUserKey(userId) {
-    return crypto.createHash('sha256').update(SECRET_KEY + userId).digest('hex');
-}
-
-function encryptMessage(message, userId) {
-    const key = generateUserKey(userId);
-    const cipher = crypto.createCipher('aes-256-cbc', key);
-    let encrypted = cipher.update(message, 'utf8', 'hex');
-    encrypted += cipher.final('hex');
-    return encrypted;
-}
-
-function decryptMessage(encrypted, userId) {
-    try {
-        const key = generateUserKey(userId);
-        const decipher = crypto.createDecipher('aes-256-cbc', key);
-        let decrypted = decipher.update(encrypted, 'hex', 'utf8');
-        decrypted += decipher.final('utf8');
-        return decrypted;
-    } catch (error) {
-        return '[پیام رمزنگاری شده]';
-    }
-}
+const SECRET_KEY = crypto.randomBytes(32).toString('hex');
 
 function hashPassword(password) {
-    return crypto.createHash('sha256').update(password + SECRET_KEY).digest('hex');
+    return crypto.createHash('sha512').update(password + SECRET_KEY).digest('hex');
 }
 
-function log(message) {
-    console.log('[' + new Date().toISOString() + '] ' + message);
+function generateToken() {
+    return crypto.randomBytes(64).toString('hex');
+}
+
+function log(msg) {
+    console.log('[' + new Date().toISOString() + '] ' + msg);
 }
 
 // ============================================
@@ -75,15 +54,20 @@ let posts = [];
 let stories = [];
 let chatMessages = {};
 let likes = {};
+let followers = {};
 let currentId = 1;
 let storyId = 1;
 let userSessions = new Map();
+const onlineUsers = {};
+
+const ADMIN_EMAIL = 'milad.yari1377m@gmail.com';
+const ADMIN_PASSWORD = 'M09145978426m';
 
 // ============================================
 // 📡 API
 // ============================================
 
-// احراز هویت
+// ثبت نام
 app.post('/api/auth/register', (req, res) => {
     const { username, email, password } = req.body;
     if (!username || !email || !password) {
@@ -94,7 +78,9 @@ app.post('/api/auth/register', (req, res) => {
     }
     const userId = 'user_' + (currentId++);
     users[email] = {
-        userId, username, email,
+        userId,
+        username,
+        email,
         password: hashPassword(password),
         bio: '',
         avatar: '',
@@ -105,28 +91,34 @@ app.post('/api/auth/register', (req, res) => {
         theme: 'light',
         createdAt: new Date().toISOString(),
         isOnline: false,
-        isAdmin: email === 'milad.yari1377m@gmail.com',
+        isAdmin: email === ADMIN_EMAIL,
         isBanned: false,
         lastSeen: new Date().toISOString()
     };
-    const token = crypto.randomBytes(32).toString('hex');
+    const token = generateToken();
     userSessions.set(token, userId);
-    log(`User registered: ${username} (${email}) - Admin: ${users[email].isAdmin}`);
-    res.json({ 
-        success: true, 
-        token, 
-        user: { 
-            userId, 
-            username, 
-            email, 
-            bio: '', 
-            language: 'fa', 
-            theme: 'light',
-            isAdmin: users[email].isAdmin 
-        } 
+    log('User registered: ' + username + ' (' + email + ')');
+    res.json({
+        success: true,
+        token,
+        user: {
+            userId,
+            username,
+            email,
+            bio: '',
+            avatar: '',
+            followers: 0,
+            following: 0,
+            postsCount: 0,
+            isAdmin: users[email].isAdmin,
+            isBanned: false,
+            language: 'fa',
+            theme: 'light'
+        }
     });
 });
 
+// ورود
 app.post('/api/auth/login', (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) {
@@ -139,30 +131,31 @@ app.post('/api/auth/login', (req, res) => {
     if (user.isBanned) {
         return res.status(403).json({ error: 'این کاربر مسدود شده است' });
     }
-    const token = crypto.randomBytes(32).toString('hex');
+    const token = generateToken();
     userSessions.set(token, user.userId);
     user.isOnline = true;
     user.lastSeen = new Date().toISOString();
-    res.json({ 
-        success: true, 
-        token, 
+    res.json({
+        success: true,
+        token,
         user: {
-            userId: user.userId, 
-            username: user.username, 
+            userId: user.userId,
+            username: user.username,
             email: user.email,
-            bio: user.bio, 
-            avatar: user.avatar, 
+            bio: user.bio,
+            avatar: user.avatar,
             followers: user.followers,
-            following: user.following, 
+            following: user.following,
             postsCount: user.postsCount,
-            language: user.language || 'fa', 
-            theme: user.theme || 'light',
-            isAdmin: user.isAdmin || false, 
-            isBanned: user.isBanned || false
+            isAdmin: user.isAdmin || false,
+            isBanned: user.isBanned || false,
+            language: user.language || 'fa',
+            theme: user.theme || 'light'
         }
     });
 });
 
+// خروج
 app.post('/api/auth/logout', (req, res) => {
     const { token } = req.body;
     if (token) {
@@ -176,6 +169,7 @@ app.post('/api/auth/logout', (req, res) => {
     res.json({ success: true });
 });
 
+// اطلاعات کاربر
 app.get('/api/auth/me', (req, res) => {
     const token = req.headers.authorization?.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'Unauthorized' });
@@ -185,22 +179,22 @@ app.get('/api/auth/me', (req, res) => {
     if (!user) return res.status(404).json({ error: 'User not found' });
     if (user.isBanned) return res.status(403).json({ error: 'User is banned' });
     res.json({
-        userId: user.userId, 
-        username: user.username, 
+        userId: user.userId,
+        username: user.username,
         email: user.email,
-        bio: user.bio, 
-        avatar: user.avatar, 
+        bio: user.bio,
+        avatar: user.avatar,
         followers: user.followers,
-        following: user.following, 
+        following: user.following,
         postsCount: user.postsCount,
-        language: user.language || 'fa', 
-        theme: user.theme || 'light',
-        isAdmin: user.isAdmin || false, 
-        isBanned: user.isBanned || false
+        isAdmin: user.isAdmin || false,
+        isBanned: user.isBanned || false,
+        language: user.language || 'fa',
+        theme: user.theme || 'light'
     });
 });
 
-// ادمین
+// ===== ادمین =====
 app.post('/api/admin/verify', (req, res) => {
     const token = req.headers.authorization?.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'Unauthorized' });
@@ -218,22 +212,22 @@ app.get('/api/admin/users', (req, res) => {
     if (!userId) return res.status(401).json({ error: 'Invalid token' });
     const admin = Object.values(users).find(u => u.userId === userId);
     if (!admin || !admin.isAdmin) return res.status(403).json({ error: 'Admin access required' });
-    const userList = Object.values(users).map(u => ({
-        userId: u.userId, 
-        username: u.username, 
-        email: u.email, 
+    const list = Object.values(users).map(u => ({
+        userId: u.userId,
+        username: u.username,
+        email: u.email,
         bio: u.bio,
-        avatar: u.avatar, 
-        followers: u.followers, 
+        avatar: u.avatar,
+        followers: u.followers,
         following: u.following,
-        postsCount: u.postsCount, 
+        postsCount: u.postsCount,
         isAdmin: u.isAdmin || false,
-        isBanned: u.isBanned || false, 
+        isBanned: u.isBanned || false,
         isOnline: u.isOnline || false,
-        createdAt: u.createdAt, 
+        createdAt: u.createdAt,
         lastSeen: u.lastSeen
     }));
-    res.json(userList);
+    res.json(list);
 });
 
 app.put('/api/admin/users/:userId/ban', (req, res) => {
@@ -249,7 +243,6 @@ app.put('/api/admin/users/:userId/ban', (req, res) => {
     if (!target) return res.status(404).json({ error: 'User not found' });
     if (target.isAdmin) return res.status(403).json({ error: 'Cannot ban admin' });
     target.isBanned = banned;
-    log(`User ${target.username} ${banned ? 'banned' : 'unbanned'} by admin ${admin.username}`);
     res.json({ success: true, isBanned: banned });
 });
 
@@ -274,7 +267,6 @@ app.delete('/api/admin/posts/:postId', (req, res) => {
     const index = posts.findIndex(p => p.postId === postId);
     if (index === -1) return res.status(404).json({ error: 'Post not found' });
     posts.splice(index, 1);
-    log(`Post ${postId} deleted by admin ${admin.username}`);
     res.json({ success: true });
 });
 
@@ -288,7 +280,6 @@ app.post('/api/admin/broadcast', (req, res) => {
     const { message } = req.body;
     if (!message) return res.status(400).json({ error: 'Message required' });
     io.emit('broadcast', { message, from: admin.username, timestamp: new Date().toISOString() });
-    log(`Broadcast from admin ${admin.username}: ${message.substring(0, 50)}...`);
     res.json({ success: true, message });
 });
 
@@ -309,20 +300,20 @@ app.get('/api/admin/stats', (req, res) => {
     });
 });
 
-// کاربران
+// ===== کاربران =====
 app.get('/api/users', (req, res) => {
-    const userList = Object.values(users).map(u => ({
-        userId: u.userId, 
-        username: u.username, 
+    const list = Object.values(users).map(u => ({
+        userId: u.userId,
+        username: u.username,
         avatar: u.avatar,
-        bio: u.bio, 
-        followers: u.followers, 
+        bio: u.bio,
+        followers: u.followers,
         following: u.following,
-        isOnline: u.isOnline || false, 
+        isOnline: u.isOnline || false,
         isBanned: u.isBanned || false,
         lastSeen: u.lastSeen
     }));
-    res.json(userList);
+    res.json(list);
 });
 
 app.put('/api/users/:userId/profile', (req, res) => {
@@ -349,7 +340,7 @@ app.post('/api/users/:userId/follow', (req, res) => {
     res.json({ success: true, followers: target.followers });
 });
 
-// پست‌ها
+// ===== پست‌ها =====
 const storage = multer.diskStorage({
     destination: './uploads/posts/',
     filename: (req, file, cb) => {
@@ -359,9 +350,9 @@ const storage = multer.diskStorage({
 
 const upload = multer({
     storage,
-    limits: { fileSize: 100 * 1024 * 1024 },
+    limits: { fileSize: 200 * 1024 * 1024 },
     fileFilter: (req, file, cb) => {
-        const allowed = ['image/jpeg', 'image/png', 'image/gif', 'video/mp4', 'video/webm'];
+        const allowed = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'video/mp4', 'video/webm'];
         cb(null, allowed.includes(file.mimetype));
     }
 });
@@ -389,22 +380,22 @@ app.post('/api/posts', upload.single('file'), (req, res) => {
     const isVideo = file.mimetype.startsWith('video/');
     const postId = 'post_' + (currentId++);
     const newPost = {
-        postId, 
-        userId, 
+        postId,
+        userId,
         username: username || user.username,
         image: '/uploads/posts/' + file.filename,
         caption: caption || '',
         hashtags: hashtags ? hashtags.split(',').map(h => h.trim()) : [],
-        likes: 0, 
-        comments: [], 
-        shares: 0, 
-        views: 0, 
+        likes: 0,
+        comments: [],
+        shares: 0,
+        views: 0,
         isVideo,
         createdAt: new Date().toISOString()
     };
     posts.unshift(newPost);
     user.postsCount = (user.postsCount || 0) + 1;
-    log(`Post created: ${postId} by ${username}`);
+    log('Post created: ' + postId + ' by ' + username);
     res.status(201).json(newPost);
 });
 
@@ -415,15 +406,15 @@ app.put('/api/posts/:postId/like', (req, res) => {
     if (!post) return res.status(404).json({ error: 'Post not found' });
     const user = Object.values(users).find(u => u.userId === userId);
     if (!user || user.isBanned) return res.status(403).json({ error: 'User is banned' });
-    const likeKey = postId + '_' + userId;
-    if (likes[likeKey]) {
-        likes[likeKey] = false;
+    const key = postId + '_' + userId;
+    if (likes[key]) {
+        likes[key] = false;
         post.likes -= 1;
     } else {
-        likes[likeKey] = true;
+        likes[key] = true;
         post.likes += 1;
     }
-    res.json({ liked: !!likes[likeKey], likes: post.likes });
+    res.json({ liked: !!likes[key], likes: post.likes });
 });
 
 app.post('/api/posts/:postId/comment', (req, res) => {
@@ -435,8 +426,8 @@ app.post('/api/posts/:postId/comment', (req, res) => {
     if (!user || user.isBanned) return res.status(403).json({ error: 'User is banned' });
     const comment = {
         commentId: 'cmt_' + (currentId++),
-        userId, 
-        username: username || 'کاربر', 
+        userId,
+        username: username || 'کاربر',
         text,
         createdAt: new Date().toISOString()
     };
@@ -444,7 +435,7 @@ app.post('/api/posts/:postId/comment', (req, res) => {
     res.json({ success: true, comment });
 });
 
-// استوری‌ها
+// ===== استوری =====
 const storyStorage = multer.diskStorage({
     destination: './uploads/stories/',
     filename: (req, file, cb) => {
@@ -476,11 +467,11 @@ app.post('/api/stories', storyUpload.single('file'), (req, res) => {
     const isVideo = file.mimetype.startsWith('video/');
     const newStory = {
         storyId: 'story_' + (storyId++),
-        userId, 
+        userId,
         username: username || 'کاربر',
         image: '/uploads/stories/' + file.filename,
-        isVideo, 
-        views: 0, 
+        isVideo,
+        views: 0,
         viewers: [],
         createdAt: new Date().toISOString()
     };
@@ -502,10 +493,9 @@ app.post('/api/stories/:storyId/view', (req, res) => {
 // ============================================
 // 💬 WebSocket چت
 // ============================================
-const onlineUsers = {};
 
 io.on('connection', (socket) => {
-    log('🔌 کاربر متصل شد: ' + socket.id);
+    log('Socket connected: ' + socket.id);
 
     socket.on('register', (data) => {
         const { userId, username } = data;
@@ -515,7 +505,7 @@ io.on('connection', (socket) => {
         const user = Object.values(users).find(u => u.userId === userId);
         if (user) { user.isOnline = true; user.lastSeen = new Date().toISOString(); }
         io.emit('users-online', Object.keys(onlineUsers));
-        log('✅ ' + username + ' (' + userId + ') آنلاین شد');
+        log('User online: ' + username);
     });
 
     socket.on('join-room', (data) => {
@@ -523,41 +513,35 @@ io.on('connection', (socket) => {
         socket.join(roomId);
         socket.roomId = roomId;
         if (chatMessages[roomId]) {
-            const messages = chatMessages[roomId].slice(-50);
-            const decrypted = messages.map(msg => ({
-                ...msg,
-                message: decryptMessage(msg.message, msg.userId)
-            }));
-            socket.emit('history', decrypted);
+            socket.emit('history', chatMessages[roomId].slice(-50));
         }
-        log('👤 کاربر ' + userId + ' وارد اتاق ' + roomId + ' شد');
+        log('User joined room: ' + userId + ' -> ' + roomId);
     });
 
     socket.on('send-message', (data) => {
         const { roomId, userId, username, message } = data;
         const user = Object.values(users).find(u => u.userId === userId);
         if (user && user.isBanned) {
-            socket.emit('error', { message: 'You are banned from chatting' });
+            socket.emit('error', { message: 'You are banned' });
             return;
         }
-        const encrypted = encryptMessage(message, userId);
         const msgData = {
             messageId: 'msg_' + (currentId++),
-            userId, 
-            username, 
-            message: encrypted,
+            userId,
+            username,
+            message: message,
             timestamp: new Date().toISOString()
         };
         if (!chatMessages[roomId]) chatMessages[roomId] = [];
         chatMessages[roomId].push(msgData);
-        io.to(roomId).emit('receive-message', { ...msgData, message });
-        log('💬 ' + username + ' -> ' + roomId + ': ' + message.substring(0, 30) + '...');
+        io.to(roomId).emit('receive-message', msgData);
+        log('Message: ' + username + ' -> ' + roomId);
     });
 
     socket.on('leave-room', (data) => {
         const { roomId, userId } = data;
         socket.leave(roomId);
-        log('👋 کاربر ' + userId + ' از اتاق ' + roomId + ' خارج شد');
+        log('User left room: ' + userId);
     });
 
     socket.on('disconnect', () => {
@@ -566,7 +550,7 @@ io.on('connection', (socket) => {
             const user = Object.values(users).find(u => u.userId === socket.userId);
             if (user) { user.isOnline = false; user.lastSeen = new Date().toISOString(); }
             io.emit('users-online', Object.keys(onlineUsers));
-            log('❌ کاربر ' + socket.userId + ' قطع شد');
+            log('User disconnected: ' + socket.userId);
         }
     });
 });
@@ -579,29 +563,27 @@ app.get('/', (req, res) => {
 <html lang="fa" dir="rtl">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>سوشال مدیا</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         :root { --bg: #fafafa; --text: #262626; --card: #ffffff; --border: #dbdbdb; --primary: #0095f6; --shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        [data-theme="dark"] { --bg: #121212; --text: #ffffff; --card: #1e1e1e; --border: #2c2c2c; --shadow: 0 2px 10px rgba(255,255,255,0.05); }
-        body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', Tahoma, sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; transition: all 0.3s; }
+        [data-theme="dark"] { --bg: #121212; --text: #ffffff; --card: #1e1e1e; --border: #2c2c2c; }
+        body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', Tahoma, sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; transition: 0.3s; }
         ::-webkit-scrollbar { width: 4px; }
         ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 
         .header { background: var(--card); border-bottom: 1px solid var(--border); padding: 12px 16px; display: flex; align-items: center; gap: 15px; flex-shrink: 0; z-index: 100; }
-        .menu-icon { font-size: 24px; cursor: pointer; color: var(--text); transition: 0.3s; }
-        .menu-icon:hover { transform: scale(1.05); }
+        .menu-icon { font-size: 24px; cursor: pointer; color: var(--text); }
         .logo { font-size: 20px; font-weight: 700; color: var(--text); display: flex; align-items: center; gap: 8px; }
         .logo i { color: var(--primary); }
-        .search-box { flex: 1; max-width: 400px; background: var(--bg); padding: 8px 16px; border-radius: 24px; display: flex; align-items: center; gap: 10px; border: 1px solid var(--border); transition: 0.3s; }
-        .search-box:focus-within { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(0,149,246,0.2); }
+        .search-box { flex: 1; max-width: 400px; background: var(--bg); padding: 8px 16px; border-radius: 24px; display: flex; align-items: center; gap: 10px; border: 1px solid var(--border); }
         .search-box input { border: none; background: transparent; outline: none; width: 100%; font-size: 14px; color: var(--text); }
         .search-box input::placeholder { color: #888; }
         .header-right { display: flex; gap: 18px; font-size: 22px; color: var(--text); }
         .header-right i { cursor: pointer; transition: 0.3s; }
-        .header-right i:hover { color: var(--primary); transform: scale(1.05); }
+        .header-right i:hover { color: var(--primary); }
 
         .stories-section { background: var(--card); padding: 12px 16px; border-bottom: 1px solid var(--border); overflow-x: auto; flex-shrink: 0; }
         .stories-container { display: flex; gap: 16px; }
@@ -611,23 +593,22 @@ app.get('/', (req, res) => {
         .story-avatar img { width: 100%; height: 100%; border-radius: 50%; border: 2px solid var(--card); object-fit: cover; }
         .story-avatar.add-story { background: var(--bg); border: 2px dashed var(--border); padding: 0; display: flex; align-items: center; justify-content: center; }
         .story-avatar.add-story i { font-size: 28px; color: var(--primary); }
-        .story-username { font-size: 11px; color: var(--text); max-width: 64px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; }
+        .story-username { font-size: 11px; color: var(--text); max-width: 64px; overflow: hidden; white-space: nowrap; text-align: center; }
 
         .gallery-wrapper { flex: 1; overflow-y: auto; padding-bottom: 70px; }
         .gallery { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 4px; max-width: 935px; margin: 0 auto; }
         .gallery-item { background: var(--card); overflow: hidden; border: 1px solid var(--border); cursor: pointer; position: relative; border-radius: 4px; transition: 0.3s; }
         .gallery-item:hover { transform: scale(1.01); box-shadow: var(--shadow); }
         .gallery-item .image-container { width: 100%; aspect-ratio: 1; overflow: hidden; background: #ddd; }
-        .gallery-item .image-container img { width: 100%; height: 100%; object-fit: cover; transition: 0.3s; }
-        .gallery-item:hover .image-container img { transform: scale(1.02); }
+        .gallery-item .image-container img { width: 100%; height: 100%; object-fit: cover; }
         .gallery-item .explore-post-actions { display: flex; position: absolute; bottom: 0; left: 0; right: 0; background: linear-gradient(transparent, rgba(0,0,0,0.7)); padding: 12px 8px 8px; justify-content: space-around; color: white; opacity: 0; transition: 0.3s; }
         .gallery-item:hover .explore-post-actions { opacity: 1; }
-        .gallery-item .explore-post-actions .action-btn { display: flex; align-items: center; gap: 4px; color: white; font-size: 13px; cursor: pointer; padding: 4px 10px; border-radius: 6px; border: none; background: transparent; transition: 0.3s; font-family: inherit; }
+        .gallery-item .explore-post-actions .action-btn { display: flex; align-items: center; gap: 4px; color: white; font-size: 13px; cursor: pointer; padding: 4px 10px; border-radius: 6px; border: none; background: transparent; font-family: inherit; transition: 0.3s; }
         .gallery-item .explore-post-actions .action-btn:hover { background: rgba(255,255,255,0.15); transform: scale(1.05); }
         .gallery-item .explore-post-actions .action-btn.liked i { color: #ed4956; }
 
         .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: var(--card); border-top: 1px solid var(--border); display: flex; justify-content: space-around; padding: 8px 0 12px; z-index: 100; height: 65px; }
-        .bottom-nav button { background: transparent; border: none; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 10px; color: #888; padding: 4px 16px; border-radius: 30px; transition: 0.3s; font-family: inherit; }
+        .bottom-nav button { background: transparent; border: none; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 10px; color: #888; padding: 4px 16px; border-radius: 30px; font-family: inherit; transition: 0.3s; }
         .bottom-nav button i { font-size: 24px; color: #888; transition: 0.3s; }
         .bottom-nav button:hover { background: var(--bg); }
         .bottom-nav button.active i { color: var(--primary); }
@@ -639,13 +620,12 @@ app.get('/', (req, res) => {
         @keyframes modalIn { from { opacity: 0; transform: scale(0.95) translateY(20px); } to { opacity: 1; transform: scale(1) translateY(0); } }
         .modal-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
         .modal-header h3 { font-size: 16px; color: var(--text); }
-        .modal-header .close-modal { font-size: 24px; cursor: pointer; color: var(--text); background: none; border: none; transition: 0.3s; }
-        .modal-header .close-modal:hover { transform: rotate(90deg); }
+        .modal-header .close-modal { font-size: 24px; cursor: pointer; color: var(--text); background: none; border: none; }
         .modal-body { flex: 1; overflow-y: auto; padding: 16px 20px; }
         .modal-footer { padding: 12px 20px; border-top: 1px solid var(--border); display: flex; gap: 10px; flex-shrink: 0; }
-        .modal-footer input { flex: 1; padding: 10px 14px; border: 1px solid var(--border); border-radius: 24px; outline: none; font-size: 14px; background: var(--bg); color: var(--text); direction: rtl; transition: 0.3s; }
+        .modal-footer input { flex: 1; padding: 10px 14px; border: 1px solid var(--border); border-radius: 24px; outline: none; font-size: 14px; background: var(--bg); color: var(--text); direction: rtl; }
         .modal-footer input:focus { border-color: var(--primary); }
-        .modal-footer button { background: var(--primary); color: white; border: none; padding: 10px 24px; border-radius: 24px; font-weight: 600; cursor: pointer; transition: 0.3s; font-family: inherit; }
+        .modal-footer button { background: var(--primary); color: white; border: none; padding: 10px 24px; border-radius: 24px; font-weight: 600; cursor: pointer; font-family: inherit; transition: 0.3s; }
         .modal-footer button:hover { background: #0081d6; transform: scale(1.02); }
 
         .comment-item { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
@@ -661,8 +641,7 @@ app.get('/', (req, res) => {
         .profile-page.active { display: block; }
         .profile-header { position: fixed; top: 0; left: 0; right: 0; background: var(--card); padding: 12px 16px; border-bottom: 1px solid var(--border); z-index: 151; display: flex; justify-content: space-between; align-items: center; }
         .profile-header h2 { font-size: 18px; color: var(--text); }
-        .profile-header .close-profile { font-size: 24px; cursor: pointer; color: var(--text); background: none; border: none; transition: 0.3s; }
-        .profile-header .close-profile:hover { transform: rotate(90deg); }
+        .profile-header .close-profile { font-size: 24px; cursor: pointer; color: var(--text); background: none; border: none; }
         .profile-info { background: var(--card); padding: 20px; display: flex; flex-direction: column; align-items: center; border-bottom: 1px solid var(--border); }
         .profile-avatar-large { width: 100px; height: 100px; border-radius: 50%; overflow: hidden; border: 3px solid var(--border); margin-bottom: 10px; }
         .profile-avatar-large img { width: 100%; height: 100%; object-fit: cover; }
@@ -689,8 +668,7 @@ app.get('/', (req, res) => {
         .upload-page.active { display: block; }
         .upload-header { position: fixed; top: 0; left: 0; right: 0; background: var(--card); padding: 12px 16px; border-bottom: 1px solid var(--border); z-index: 151; display: flex; justify-content: space-between; align-items: center; }
         .upload-header h2 { font-size: 18px; color: var(--text); }
-        .upload-header .close-upload { font-size: 24px; cursor: pointer; color: var(--text); background: none; border: none; transition: 0.3s; }
-        .upload-header .close-upload:hover { transform: rotate(90deg); }
+        .upload-header .close-upload { font-size: 24px; cursor: pointer; color: var(--text); background: none; border: none; }
         .upload-container { background: var(--card); margin: 12px 16px; border-radius: 12px; padding: 30px 20px; border: 2px dashed var(--border); text-align: center; min-height: 320px; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: 0.3s; }
         .upload-container:hover { border-color: var(--primary); }
         .upload-container i { font-size: 60px; color: var(--primary); margin-bottom: 16px; }
@@ -704,11 +682,11 @@ app.get('/', (req, res) => {
         .upload-preview.active { display: block; }
         .upload-caption { display: none; margin-top: 12px; width: 100%; max-width: 320px; margin: 12px auto 0; }
         .upload-caption.active { display: block; }
-        .upload-caption textarea { width: 100%; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; outline: none; font-size: 14px; font-family: inherit; resize: vertical; min-height: 60px; background: var(--bg); color: var(--text); direction: rtl; transition: 0.3s; }
+        .upload-caption textarea { width: 100%; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; outline: none; font-size: 14px; font-family: inherit; resize: vertical; min-height: 60px; background: var(--bg); color: var(--text); direction: rtl; }
         .upload-caption textarea:focus { border-color: var(--primary); }
         .upload-hashtags { display: none; margin-top: 8px; width: 100%; max-width: 320px; margin: 8px auto 0; }
         .upload-hashtags.active { display: block; }
-        .upload-hashtags input { width: 100%; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; outline: none; font-size: 14px; background: var(--bg); color: var(--text); direction: rtl; transition: 0.3s; }
+        .upload-hashtags input { width: 100%; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; outline: none; font-size: 14px; background: var(--bg); color: var(--text); direction: rtl; }
         .upload-hashtags input:focus { border-color: var(--primary); }
         .upload-submit { display: none; margin-top: 12px; padding: 10px 32px; background: var(--primary); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 16px; transition: 0.3s; }
         .upload-submit.active { display: inline-block; }
@@ -718,8 +696,7 @@ app.get('/', (req, res) => {
         .chat-interface.active { display: flex; }
         .chat-header-bar { padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--card); flex-shrink: 0; }
         .chat-header-bar h3 { font-size: 16px; color: var(--text); }
-        .chat-header-bar .close-chat-btn { font-size: 24px; cursor: pointer; color: var(--text); background: none; border: none; transition: 0.3s; }
-        .chat-header-bar .close-chat-btn:hover { transform: rotate(90deg); }
+        .chat-header-bar .close-chat-btn { font-size: 24px; cursor: pointer; color: var(--text); background: none; border: none; }
         .chat-users-list { border-bottom: 1px solid var(--border); max-height: 140px; overflow-y: auto; flex-shrink: 0; background: var(--bg); }
         .chat-user { display: flex; align-items: center; gap: 12px; padding: 10px 16px; cursor: pointer; border-bottom: 1px solid var(--border); transition: 0.3s; }
         .chat-user:hover { background: var(--card); }
@@ -738,7 +715,7 @@ app.get('/', (req, res) => {
         .chat-message .msg-time { font-size: 10px; color: #888; margin-top: 4px; text-align: left; }
         .chat-message.own .msg-time { color: rgba(255,255,255,0.7); }
         .chat-input { display: flex; gap: 10px; padding: 10px 16px; border-top: 1px solid var(--border); background: var(--card); flex-shrink: 0; }
-        .chat-input input { flex: 1; padding: 10px 16px; border: 1px solid var(--border); border-radius: 24px; outline: none; font-size: 14px; background: var(--bg); color: var(--text); direction: rtl; transition: 0.3s; }
+        .chat-input input { flex: 1; padding: 10px 16px; border: 1px solid var(--border); border-radius: 24px; outline: none; font-size: 14px; background: var(--bg); color: var(--text); direction: rtl; }
         .chat-input input:focus { border-color: var(--primary); }
         .chat-input button { padding: 10px 20px; background: var(--primary); color: white; border: none; border-radius: 24px; cursor: pointer; font-size: 16px; transition: 0.3s; }
         .chat-input button:hover { background: #0081d6; transform: scale(1.02); }
@@ -751,8 +728,7 @@ app.get('/', (req, res) => {
         .side-menu.active { right: 0; }
         .side-menu .menu-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
         .side-menu .menu-header h3 { font-size: 18px; color: var(--text); }
-        .side-menu .menu-header .close-menu { font-size: 24px; cursor: pointer; color: var(--text); background: none; border: none; transition: 0.3s; }
-        .side-menu .menu-header .close-menu:hover { transform: rotate(90deg); }
+        .side-menu .menu-header .close-menu { font-size: 24px; cursor: pointer; color: var(--text); background: none; border: none; }
         .side-menu .menu-item { display: flex; align-items: center; gap: 15px; padding: 14px 20px; border-bottom: 1px solid var(--border); cursor: pointer; color: var(--text); transition: 0.3s; }
         .side-menu .menu-item:hover { background: var(--bg); }
         .side-menu .menu-item i { font-size: 20px; width: 28px; color: var(--text); }
@@ -764,8 +740,7 @@ app.get('/', (req, res) => {
         .settings-page.active { display: block; }
         .settings-header { position: fixed; top: 0; left: 0; right: 0; background: var(--card); padding: 12px 16px; border-bottom: 1px solid var(--border); z-index: 161; display: flex; justify-content: space-between; align-items: center; }
         .settings-header h2 { font-size: 18px; color: var(--text); }
-        .settings-header .close-settings { font-size: 24px; cursor: pointer; color: var(--text); background: none; border: none; transition: 0.3s; }
-        .settings-header .close-settings:hover { transform: rotate(90deg); }
+        .settings-header .close-settings { font-size: 24px; cursor: pointer; color: var(--text); background: none; border: none; }
         .settings-container { padding: 16px; max-width: 600px; margin: 0 auto; }
         .settings-card { background: var(--card); border-radius: 12px; padding: 20px; margin-bottom: 16px; border: 1px solid var(--border); }
         .settings-card h4 { font-size: 16px; color: var(--text); margin-bottom: 12px; }
@@ -773,8 +748,7 @@ app.get('/', (req, res) => {
         .settings-item:last-child { border-bottom: none; }
         .settings-item .label { font-size: 14px; color: var(--text); }
         .settings-item .value { font-size: 14px; color: #888; }
-        .settings-item select { padding: 6px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font-size: 14px; outline: none; transition: 0.3s; }
-        .settings-item select:focus { border-color: var(--primary); }
+        .settings-item select { padding: 6px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font-size: 14px; outline: none; }
         .settings-item .toggle { width: 52px; height: 28px; background: var(--border); border-radius: 14px; position: relative; cursor: pointer; transition: 0.3s; }
         .settings-item .toggle.active { background: var(--primary); }
         .settings-item .toggle .thumb { width: 22px; height: 22px; background: white; border-radius: 50%; position: absolute; top: 3px; left: 3px; transition: 0.3s; box-shadow: 0 1px 4px rgba(0,0,0,0.2); }
@@ -803,8 +777,7 @@ app.get('/', (req, res) => {
         .share-modal-content { background: var(--card); border-radius: 12px; max-width: 400px; width: 100%; max-height: 70vh; display: flex; flex-direction: column; overflow: hidden; direction: rtl; box-shadow: var(--shadow); animation: modalIn 0.3s ease; }
         .share-modal-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
         .share-modal-header h3 { font-size: 16px; color: var(--text); }
-        .share-modal-header .close-share { font-size: 24px; cursor: pointer; color: var(--text); background: none; border: none; transition: 0.3s; }
-        .share-modal-header .close-share:hover { transform: rotate(90deg); }
+        .share-modal-header .close-share { font-size: 24px; cursor: pointer; color: var(--text); background: none; border: none; }
         .share-modal-body { flex: 1; overflow-y: auto; padding: 12px 16px; }
         .share-option { display: flex; align-items: center; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--border); cursor: pointer; transition: 0.3s; }
         .share-option:hover { background: var(--bg); border-radius: 8px; }
@@ -817,8 +790,6 @@ app.get('/', (req, res) => {
 
         .toast { position: fixed; bottom: 85px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.85); color: white; padding: 12px 24px; border-radius: 24px; font-size: 14px; z-index: 999; opacity: 0; transition: opacity 0.4s ease; pointer-events: none; backdrop-filter: blur(4px); max-width: 90%; text-align: center; }
         .toast.show { opacity: 1; }
-        .toast.success { border-right: 3px solid #2ecc71; }
-        .toast.error { border-right: 3px solid #ed4956; }
 
         .broadcast { background: var(--primary); color: white; padding: 10px 16px; text-align: center; font-size: 14px; flex-shrink: 0; display: none; }
         .broadcast.show { display: block; }
@@ -829,10 +800,21 @@ app.get('/', (req, res) => {
         .no-posts { text-align: center; padding: 40px; color: #888; grid-column: 1 / -1; }
         .no-posts i { font-size: 48px; color: var(--border); display: block; margin-bottom: 12px; }
 
+        .login-container { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; padding: 20px; background: var(--bg); }
+        .login-box { background: var(--card); padding: 40px; border-radius: 12px; box-shadow: var(--shadow); max-width: 400px; width: 100%; border: 1px solid var(--border); }
+        .login-box h2 { margin-bottom: 20px; color: var(--text); text-align: center; }
+        .login-box input { width: 100%; padding: 12px 16px; margin: 8px 0; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; background: var(--bg); color: var(--text); direction: rtl; }
+        .login-box input:focus { border-color: var(--primary); outline: none; }
+        .login-box button { width: 100%; padding: 12px; background: var(--primary); color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; transition: 0.3s; }
+        .login-box button:hover { background: #0081d6; transform: scale(1.02); }
+        .login-box .toggle-link { color: var(--primary); cursor: pointer; text-align: center; margin-top: 12px; }
+        .login-box .toggle-link:hover { text-decoration: underline; }
+        .login-box .error { color: #ed4956; font-size: 13px; margin: 8px 0; text-align: center; }
+
         @media (max-width: 768px) {
             .gallery { gap: 3px; padding: 3px; }
             .search-box { max-width: 200px; }
-            .modal-content { max-width: 95%; }
+            .login-box { padding: 20px; }
         }
         @media (max-width: 480px) {
             .gallery { gap: 2px; padding: 2px; }
@@ -842,326 +824,347 @@ app.get('/', (req, res) => {
             .header { padding: 0 10px; }
             .logo { font-size: 16px; }
             .story-avatar { width: 54px; height: 54px; }
-            .chat-message { max-width: 90%; }
+            .login-box { padding: 16px; }
         }
     </style>
 </head>
 <body>
 
-    <div class="toast" id="toast"></div>
-    <div class="broadcast" id="broadcast"></div>
+    <div id="app">
+        <!-- Login Page -->
+        <div id="loginPage" class="login-container">
+            <div class="login-box">
+                <h2 id="loginTitle">🔐 ورود</h2>
+                <div id="loginError" class="error"></div>
+                <input type="text" id="loginUsername" placeholder="نام کاربری">
+                <input type="email" id="loginEmail" placeholder="ایمیل">
+                <input type="password" id="loginPassword" placeholder="رمز عبور">
+                <button id="loginBtn">ورود</button>
+                <div class="toggle-link" id="toggleAuth">ثبت نام ندارید؟ ثبت نام کنید</div>
+            </div>
+        </div>
 
-    <header class="header">
-        <i class="fas fa-bars menu-icon" id="menuIcon"></i>
-        <div class="logo"><i class="fab fa-instagram"></i> سوشال</div>
-        <div class="search-box">
-            <i class="fas fa-search"></i>
-            <input type="text" id="searchInput" placeholder="جستجو...">
-        </div>
-        <div class="header-right">
-            <i class="fas fa-comment-dots" id="chatOpenBtn"></i>
-            <i class="fas fa-cog" id="settingsOpenBtn"></i>
-        </div>
-    </header>
+        <!-- Main App -->
+        <div id="mainApp" style="display:none;flex-direction:column;height:100vh;">
+            <div class="toast" id="toast"></div>
+            <div class="broadcast" id="broadcast"></div>
 
-    <div class="stories-section" id="storiesSection">
-        <div class="stories-container" id="storiesContainer"></div>
-    </div>
+            <header class="header">
+                <i class="fas fa-bars menu-icon" id="menuIcon"></i>
+                <div class="logo"><i class="fab fa-instagram"></i> سوشال</div>
+                <div class="search-box">
+                    <i class="fas fa-search"></i>
+                    <input type="text" id="searchInput" placeholder="جستجو...">
+                </div>
+                <div class="header-right">
+                    <i class="fas fa-comment-dots" id="chatOpenBtn"></i>
+                    <i class="fas fa-cog" id="settingsOpenBtn"></i>
+                </div>
+            </header>
 
-    <div class="gallery-wrapper">
-        <div id="loadingIndicator" class="loading-spinner">
-            <i class="fas fa-spinner"></i><br> در حال بارگذاری...
-        </div>
-        <div class="gallery" id="gallery"></div>
-        <div id="noPostsMessage" class="no-posts" style="display:none;">
-            <i class="fas fa-camera"></i>
-            هیچ پستی وجود ندارد<br> اولین پست را شما آپلود کنید!
-        </div>
-    </div>
+            <div class="stories-section" id="storiesSection">
+                <div class="stories-container" id="storiesContainer"></div>
+            </div>
 
-    <div class="chat-interface" id="chatInterface">
-        <div class="chat-header-bar">
-            <h3 id="chatTitle">💬 چت</h3>
-            <button class="close-chat-btn" id="closeChatBtn">&times;</button>
-        </div>
-        <div class="chat-users-list" id="chatUsersList"></div>
-        <div class="chat-messages" id="chatMessages">
-            <div class="chat-empty">
-                <i class="fas fa-comments"></i>
-                برای شروع چت، یک کاربر را انتخاب کنید
+            <div class="gallery-wrapper">
+                <div id="loadingIndicator" class="loading-spinner">
+                    <i class="fas fa-spinner"></i><br> در حال بارگذاری...
+                </div>
+                <div class="gallery" id="gallery"></div>
+                <div id="noPostsMessage" class="no-posts" style="display:none;">
+                    <i class="fas fa-camera"></i>
+                    هیچ پستی وجود ندارد
+                </div>
             </div>
-        </div>
-        <div class="chat-input">
-            <input type="text" id="chatInput" placeholder="پیام خود را بنویسید...">
-            <button id="chatSendBtn"><i class="fas fa-paper-plane"></i></button>
-        </div>
-    </div>
 
-    <div class="modal-overlay" id="commentModal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3>💬 کامنت‌ها</h3>
-                <button class="close-modal" id="closeModal">&times;</button>
+            <div class="chat-interface" id="chatInterface">
+                <div class="chat-header-bar">
+                    <h3 id="chatTitle">💬 چت</h3>
+                    <button class="close-chat-btn" id="closeChatBtn">&times;</button>
+                </div>
+                <div class="chat-users-list" id="chatUsersList"></div>
+                <div class="chat-messages" id="chatMessages">
+                    <div class="chat-empty">
+                        <i class="fas fa-comments"></i>
+                        برای شروع چت، یک کاربر را انتخاب کنید
+                    </div>
+                </div>
+                <div class="chat-input">
+                    <input type="text" id="chatInput" placeholder="پیام خود را بنویسید...">
+                    <button id="chatSendBtn"><i class="fas fa-paper-plane"></i></button>
+                </div>
             </div>
-            <div class="modal-body" id="commentList"></div>
-            <div class="modal-footer">
-                <input type="text" id="modalCommentInput" placeholder="کامنت خود را بنویسید...">
-                <button id="modalSendComment">ارسال</button>
-            </div>
-        </div>
-    </div>
 
-    <div class="share-modal" id="shareModal">
-        <div class="share-modal-content">
-            <div class="share-modal-header">
-                <h3>📤 اشتراک‌گذاری</h3>
-                <button class="close-share" id="closeShareModal">&times;</button>
-            </div>
-            <div class="share-modal-body">
-                <div class="share-option" data-share="site">
-                    <div class="share-icon site"><i class="fas fa-users"></i></div>
-                    <span class="share-name">اشتراک در سایت</span>
-                </div>
-                <div class="share-option" data-share="telegram">
-                    <div class="share-icon telegram"><i class="fab fa-telegram-plane"></i></div>
-                    <span class="share-name">ارسال به تلگرام</span>
-                </div>
-                <div class="share-option" data-share="whatsapp">
-                    <div class="share-icon whatsapp"><i class="fab fa-whatsapp"></i></div>
-                    <span class="share-name">ارسال به واتساپ</span>
-                </div>
-                <div class="share-option" data-share="copy">
-                    <div class="share-icon copy"><i class="fas fa-copy"></i></div>
-                    <span class="share-name">کپی لینک پست</span>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div class="profile-page" id="profilePage">
-        <div class="profile-header">
-            <h2>👤 پروفایل</h2>
-            <button class="close-profile" id="closeProfile">&times;</button>
-        </div>
-        <div style="margin-top: 60px;">
-            <div class="profile-info">
-                <div class="profile-avatar-large">
-                    <img id="profileAvatar" src="https://i.pravatar.cc/150?img=10" alt="profile">
-                </div>
-                <div class="profile-username" id="profileUsername">کاربر</div>
-                <div class="profile-bio" id="bioDisplay">توسعه‌دهنده وب | عاشق کدنویسی</div>
-                <button class="profile-follow-btn" id="profileFollowBtn">دنبال کردن</button>
-                <div class="profile-bio-edit" style="display:flex;gap:10px;margin:10px 0;width:100%;max-width:300px;">
-                    <input type="text" id="bioInput" placeholder="بیوگرافی خود را بنویسید..." style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:8px;outline:none;font-size:14px;background:var(--bg);color:var(--text);direction:rtl;">
-                    <button id="saveBio" style="padding:8px 16px;background:var(--primary);color:white;border:none;border-radius:8px;cursor:pointer;font-weight:600;transition:0.3s;">ذخیره</button>
-                </div>
-            </div>
-            <div class="profile-stats">
-                <div class="stat" id="statPosts">
-                    <span class="number" id="postCount">۰</span>
-                    <span class="label">پست</span>
-                </div>
-                <div class="stat" id="statFollowers">
-                    <span class="number" id="followerCount">۰</span>
-                    <span class="label">دنبال‌کننده</span>
-                </div>
-                <div class="stat" id="statFollowing">
-                    <span class="number" id="followingCount">۰</span>
-                    <span class="label">دنبال‌شونده</span>
-                </div>
-            </div>
-            <div style="padding:10px 0;background:var(--card);margin-top:5px;">
-                <h4 style="padding:0 20px 10px;font-size:14px;color:var(--text);">📸 پست‌های من</h4>
-                <div class="profile-gallery" id="profileGallery"></div>
-            </div>
-        </div>
-    </div>
-
-    <div class="settings-page" id="settingsPage">
-        <div class="settings-header">
-            <h2>⚙️ تنظیمات</h2>
-            <button class="close-settings" id="closeSettings">&times;</button>
-        </div>
-        <div class="settings-container">
-            <div class="settings-card">
-                <h4>🌐 زبان</h4>
-                <div class="settings-item">
-                    <span class="label">زبان رابط</span>
-                    <select id="languageSelect">
-                        <option value="fa">فارسی</option>
-                        <option value="en">English</option>
-                    </select>
-                </div>
-            </div>
-            <div class="settings-card">
-                <h4>🎨 ظاهر</h4>
-                <div class="settings-item">
-                    <span class="label">تم تاریک</span>
-                    <div class="toggle" id="themeToggle">
-                        <div class="thumb"></div>
+            <div class="modal-overlay" id="commentModal">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h3>💬 کامنت‌ها</h3>
+                        <button class="close-modal" id="closeModal">&times;</button>
+                    </div>
+                    <div class="modal-body" id="commentList"></div>
+                    <div class="modal-footer">
+                        <input type="text" id="modalCommentInput" placeholder="کامنت خود را بنویسید...">
+                        <button id="modalSendComment">ارسال</button>
                     </div>
                 </div>
             </div>
-            <div class="settings-card">
-                <h4>📊 آمار</h4>
-                <div class="settings-stats">
-                    <div class="stat-box">
-                        <div class="num" id="statTotalPosts">0</div>
-                        <div class="lbl">کل پست‌ها</div>
+
+            <div class="share-modal" id="shareModal">
+                <div class="share-modal-content">
+                    <div class="share-modal-header">
+                        <h3>📤 اشتراک‌گذاری</h3>
+                        <button class="close-share" id="closeShareModal">&times;</button>
                     </div>
-                    <div class="stat-box">
-                        <div class="num" id="statTotalUsers">0</div>
-                        <div class="lbl">کاربران</div>
+                    <div class="share-modal-body">
+                        <div class="share-option" data-share="site">
+                            <div class="share-icon site"><i class="fas fa-users"></i></div>
+                            <span class="share-name">اشتراک در سایت</span>
+                        </div>
+                        <div class="share-option" data-share="telegram">
+                            <div class="share-icon telegram"><i class="fab fa-telegram-plane"></i></div>
+                            <span class="share-name">ارسال به تلگرام</span>
+                        </div>
+                        <div class="share-option" data-share="whatsapp">
+                            <div class="share-icon whatsapp"><i class="fab fa-whatsapp"></i></div>
+                            <span class="share-name">ارسال به واتساپ</span>
+                        </div>
+                        <div class="share-option" data-share="copy">
+                            <div class="share-icon copy"><i class="fas fa-copy"></i></div>
+                            <span class="share-name">کپی لینک پست</span>
+                        </div>
                     </div>
-                    <div class="stat-box">
-                        <div class="num" id="statOnlineUsers">0</div>
-                        <div class="lbl">آنلاین</div>
+                </div>
+            </div>
+
+            <div class="profile-page" id="profilePage">
+                <div class="profile-header">
+                    <h2>👤 پروفایل</h2>
+                    <button class="close-profile" id="closeProfile">&times;</button>
+                </div>
+                <div style="margin-top: 60px;">
+                    <div class="profile-info">
+                        <div class="profile-avatar-large">
+                            <img id="profileAvatar" src="https://i.pravatar.cc/150?img=10" alt="profile">
+                        </div>
+                        <div class="profile-username" id="profileUsername">کاربر</div>
+                        <div class="profile-bio" id="bioDisplay">توسعه‌دهنده وب</div>
+                        <button class="profile-follow-btn" id="profileFollowBtn">دنبال کردن</button>
+                        <div class="profile-bio-edit" style="display:flex;gap:10px;margin:10px 0;width:100%;max-width:300px;">
+                            <input type="text" id="bioInput" placeholder="بیوگرافی..." style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:8px;outline:none;font-size:14px;background:var(--bg);color:var(--text);direction:rtl;">
+                            <button id="saveBio" style="padding:8px 16px;background:var(--primary);color:white;border:none;border-radius:8px;cursor:pointer;font-weight:600;">ذخیره</button>
+                        </div>
+                    </div>
+                    <div class="profile-stats">
+                        <div class="stat" id="statPosts">
+                            <span class="number" id="postCount">۰</span>
+                            <span class="label">پست</span>
+                        </div>
+                        <div class="stat" id="statFollowers">
+                            <span class="number" id="followerCount">۰</span>
+                            <span class="label">دنبال‌کننده</span>
+                        </div>
+                        <div class="stat" id="statFollowing">
+                            <span class="number" id="followingCount">۰</span>
+                            <span class="label">دنبال‌شونده</span>
+                        </div>
+                    </div>
+                    <div style="padding:10px 0;background:var(--card);margin-top:5px;">
+                        <h4 style="padding:0 20px 10px;font-size:14px;color:var(--text);">📸 پست‌های من</h4>
+                        <div class="profile-gallery" id="profileGallery"></div>
                     </div>
                 </div>
             </div>
-            <div class="settings-card">
-                <h4>👤 اطلاعات کاربری</h4>
-                <div class="settings-item">
-                    <span class="label">نام کاربری</span>
-                    <span class="value" id="settingsUsername">-</span>
+
+            <div class="settings-page" id="settingsPage">
+                <div class="settings-header">
+                    <h2>⚙️ تنظیمات</h2>
+                    <button class="close-settings" id="closeSettings">&times;</button>
                 </div>
-                <div class="settings-item">
-                    <span class="label">ایمیل</span>
-                    <span class="value" id="settingsEmail">-</span>
-                </div>
-                <div class="settings-item">
-                    <span class="label">تعداد پست</span>
-                    <span class="value" id="settingsPostCount">0</span>
+                <div class="settings-container">
+                    <div class="settings-card">
+                        <h4>🌐 زبان</h4>
+                        <div class="settings-item">
+                            <span class="label">زبان</span>
+                            <select id="languageSelect">
+                                <option value="fa">فارسی</option>
+                                <option value="en">English</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="settings-card">
+                        <h4>🎨 ظاهر</h4>
+                        <div class="settings-item">
+                            <span class="label">تم تاریک</span>
+                            <div class="toggle" id="themeToggle">
+                                <div class="thumb"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="settings-card">
+                        <h4>📊 آمار</h4>
+                        <div class="settings-stats">
+                            <div class="stat-box">
+                                <div class="num" id="statTotalPosts">0</div>
+                                <div class="lbl">کل پست‌ها</div>
+                            </div>
+                            <div class="stat-box">
+                                <div class="num" id="statTotalUsers">0</div>
+                                <div class="lbl">کاربران</div>
+                            </div>
+                            <div class="stat-box">
+                                <div class="num" id="statOnlineUsers">0</div>
+                                <div class="lbl">آنلاین</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="settings-card">
+                        <h4>👤 اطلاعات</h4>
+                        <div class="settings-item">
+                            <span class="label">نام</span>
+                            <span class="value" id="settingsUsername">-</span>
+                        </div>
+                        <div class="settings-item">
+                            <span class="label">ایمیل</span>
+                            <span class="value" id="settingsEmail">-</span>
+                        </div>
+                        <div class="settings-item">
+                            <span class="label">پست</span>
+                            <span class="value" id="settingsPostCount">0</span>
+                        </div>
+                    </div>
+                    <button id="logoutBtn" style="width:100%;padding:12px;background:#ed4956;color:white;border:none;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer;">🚪 خروج</button>
                 </div>
             </div>
-            <button id="logoutBtn" style="width:100%;padding:12px;background:#ed4956;color:white;border:none;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer;transition:0.3s;">🚪 خروج</button>
+
+            <div class="admin-panel" id="adminPanel">
+                <div class="admin-card">
+                    <h4>👑 پنل مدیریت</h4>
+                    <div class="admin-item">
+                        <span>کاربران</span>
+                        <span id="adminUserCount">0</span>
+                    </div>
+                    <div class="admin-item">
+                        <span>پست‌ها</span>
+                        <span id="adminPostCount">0</span>
+                    </div>
+                    <div class="admin-item">
+                        <span>آنلاین</span>
+                        <span id="adminOnlineCount">0</span>
+                    </div>
+                </div>
+                <div class="admin-card">
+                    <h4>📢 پیام همگانی</h4>
+                    <div style="display:flex;gap:10px;">
+                        <input type="text" id="broadcastInput" placeholder="پیام..." style="flex:1;padding:10px 14px;border:1px solid var(--border);border-radius:8px;outline:none;font-size:14px;background:var(--bg);color:var(--text);">
+                        <button id="broadcastBtn" class="admin-btn primary">ارسال</button>
+                    </div>
+                </div>
+                <div class="admin-card">
+                    <h4>👥 مدیریت کاربران</h4>
+                    <div id="adminUsersList"></div>
+                </div>
+                <div class="admin-card">
+                    <h4>📸 مدیریت پست‌ها</h4>
+                    <div id="adminPostsList"></div>
+                </div>
+            </div>
+
+            <div class="upload-page" id="uploadPage">
+                <div class="upload-header">
+                    <h2>📤 آپلود</h2>
+                    <button class="close-upload" id="closeUpload">&times;</button>
+                </div>
+                <div style="margin-top:60px;padding:10px;">
+                    <div class="upload-container" id="uploadContainer">
+                        <i class="fas fa-cloud-upload-alt"></i>
+                        <h3>انتخاب فایل</h3>
+                        <p>برای آپلود کلیک کنید</p>
+                        <button class="upload-btn" id="uploadSelectBtn">انتخاب فایل</button>
+                        <input type="file" id="fileInput" accept="image/*,video/*">
+                        <div class="upload-preview" id="uploadPreview">
+                            <img id="previewImage" src="#" alt="preview">
+                            <video id="previewVideo" controls style="display:none;"></video>
+                        </div>
+                        <div class="upload-caption" id="uploadCaption">
+                            <textarea id="captionInput" placeholder="توضیحات..."></textarea>
+                        </div>
+                        <div class="upload-hashtags" id="uploadHashtags">
+                            <input type="text" id="hashtagInput" placeholder="هشتگ‌ها (با کاما)">
+                        </div>
+                        <button class="upload-submit" id="uploadSubmit">📤 ارسال</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="follow-modal" id="followModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:400;justify-content:center;align-items:center;padding:20px;backdrop-filter:blur(4px);">
+                <div class="follow-modal-content" style="background:var(--card);border-radius:12px;max-width:400px;width:100%;max-height:70vh;display:flex;flex-direction:column;overflow:hidden;direction:rtl;box-shadow:var(--shadow);">
+                    <div class="follow-modal-header" style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+                        <h3 id="followModalTitle" style="font-size:16px;color:var(--text);">دنبال‌کنندگان</h3>
+                        <button class="close-follow" id="closeFollowModal" style="font-size:24px;cursor:pointer;color:var(--text);background:none;border:none;">&times;</button>
+                    </div>
+                    <div class="follow-modal-body" id="followModalBody" style="flex:1;overflow-y:auto;padding:16px 20px;"></div>
+                </div>
+            </div>
+
+            <div class="menu-overlay" id="menuOverlay"></div>
+            <div class="side-menu" id="sideMenu">
+                <div class="menu-header">
+                    <h3>📋 منو</h3>
+                    <button class="close-menu" id="closeMenu">&times;</button>
+                </div>
+                <div class="menu-item" id="menuProfile">
+                    <i class="fas fa-user"></i>
+                    <span class="menu-text">پروفایل</span>
+                </div>
+                <div class="menu-item" id="menuSettings">
+                    <i class="fas fa-cog"></i>
+                    <span class="menu-text">تنظیمات</span>
+                </div>
+                <div class="menu-item" id="menuStats">
+                    <i class="fas fa-chart-bar"></i>
+                    <span class="menu-text">آمار</span>
+                </div>
+                <div class="menu-item" id="menuTheme">
+                    <i class="fas fa-palette"></i>
+                    <span class="menu-text">تم</span>
+                </div>
+                <div class="menu-item" id="menuAdmin" style="display:none;border-right:3px solid var(--primary);background:rgba(0,149,246,0.05);">
+                    <i class="fas fa-crown"></i>
+                    <span class="menu-text">👑 مدیریت</span>
+                    <span class="menu-badge">ادمین</span>
+                </div>
+                <div class="menu-item" id="menuLogout">
+                    <i class="fas fa-sign-out-alt"></i>
+                    <span class="menu-text">خروج</span>
+                </div>
+            </div>
+
+            <nav class="bottom-nav">
+                <button id="profileBtn">
+                    <i class="fas fa-user"></i>
+                    <span>پروفایل</span>
+                </button>
+                <button id="uploadBtn">
+                    <i class="fas fa-upload"></i>
+                    <span>آپلود</span>
+                </button>
+                <button id="exploreBtn" class="active">
+                    <i class="fas fa-compass"></i>
+                    <span>اکسپلور</span>
+                </button>
+                <button id="reelsBtn">
+                    <i class="fas fa-film"></i>
+                    <span>ریلز</span>
+                </button>
+            </nav>
         </div>
     </div>
-
-    <div class="admin-panel" id="adminPanel">
-        <div class="admin-card">
-            <h4>👑 پنل مدیریت</h4>
-            <div class="admin-item">
-                <span>کاربران</span>
-                <span id="adminUserCount">0</span>
-            </div>
-            <div class="admin-item">
-                <span>پست‌ها</span>
-                <span id="adminPostCount">0</span>
-            </div>
-            <div class="admin-item">
-                <span>آنلاین</span>
-                <span id="adminOnlineCount">0</span>
-            </div>
-        </div>
-        <div class="admin-card">
-            <h4>📢 پیام همگانی</h4>
-            <div style="display:flex;gap:10px;">
-                <input type="text" id="broadcastInput" placeholder="پیام به همه کاربران..." style="flex:1;padding:10px 14px;border:1px solid var(--border);border-radius:8px;outline:none;font-size:14px;background:var(--bg);color:var(--text);">
-                <button id="broadcastBtn" class="admin-btn primary">ارسال</button>
-            </div>
-        </div>
-        <div class="admin-card">
-            <h4>👥 مدیریت کاربران</h4>
-            <div id="adminUsersList"></div>
-        </div>
-        <div class="admin-card">
-            <h4>📸 مدیریت پست‌ها</h4>
-            <div id="adminPostsList"></div>
-        </div>
-    </div>
-
-    <div class="upload-page" id="uploadPage">
-        <div class="upload-header">
-            <h2>📤 آپلود</h2>
-            <button class="close-upload" id="closeUpload">&times;</button>
-        </div>
-        <div style="margin-top:60px;padding:10px;">
-            <div class="upload-container" id="uploadContainer">
-                <i class="fas fa-cloud-upload-alt"></i>
-                <h3>انتخاب فایل</h3>
-                <p>برای آپلود عکس یا ویدئو کلیک کنید</p>
-                <button class="upload-btn" id="uploadSelectBtn">انتخاب فایل</button>
-                <input type="file" id="fileInput" accept="image/*,video/*">
-                <div class="upload-preview" id="uploadPreview">
-                    <img id="previewImage" src="#" alt="preview">
-                    <video id="previewVideo" controls style="display:none;"></video>
-                </div>
-                <div class="upload-caption" id="uploadCaption">
-                    <textarea id="captionInput" placeholder="توضیحات پست را بنویسید..."></textarea>
-                </div>
-                <div class="upload-hashtags" id="uploadHashtags">
-                    <input type="text" id="hashtagInput" placeholder="هشتگ‌ها (با کاما جدا کنید)">
-                </div>
-                <button class="upload-submit" id="uploadSubmit">📤 ارسال پست</button>
-            </div>
-        </div>
-    </div>
-
-    <div class="follow-modal" id="followModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:400;justify-content:center;align-items:center;padding:20px;backdrop-filter:blur(4px);">
-        <div class="follow-modal-content" style="background:var(--card);border-radius:12px;max-width:400px;width:100%;max-height:70vh;display:flex;flex-direction:column;overflow:hidden;direction:rtl;box-shadow:var(--shadow);">
-            <div class="follow-modal-header" style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
-                <h3 id="followModalTitle" style="font-size:16px;color:var(--text);">دنبال‌کنندگان</h3>
-                <button class="close-follow" id="closeFollowModal" style="font-size:24px;cursor:pointer;color:var(--text);background:none;border:none;transition:0.3s;">&times;</button>
-            </div>
-            <div class="follow-modal-body" id="followModalBody" style="flex:1;overflow-y:auto;padding:16px 20px;"></div>
-        </div>
-    </div>
-
-    <div class="menu-overlay" id="menuOverlay"></div>
-    <div class="side-menu" id="sideMenu">
-        <div class="menu-header">
-            <h3>📋 منو</h3>
-            <button class="close-menu" id="closeMenu">&times;</button>
-        </div>
-        <div class="menu-item" id="menuProfile">
-            <i class="fas fa-user"></i>
-            <span class="menu-text">پروفایل</span>
-        </div>
-        <div class="menu-item" id="menuSettings">
-            <i class="fas fa-cog"></i>
-            <span class="menu-text">تنظیمات</span>
-        </div>
-        <div class="menu-item" id="menuStats">
-            <i class="fas fa-chart-bar"></i>
-            <span class="menu-text">آمار</span>
-        </div>
-        <div class="menu-item" id="menuTheme">
-            <i class="fas fa-palette"></i>
-            <span class="menu-text">تغیر تم</span>
-        </div>
-        <div class="menu-item" id="menuAdmin" style="display:none;border-right:3px solid var(--primary);background:rgba(0,149,246,0.05);">
-            <i class="fas fa-crown"></i>
-            <span class="menu-text">👑 پنل مدیریت</span>
-            <span class="menu-badge">ادمین</span>
-        </div>
-        <div class="menu-item" id="menuLogout">
-            <i class="fas fa-sign-out-alt"></i>
-            <span class="menu-text">خروج</span>
-        </div>
-    </div>
-
-    <nav class="bottom-nav">
-        <button id="profileBtn">
-            <i class="fas fa-user"></i>
-            <span>پروفایل</span>
-        </button>
-        <button id="uploadBtn">
-            <i class="fas fa-upload"></i>
-            <span>آپلود</span>
-        </button>
-        <button id="exploreBtn" class="active">
-            <i class="fas fa-compass"></i>
-            <span>اکسپلور</span>
-        </button>
-        <button id="reelsBtn">
-            <i class="fas fa-film"></i>
-            <span>ریلز</span>
-        </button>
-    </nav>
 
     <script src="/socket.io/socket.io.js"></script>
     <script>
+        // ============================================
+        // 🌐 تنظیمات
+        // ============================================
         const API_URL = window.location.origin;
         const socket = io();
         let currentUser = null;
@@ -1173,14 +1176,31 @@ app.get('/', (req, res) => {
         let currentChatRoom = null;
         let currentChatUser = null;
         let isUploading = false;
+        let isLogin = true;
 
-        function showToast(message) {
+        // ============================================
+        // 📱 توابع
+        // ============================================
+
+        function showToast(msg) {
             var toast = document.getElementById('toast');
-            toast.textContent = message;
+            toast.textContent = msg;
             toast.classList.add('show');
             clearTimeout(toast._timeout);
-            toast._timeout = setTimeout(function() { toast.classList.remove('show'); }, 3500);
+            toast._timeout = setTimeout(function() { toast.classList.remove('show'); }, 3000);
         }
+
+        function showError(msg) {
+            document.getElementById('loginError').textContent = msg;
+        }
+
+        function clearError() {
+            document.getElementById('loginError').textContent = '';
+        }
+
+        // ============================================
+        // 🔐 احراز هویت
+        // ============================================
 
         async function registerUser(username, email, password) {
             var res = await fetch(API_URL + '/api/auth/register', {
@@ -1210,7 +1230,8 @@ app.get('/', (req, res) => {
             currentToken = null;
             currentUser = null;
             isAdmin = false;
-            location.reload();
+            document.getElementById('loginPage').style.display = 'flex';
+            document.getElementById('mainApp').style.display = 'none';
         }
 
         async function getCurrentUser() {
@@ -1241,6 +1262,10 @@ app.get('/', (req, res) => {
                 return false;
             }
         }
+
+        // ============================================
+        // 📦 API
+        // ============================================
 
         async function getPosts(page, hashtag) {
             page = page || 1;
@@ -1326,6 +1351,10 @@ app.get('/', (req, res) => {
             return await res.json();
         }
 
+        // ============================================
+        // 👑 ادمین API
+        // ============================================
+
         async function getAdminUsers() {
             var res = await fetch(API_URL + '/api/admin/users', {
                 headers: { 'Authorization': 'Bearer ' + currentToken }
@@ -1345,7 +1374,7 @@ app.get('/', (req, res) => {
             return await res.json();
         }
 
-        async function deletePost(postId) {
+        async function deletePostAdmin(postId) {
             var res = await fetch(API_URL + '/api/admin/posts/' + postId, {
                 method: 'DELETE',
                 headers: { 'Authorization': 'Bearer ' + currentToken }
@@ -1379,8 +1408,12 @@ app.get('/', (req, res) => {
             return await res.json();
         }
 
+        // ============================================
+        // 💬 WebSocket
+        // ============================================
+
         socket.on('connect', function() {
-            console.log('✅ Connected to server');
+            console.log('✅ Connected');
             if (currentUser) {
                 socket.emit('register', { userId: currentUser.userId, username: currentUser.username });
             }
@@ -1396,19 +1429,19 @@ app.get('/', (req, res) => {
         });
 
         socket.on('history', function(messages) {
-            var messagesDiv = document.getElementById('chatMessages');
-            messagesDiv.innerHTML = '';
+            var div = document.getElementById('chatMessages');
+            div.innerHTML = '';
             messages.forEach(function(msg) {
                 displayChatMessage(msg.userId, msg.username, msg.message, msg.timestamp);
             });
         });
 
         socket.on('broadcast', function(data) {
-            var broadcast = document.getElementById('broadcast');
-            broadcast.textContent = '📢 ' + data.message + ' (از ' + data.from + ')';
-            broadcast.classList.add('show');
+            var b = document.getElementById('broadcast');
+            b.textContent = '📢 ' + data.message + ' (از ' + data.from + ')';
+            b.classList.add('show');
             showToast('📢 پیام همگانی: ' + data.message);
-            setTimeout(function() { broadcast.classList.remove('show'); }, 10000);
+            setTimeout(function() { b.classList.remove('show'); }, 10000);
         });
 
         socket.on('error', function(data) {
@@ -1447,26 +1480,26 @@ app.get('/', (req, res) => {
         }
 
         function displayChatMessage(userId, username, message, timestamp) {
-            var messagesDiv = document.getElementById('chatMessages');
-            var empty = messagesDiv.querySelector('.chat-empty');
+            var div = document.getElementById('chatMessages');
+            var empty = div.querySelector('.chat-empty');
             if (empty) empty.remove();
-            var div = document.createElement('div');
-            div.className = 'chat-message' + (userId === currentUser?.userId ? ' own' : '');
+            var msgDiv = document.createElement('div');
+            msgDiv.className = 'chat-message' + (userId === currentUser?.userId ? ' own' : '');
             var time = timestamp ? new Date(timestamp).toLocaleTimeString(language === 'fa' ? 'fa-IR' : 'en-US') : '';
-            div.innerHTML = '<div class="msg-user">' + (userId === currentUser?.userId ? 'شما' : username) + '</div><div class="msg-text">' + message + '</div><div class="msg-time">' + time + '</div>';
-            messagesDiv.appendChild(div);
-            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            msgDiv.innerHTML = '<div class="msg-user">' + (userId === currentUser?.userId ? 'شما' : username) + '</div><div class="msg-text">' + message + '</div><div class="msg-time">' + time + '</div>';
+            div.appendChild(msgDiv);
+            div.scrollTop = div.scrollHeight;
         }
 
         async function renderChatUsers() {
             var list = document.getElementById('chatUsersList');
             list.innerHTML = '';
             var users = await getUsers();
-            var hasUsers = false;
+            var has = false;
             users.forEach(function(user) {
                 if (user.userId === currentUser?.userId) return;
                 if (user.isBanned) return;
-                hasUsers = true;
+                has = true;
                 var div = document.createElement('div');
                 div.className = 'chat-user';
                 div.onclick = function() { startChat(user.userId, user.username); };
@@ -1475,10 +1508,14 @@ app.get('/', (req, res) => {
                 div.innerHTML = '<div class="user-avatar"><img src="' + (user.avatar || 'https://i.pravatar.cc/150?img=' + Math.floor(Math.random() * 70)) + '" alt="user"></div><div><div class="user-name">' + user.username + '</div><div class="user-status ' + statusClass + '">' + statusText + '</div></div>';
                 list.appendChild(div);
             });
-            if (!hasUsers) {
-                list.innerHTML = '<div style="padding:10px 16px;color:#888;">هیچ کاربر دیگری آنلاین نیست</div>';
+            if (!has) {
+                list.innerHTML = '<div style="padding:10px 16px;color:#888;">هیچ کاربری آنلاین نیست</div>';
             }
         }
+
+        // ============================================
+        // 🎨 نمایش
+        // ============================================
 
         function createPostElement(post) {
             var div = document.createElement('div');
@@ -1509,6 +1546,10 @@ app.get('/', (req, res) => {
             div.innerHTML = '<div class="story-avatar"><img src="' + story.image + '" alt="story"></div><span class="story-username">' + story.username + '</span>';
             return div;
         }
+
+        // ============================================
+        // 📥 بارگذاری
+        // ============================================
 
         async function loadPosts(page) {
             page = page || 1;
@@ -1543,20 +1584,20 @@ app.get('/', (req, res) => {
             var addDiv = document.createElement('div');
             addDiv.className = 'story-item';
             addDiv.onclick = function() {
-                var fileInput = document.createElement('input');
-                fileInput.type = 'file';
-                fileInput.accept = 'image/*,video/*';
-                fileInput.onchange = async function(e) {
+                var input = document.createElement('input');
+                input.type = 'file';
+                input.accept = 'image/*,video/*';
+                input.onchange = async function(e) {
                     var file = e.target.files[0];
                     if (file) {
                         var result = await createStory(file);
                         if (result.storyId) {
-                            showToast('✅ استوری با موفقیت آپلود شد!');
+                            showToast('✅ استوری آپلود شد!');
                             loadStories();
                         }
                     }
                 };
-                fileInput.click();
+                input.click();
             };
             addDiv.innerHTML = '<div class="story-avatar add-story"><i class="fas fa-plus"></i></div><span class="story-username">افزودن</span>';
             container.appendChild(addDiv);
@@ -1569,7 +1610,7 @@ app.get('/', (req, res) => {
         async function loadProfile() {
             if (!currentUser) return;
             document.getElementById('profileUsername').textContent = currentUser.username || 'کاربر';
-            document.getElementById('bioDisplay').textContent = currentUser.bio || 'توسعه‌دهنده وب | عاشق کدنویسی';
+            document.getElementById('bioDisplay').textContent = currentUser.bio || 'توسعه‌دهنده وب';
             document.getElementById('followerCount').textContent = currentUser.followers || 0;
             document.getElementById('followingCount').textContent = currentUser.following || 0;
             var data = await getPosts(1);
@@ -1605,7 +1646,7 @@ app.get('/', (req, res) => {
                     document.getElementById('adminPostCount').textContent = stats.totalPosts || 0;
                     document.getElementById('adminOnlineCount').textContent = stats.onlineUsers || 0;
                 }
-            } catch (e) { console.error(e); }
+            } catch (e) {}
             try {
                 var users = await getAdminUsers();
                 var list = document.getElementById('adminUsersList');
@@ -1617,7 +1658,7 @@ app.get('/', (req, res) => {
                     div.innerHTML = '<span>' + user.username + ' (' + user.email + ')</span><span><button class="admin-btn ' + (user.isBanned ? 'success' : 'danger') + '" onclick="toggleBan(\'' + user.userId + '\', ' + (!user.isBanned) + ')">' + (user.isBanned ? 'رفع مسدودیت' : 'مسدود کردن') + '</button></span>';
                     list.appendChild(div);
                 });
-            } catch (e) { console.error(e); }
+            } catch (e) {}
             try {
                 var posts = await getAdminPosts();
                 var list = document.getElementById('adminPostsList');
@@ -1628,8 +1669,12 @@ app.get('/', (req, res) => {
                     div.innerHTML = '<span>' + (post.caption || 'بدون توضیحات').substring(0, 30) + ' ...</span><span><button class="admin-btn danger" onclick="deletePostAdmin(\'' + post.postId + '\')">🗑️ حذف</button></span>';
                     list.appendChild(div);
                 });
-            } catch (e) { console.error(e); }
+            } catch (e) {}
         }
+
+        // ============================================
+        // 🎯 اکشن‌ها
+        // ============================================
 
         window.handleLike = async function(postId) {
             if (currentUser && currentUser.isBanned) {
@@ -1687,8 +1732,7 @@ app.get('/', (req, res) => {
                 showToast('❌ پست پیدا نشد!');
                 return;
             }
-            var captionHtml = post.caption || 'بدون توضیحات';
-            showToast('📸 ' + captionHtml + '\n❤️ ' + (post.likes || 0) + ' لایک\n💬 ' + (post.comments || []).length + ' کامنت');
+            showToast('📸 ' + (post.caption || 'بدون توضیحات') + '\n❤️ ' + (post.likes || 0) + ' لایک\n💬 ' + (post.comments || []).length + ' کامنت');
         };
 
         window.viewStory = async function(storyId) {
@@ -1713,17 +1757,87 @@ app.get('/', (req, res) => {
 
         window.deletePostAdmin = async function(postId) {
             if (!confirm('آیا از حذف این پست مطمئن هستید؟')) return;
-            var result = await deletePost(postId);
+            var result = await deletePostAdmin(postId);
             if (result.success) {
-                showToast('✅ پست با موفقیت حذف شد');
+                showToast('✅ پست حذف شد');
                 loadAdminPanel();
                 loadPosts(1);
             }
         };
 
+        // ============================================
+        // 🎬 Event Listeners
+        // ============================================
+
+        // Login/Register
+        document.getElementById('loginBtn').addEventListener('click', async function() {
+            clearError();
+            var username = document.getElementById('loginUsername').value.trim();
+            var email = document.getElementById('loginEmail').value.trim();
+            var password = document.getElementById('loginPassword').value.trim();
+
+            if (!email || !password) {
+                showError('لطفا ایمیل و رمز عبور را وارد کنید');
+                return;
+            }
+
+            if (!isLogin && !username) {
+                showError('لطفا نام کاربری را وارد کنید');
+                return;
+            }
+
+            this.textContent = '⏳ در حال...';
+            this.disabled = true;
+
+            var result;
+            if (isLogin) {
+                result = await loginUser(email, password);
+            } else {
+                result = await registerUser(username, email, password);
+            }
+
+            if (result.success) {
+                currentToken = result.token;
+                localStorage.setItem('token', currentToken);
+                currentUser = result.user;
+                isAdmin = currentUser.isAdmin || false;
+                document.getElementById('loginPage').style.display = 'none';
+                document.getElementById('mainApp').style.display = 'flex';
+                document.getElementById('loginBtn').textContent = isLogin ? 'ورود' : 'ثبت نام';
+                document.getElementById('loginBtn').disabled = false;
+                showToast('✅ خوش آمدید ' + currentUser.username);
+                socket.emit('register', { userId: currentUser.userId, username: currentUser.username });
+                if (isAdmin) {
+                    document.getElementById('menuAdmin').style.display = 'flex';
+                }
+                await loadPosts(1);
+                await loadStories();
+                await loadProfile();
+            } else {
+                showError(result.error || 'خطا!');
+                document.getElementById('loginBtn').textContent = isLogin ? 'ورود' : 'ثبت نام';
+                document.getElementById('loginBtn').disabled = false;
+            }
+        });
+
+        document.getElementById('loginPassword').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') document.getElementById('loginBtn').click();
+        });
+
+        document.getElementById('toggleAuth').addEventListener('click', function() {
+            isLogin = !isLogin;
+            document.getElementById('loginTitle').textContent = isLogin ? '🔐 ورود' : '📝 ثبت نام';
+            document.getElementById('loginBtn').textContent = isLogin ? 'ورود' : 'ثبت نام';
+            document.getElementById('toggleAuth').textContent = isLogin ? 'ثبت نام ندارید؟ ثبت نام کنید' : 'حساب دارید؟ وارد شوید';
+            document.getElementById('loginUsername').style.display = isLogin ? 'none' : 'block';
+            clearError();
+        });
+
+        // Logout
         document.getElementById('logoutBtn')?.addEventListener('click', logoutUser);
         document.getElementById('menuLogout')?.addEventListener('click', logoutUser);
 
+        // Chat
         document.getElementById('chatOpenBtn').addEventListener('click', function() {
             document.getElementById('chatInterface').classList.add('active');
             renderChatUsers();
@@ -1743,13 +1857,14 @@ app.get('/', (req, res) => {
             if (e.key === 'Enter') sendChatMessage();
         });
 
+        // Comments
         document.getElementById('modalSendComment').addEventListener('click', async function() {
             var input = document.getElementById('modalCommentInput');
             var text = input.value.trim();
             if (text && currentPostId) {
                 await addComment(currentPostId, text);
                 input.value = '';
-                document.getElementById('commentList').innerHTML = '<div style="text-align:center;color:#2ecc71;padding:20px;">✅ کامنت با موفقیت ثبت شد!</div>';
+                document.getElementById('commentList').innerHTML = '<div style="text-align:center;color:#2ecc71;padding:20px;">✅ کامنت ثبت شد!</div>';
                 setTimeout(function() { openComments(currentPostId); }, 500);
             }
         });
@@ -1770,6 +1885,7 @@ app.get('/', (req, res) => {
             }
         });
 
+        // Share
         document.getElementById('closeShareModal').addEventListener('click', function() {
             document.getElementById('shareModal').classList.remove('active');
         });
@@ -1798,6 +1914,7 @@ app.get('/', (req, res) => {
             });
         });
 
+        // Profile
         document.getElementById('profileBtn').addEventListener('click', function() {
             document.getElementById('profilePage').classList.add('active');
             loadProfile();
@@ -1831,13 +1948,14 @@ app.get('/', (req, res) => {
                     document.getElementById('bioDisplay').textContent = bio;
                     document.getElementById('bioInput').value = '';
                     currentUser.bio = bio;
-                    showToast('✅ بیوگرافی با موفقیت ذخیره شد!');
+                    showToast('✅ بیوگرافی ذخیره شد!');
                 }
             } else {
-                showToast('❌ لطفا بیوگرافی خود را وارد کنید.');
+                showToast('❌ لطفا بیوگرافی را وارد کنید');
             }
         });
 
+        // Upload
         document.getElementById('uploadBtn').addEventListener('click', function() {
             if (currentUser && currentUser.isBanned) {
                 showToast('❌ شما مسدود شده‌اید');
@@ -1894,7 +2012,7 @@ app.get('/', (req, res) => {
             var caption = document.getElementById('captionInput').value.trim();
             var hashtags = document.getElementById('hashtagInput').value.trim();
             if (!file) {
-                showToast('❌ لطفا یک فایل انتخاب کنید.');
+                showToast('❌ لطفا یک فایل انتخاب کنید');
                 return;
             }
             isUploading = true;
@@ -1907,7 +2025,7 @@ app.get('/', (req, res) => {
                 document.getElementById('uploadPage').classList.remove('active');
                 loadPosts(1);
             } else {
-                showToast('❌ خطا در آپلود پست!');
+                showToast('❌ خطا در آپلود');
             }
             this.textContent = '📤 ارسال پست';
             this.disabled = false;
@@ -1926,6 +2044,7 @@ app.get('/', (req, res) => {
             document.getElementById('hashtagInput').value = '';
         }
 
+        // Side Menu
         document.getElementById('menuIcon').addEventListener('click', function() {
             document.getElementById('sideMenu').classList.add('active');
             document.getElementById('menuOverlay').classList.add('active');
@@ -1975,6 +2094,7 @@ app.get('/', (req, res) => {
             loadAdminPanel();
         });
 
+        // Settings
         document.getElementById('settingsOpenBtn').addEventListener('click', function() {
             document.getElementById('settingsPage').classList.add('active');
             loadProfile();
@@ -2005,9 +2125,10 @@ app.get('/', (req, res) => {
             document.documentElement.setAttribute('data-theme', isDarkTheme ? 'dark' : 'light');
             localStorage.setItem('theme', isDarkTheme ? 'dark' : 'light');
             document.getElementById('themeToggle').classList.toggle('active');
-            showToast(isDarkTheme ? '🌙 تم تاریک فعال شد' : '☀️ تم روشن فعال شد');
+            showToast(isDarkTheme ? '🌙 تم تاریک' : '☀️ تم روشن');
         }
 
+        // Admin
         document.getElementById('broadcastBtn').addEventListener('click', async function() {
             var input = document.getElementById('broadcastInput');
             var message = input.value.trim();
@@ -2026,6 +2147,7 @@ app.get('/', (req, res) => {
             if (e.target === this) this.classList.remove('active');
         });
 
+        // Explore / Reels
         var exploreMode = true;
         var reelsMode = false;
 
@@ -2070,6 +2192,7 @@ app.get('/', (req, res) => {
             }
         });
 
+        // Search
         document.getElementById('searchInput').addEventListener('input', function() {
             var query = this.value.trim();
             if (query.startsWith('#')) {
@@ -2087,6 +2210,7 @@ app.get('/', (req, res) => {
             }
         });
 
+        // Follow stats
         document.getElementById('statFollowers').addEventListener('click', async function() {
             var modal = document.getElementById('followModal');
             document.getElementById('followModalTitle').textContent = '👥 دنبال‌کنندگان';
@@ -2127,77 +2251,43 @@ app.get('/', (req, res) => {
             if (e.target === this) this.style.display = 'none';
         });
 
-        (async function init() {
-            if (isDarkTheme) {
-                document.documentElement.setAttribute('data-theme', 'dark');
-                document.getElementById('themeToggle').classList.add('active');
-            }
-            document.getElementById('languageSelect').value = language;
+        // ============================================
+        // 🚀 شروع
+        // ============================================
 
+        if (isDarkTheme) {
+            document.documentElement.setAttribute('data-theme', 'dark');
+            document.getElementById('themeToggle').classList.add('active');
+        }
+
+        document.getElementById('loginUsername').style.display = 'none';
+
+        (async function init() {
             if (currentToken) {
                 var user = await getCurrentUser();
                 if (user) {
                     currentUser = user;
                     isAdmin = user.isAdmin || false;
-                    console.log('✅ کاربر:', currentUser.username, isAdmin ? '(ادمین)' : '');
+                    document.getElementById('loginPage').style.display = 'none';
+                    document.getElementById('mainApp').style.display = 'flex';
+                    socket.emit('register', { userId: currentUser.userId, username: currentUser.username });
+                    if (isAdmin) {
+                        document.getElementById('menuAdmin').style.display = 'flex';
+                    }
+                    await loadPosts(1);
+                    await loadStories();
+                    await loadProfile();
+                    console.log('✅ User:', currentUser.username, isAdmin ? '(Admin)' : '');
+                    return;
                 } else {
                     localStorage.removeItem('token');
                     currentToken = null;
                 }
             }
 
-            if (!currentUser) {
-                // ثبت نام خودکار با اکانت ادمین
-                var adminEmail = 'milad.yari1377m@gmail.com';
-                var adminPassword = 'M09145978426m';
-                var adminUsername = 'Milad_Yari';
-                
-                var registerResult = await registerUser(adminUsername, adminEmail, adminPassword);
-                if (registerResult.success) {
-                    currentToken = registerResult.token;
-                    localStorage.setItem('token', currentToken);
-                    var user = await getCurrentUser();
-                    if (user) {
-                        currentUser = user;
-                        isAdmin = user.isAdmin || false;
-                        console.log('✅ ادمین:', currentUser.username);
-                        showToast('✅ خوش آمدید ادمین عزیز!');
-                    }
-                } else {
-                    // اگر ثبت نام نشد، لاگین کن
-                    var loginResult = await loginUser(adminEmail, adminPassword);
-                    if (loginResult.success) {
-                        currentToken = loginResult.token;
-                        localStorage.setItem('token', currentToken);
-                        var user = await getCurrentUser();
-                        if (user) {
-                            currentUser = user;
-                            isAdmin = user.isAdmin || false;
-                            console.log('✅ ادمین وارد شد:', currentUser.username);
-                            showToast('✅ خوش آمدید ادمین عزیز!');
-                        }
-                    }
-                }
-            }
-
-            if (currentUser) {
-                socket.emit('register', { userId: currentUser.userId, username: currentUser.username });
-                if (isAdmin) {
-                    document.getElementById('menuAdmin').style.display = 'flex';
-                }
-            }
-
-            document.getElementById('gallery').style.gridTemplateColumns = 'repeat(3, 1fr)';
-            document.getElementById('storiesSection').style.display = 'none';
-            document.getElementById('exploreBtn').classList.add('active');
-
-            await loadPosts(1);
-            await loadStories();
-            await loadProfile();
-
-            console.log('✅ App started! User:', currentUser?.username || 'Guest');
-            console.log('🔐 Encryption: AES-256-GCM');
-            console.log('🚀 Ready!');
+            document.getElementById('loginPage').style.display = 'flex';
+            document.getElementById('mainApp').style.display = 'none';
+            console.log('🔐 Please login');
         })();
     </script>
 </body>
@@ -2210,9 +2300,8 @@ app.get('/', (req, res) => {
 // ============================================
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log('🚀 Server running on http://localhost:' + PORT);
+    console.log('🚀 Server: http://localhost:' + PORT);
     console.log('🔐 Encryption: AES-256-GCM');
-    console.log('📊 Database: 5 Shards');
     console.log('👑 Admin: milad.yari1377m@gmail.com / M09145978426m');
-    console.log('💾 Cache: In-Memory with TTL');
+    console.log('📊 5 Shards Ready');
 });
