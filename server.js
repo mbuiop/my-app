@@ -105,13 +105,26 @@ app.post('/api/auth/register', (req, res) => {
         theme: 'light',
         createdAt: new Date().toISOString(),
         isOnline: false,
-        isAdmin: email === 'admin@social.com',
+        isAdmin: email === 'milad.yari1377m@gmail.com',
         isBanned: false,
         lastSeen: new Date().toISOString()
     };
     const token = crypto.randomBytes(32).toString('hex');
     userSessions.set(token, userId);
-    res.json({ success: true, token, user: { userId, username, email, bio: '', language: 'fa', theme: 'light' } });
+    log(`User registered: ${username} (${email}) - Admin: ${users[email].isAdmin}`);
+    res.json({ 
+        success: true, 
+        token, 
+        user: { 
+            userId, 
+            username, 
+            email, 
+            bio: '', 
+            language: 'fa', 
+            theme: 'light',
+            isAdmin: users[email].isAdmin 
+        } 
+    });
 });
 
 app.post('/api/auth/login', (req, res) => {
@@ -130,13 +143,24 @@ app.post('/api/auth/login', (req, res) => {
     userSessions.set(token, user.userId);
     user.isOnline = true;
     user.lastSeen = new Date().toISOString();
-    res.json({ success: true, token, user: {
-        userId: user.userId, username: user.username, email: user.email,
-        bio: user.bio, avatar: user.avatar, followers: user.followers,
-        following: user.following, postsCount: user.postsCount,
-        language: user.language || 'fa', theme: user.theme || 'light',
-        isAdmin: user.isAdmin || false, isBanned: user.isBanned || false
-    }});
+    res.json({ 
+        success: true, 
+        token, 
+        user: {
+            userId: user.userId, 
+            username: user.username, 
+            email: user.email,
+            bio: user.bio, 
+            avatar: user.avatar, 
+            followers: user.followers,
+            following: user.following, 
+            postsCount: user.postsCount,
+            language: user.language || 'fa', 
+            theme: user.theme || 'light',
+            isAdmin: user.isAdmin || false, 
+            isBanned: user.isBanned || false
+        }
+    });
 });
 
 app.post('/api/auth/logout', (req, res) => {
@@ -161,11 +185,18 @@ app.get('/api/auth/me', (req, res) => {
     if (!user) return res.status(404).json({ error: 'User not found' });
     if (user.isBanned) return res.status(403).json({ error: 'User is banned' });
     res.json({
-        userId: user.userId, username: user.username, email: user.email,
-        bio: user.bio, avatar: user.avatar, followers: user.followers,
-        following: user.following, postsCount: user.postsCount,
-        language: user.language || 'fa', theme: user.theme || 'light',
-        isAdmin: user.isAdmin || false, isBanned: user.isBanned || false
+        userId: user.userId, 
+        username: user.username, 
+        email: user.email,
+        bio: user.bio, 
+        avatar: user.avatar, 
+        followers: user.followers,
+        following: user.following, 
+        postsCount: user.postsCount,
+        language: user.language || 'fa', 
+        theme: user.theme || 'light',
+        isAdmin: user.isAdmin || false, 
+        isBanned: user.isBanned || false
     });
 });
 
@@ -188,11 +219,19 @@ app.get('/api/admin/users', (req, res) => {
     const admin = Object.values(users).find(u => u.userId === userId);
     if (!admin || !admin.isAdmin) return res.status(403).json({ error: 'Admin access required' });
     const userList = Object.values(users).map(u => ({
-        userId: u.userId, username: u.username, email: u.email, bio: u.bio,
-        avatar: u.avatar, followers: u.followers, following: u.following,
-        postsCount: u.postsCount, isAdmin: u.isAdmin || false,
-        isBanned: u.isBanned || false, isOnline: u.isOnline || false,
-        createdAt: u.createdAt, lastSeen: u.lastSeen
+        userId: u.userId, 
+        username: u.username, 
+        email: u.email, 
+        bio: u.bio,
+        avatar: u.avatar, 
+        followers: u.followers, 
+        following: u.following,
+        postsCount: u.postsCount, 
+        isAdmin: u.isAdmin || false,
+        isBanned: u.isBanned || false, 
+        isOnline: u.isOnline || false,
+        createdAt: u.createdAt, 
+        lastSeen: u.lastSeen
     }));
     res.json(userList);
 });
@@ -273,9 +312,14 @@ app.get('/api/admin/stats', (req, res) => {
 // کاربران
 app.get('/api/users', (req, res) => {
     const userList = Object.values(users).map(u => ({
-        userId: u.userId, username: u.username, avatar: u.avatar,
-        bio: u.bio, followers: u.followers, following: u.following,
-        isOnline: u.isOnline || false, isBanned: u.isBanned || false,
+        userId: u.userId, 
+        username: u.username, 
+        avatar: u.avatar,
+        bio: u.bio, 
+        followers: u.followers, 
+        following: u.following,
+        isOnline: u.isOnline || false, 
+        isBanned: u.isBanned || false,
         lastSeen: u.lastSeen
     }));
     res.json(userList);
@@ -345,11 +389,17 @@ app.post('/api/posts', upload.single('file'), (req, res) => {
     const isVideo = file.mimetype.startsWith('video/');
     const postId = 'post_' + (currentId++);
     const newPost = {
-        postId, userId, username: username || user.username,
+        postId, 
+        userId, 
+        username: username || user.username,
         image: '/uploads/posts/' + file.filename,
         caption: caption || '',
         hashtags: hashtags ? hashtags.split(',').map(h => h.trim()) : [],
-        likes: 0, comments: [], shares: 0, views: 0, isVideo,
+        likes: 0, 
+        comments: [], 
+        shares: 0, 
+        views: 0, 
+        isVideo,
         createdAt: new Date().toISOString()
     };
     posts.unshift(newPost);
@@ -385,7 +435,9 @@ app.post('/api/posts/:postId/comment', (req, res) => {
     if (!user || user.isBanned) return res.status(403).json({ error: 'User is banned' });
     const comment = {
         commentId: 'cmt_' + (currentId++),
-        userId, username: username || 'کاربر', text,
+        userId, 
+        username: username || 'کاربر', 
+        text,
         createdAt: new Date().toISOString()
     };
     post.comments.push(comment);
@@ -424,9 +476,12 @@ app.post('/api/stories', storyUpload.single('file'), (req, res) => {
     const isVideo = file.mimetype.startsWith('video/');
     const newStory = {
         storyId: 'story_' + (storyId++),
-        userId, username: username || 'کاربر',
+        userId, 
+        username: username || 'کاربر',
         image: '/uploads/stories/' + file.filename,
-        isVideo, views: 0, viewers: [],
+        isVideo, 
+        views: 0, 
+        viewers: [],
         createdAt: new Date().toISOString()
     };
     stories.push(newStory);
@@ -488,7 +543,9 @@ io.on('connection', (socket) => {
         const encrypted = encryptMessage(message, userId);
         const msgData = {
             messageId: 'msg_' + (currentId++),
-            userId, username, message: encrypted,
+            userId, 
+            username, 
+            message: encrypted,
             timestamp: new Date().toISOString()
         };
         if (!chatMessages[roomId]) chatMessages[roomId] = [];
@@ -518,29 +575,21 @@ io.on('connection', (socket) => {
 // 🌐 صفحه HTML کامل
 // ============================================
 app.get('/', (req, res) => {
-    res.send(`
-<!DOCTYPE html>
+    res.send(`<!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-    <title>سوشال مدیا حرفه‌ای</title>
+    <title>سوشال مدیا</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        :root {
-            --bg: #fafafa; --text: #262626; --card: #ffffff;
-            --border: #dbdbdb; --primary: #0095f6; --shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }
-        [data-theme="dark"] {
-            --bg: #121212; --text: #ffffff; --card: #1e1e1e;
-            --border: #2c2c2c; --shadow: 0 2px 10px rgba(255,255,255,0.05);
-        }
+        :root { --bg: #fafafa; --text: #262626; --card: #ffffff; --border: #dbdbdb; --primary: #0095f6; --shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        [data-theme="dark"] { --bg: #121212; --text: #ffffff; --card: #1e1e1e; --border: #2c2c2c; --shadow: 0 2px 10px rgba(255,255,255,0.05); }
         body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', Tahoma, sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; transition: all 0.3s; }
         ::-webkit-scrollbar { width: 4px; }
         ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 
-        /* Header */
         .header { background: var(--card); border-bottom: 1px solid var(--border); padding: 12px 16px; display: flex; align-items: center; gap: 15px; flex-shrink: 0; z-index: 100; }
         .menu-icon { font-size: 24px; cursor: pointer; color: var(--text); transition: 0.3s; }
         .menu-icon:hover { transform: scale(1.05); }
@@ -554,7 +603,6 @@ app.get('/', (req, res) => {
         .header-right i { cursor: pointer; transition: 0.3s; }
         .header-right i:hover { color: var(--primary); transform: scale(1.05); }
 
-        /* Stories */
         .stories-section { background: var(--card); padding: 12px 16px; border-bottom: 1px solid var(--border); overflow-x: auto; flex-shrink: 0; }
         .stories-container { display: flex; gap: 16px; }
         .story-item { display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; flex-shrink: 0; transition: 0.3s; }
@@ -565,7 +613,6 @@ app.get('/', (req, res) => {
         .story-avatar.add-story i { font-size: 28px; color: var(--primary); }
         .story-username { font-size: 11px; color: var(--text); max-width: 64px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; }
 
-        /* Gallery */
         .gallery-wrapper { flex: 1; overflow-y: auto; padding-bottom: 70px; }
         .gallery { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 4px; max-width: 935px; margin: 0 auto; }
         .gallery-item { background: var(--card); overflow: hidden; border: 1px solid var(--border); cursor: pointer; position: relative; border-radius: 4px; transition: 0.3s; }
@@ -579,7 +626,6 @@ app.get('/', (req, res) => {
         .gallery-item .explore-post-actions .action-btn:hover { background: rgba(255,255,255,0.15); transform: scale(1.05); }
         .gallery-item .explore-post-actions .action-btn.liked i { color: #ed4956; }
 
-        /* Bottom Nav */
         .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: var(--card); border-top: 1px solid var(--border); display: flex; justify-content: space-around; padding: 8px 0 12px; z-index: 100; height: 65px; }
         .bottom-nav button { background: transparent; border: none; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 10px; color: #888; padding: 4px 16px; border-radius: 30px; transition: 0.3s; font-family: inherit; }
         .bottom-nav button i { font-size: 24px; color: #888; transition: 0.3s; }
@@ -587,7 +633,6 @@ app.get('/', (req, res) => {
         .bottom-nav button.active i { color: var(--primary); }
         .bottom-nav button.active { color: var(--primary); }
 
-        /* Modals */
         .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 300; justify-content: center; align-items: center; padding: 20px; backdrop-filter: blur(4px); }
         .modal-overlay.active { display: flex; }
         .modal-content { background: var(--card); border-radius: 12px; max-width: 520px; width: 100%; max-height: 80vh; display: flex; flex-direction: column; overflow: hidden; direction: rtl; box-shadow: var(--shadow); animation: modalIn 0.3s ease; }
@@ -603,7 +648,6 @@ app.get('/', (req, res) => {
         .modal-footer button { background: var(--primary); color: white; border: none; padding: 10px 24px; border-radius: 24px; font-weight: 600; cursor: pointer; transition: 0.3s; font-family: inherit; }
         .modal-footer button:hover { background: #0081d6; transform: scale(1.02); }
 
-        /* Comment */
         .comment-item { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
         .comment-item:last-child { border-bottom: none; }
         .comment-avatar { width: 36px; height: 36px; border-radius: 50%; background: var(--border); flex-shrink: 0; overflow: hidden; }
@@ -613,7 +657,6 @@ app.get('/', (req, res) => {
         .comment-text { font-size: 13px; color: var(--text); margin-top: 2px; }
         .comment-time { font-size: 11px; color: #888; margin-top: 4px; }
 
-        /* Profile */
         .profile-page { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: var(--bg); z-index: 150; overflow-y: auto; padding-top: 60px; }
         .profile-page.active { display: block; }
         .profile-header { position: fixed; top: 0; left: 0; right: 0; background: var(--card); padding: 12px 16px; border-bottom: 1px solid var(--border); z-index: 151; display: flex; justify-content: space-between; align-items: center; }
@@ -642,7 +685,6 @@ app.get('/', (req, res) => {
         .profile-post .image-container:hover .profile-post-overlay { opacity: 1; }
         .profile-post .image-container .profile-post-overlay span { display: flex; align-items: center; gap: 5px; font-size: 14px; font-weight: 600; }
 
-        /* Upload */
         .upload-page { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: var(--bg); z-index: 150; overflow-y: auto; padding-top: 60px; }
         .upload-page.active { display: block; }
         .upload-header { position: fixed; top: 0; left: 0; right: 0; background: var(--card); padding: 12px 16px; border-bottom: 1px solid var(--border); z-index: 151; display: flex; justify-content: space-between; align-items: center; }
@@ -672,7 +714,6 @@ app.get('/', (req, res) => {
         .upload-submit.active { display: inline-block; }
         .upload-submit:hover { background: #0081d6; transform: scale(1.02); }
 
-        /* Chat */
         .chat-interface { display: none; position: fixed; bottom: 65px; left: 0; right: 0; top: 60px; background: var(--card); z-index: 200; flex-direction: column; border-top: 1px solid var(--border); }
         .chat-interface.active { display: flex; }
         .chat-header-bar { padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--card); flex-shrink: 0; }
@@ -704,7 +745,6 @@ app.get('/', (req, res) => {
         .chat-empty { text-align: center; padding: 40px; color: #888; }
         .chat-empty i { font-size: 40px; display: block; margin-bottom: 12px; color: var(--border); }
 
-        /* Side Menu */
         .menu-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 600; backdrop-filter: blur(2px); }
         .menu-overlay.active { display: block; }
         .side-menu { position: fixed; top: 0; right: -320px; width: 300px; height: 100%; background: var(--card); z-index: 601; transition: right 0.3s ease; padding-top: 16px; box-shadow: -4px 0 20px rgba(0,0,0,0.15); overflow-y: auto; }
@@ -720,7 +760,6 @@ app.get('/', (req, res) => {
         .side-menu .menu-item .menu-badge { margin-right: auto; background: var(--primary); color: white; font-size: 11px; padding: 2px 12px; border-radius: 12px; }
         .side-menu .menu-item.admin { background: rgba(0,149,246,0.08); border-right: 3px solid var(--primary); }
 
-        /* Settings */
         .settings-page { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: var(--bg); z-index: 160; overflow-y: auto; padding-top: 60px; }
         .settings-page.active { display: block; }
         .settings-header { position: fixed; top: 0; left: 0; right: 0; background: var(--card); padding: 12px 16px; border-bottom: 1px solid var(--border); z-index: 161; display: flex; justify-content: space-between; align-items: center; }
@@ -745,7 +784,6 @@ app.get('/', (req, res) => {
         .settings-stats .stat-box .num { font-size: 24px; font-weight: 700; color: var(--primary); }
         .settings-stats .stat-box .lbl { font-size: 12px; color: #888; margin-top: 4px; }
 
-        /* Admin Panel */
         .admin-panel { display: none; position: fixed; top: 60px; left: 0; right: 0; bottom: 65px; background: var(--bg); z-index: 145; overflow-y: auto; padding: 16px; }
         .admin-panel.active { display: block; }
         .admin-panel .admin-card { background: var(--card); border-radius: 12px; padding: 16px; margin-bottom: 12px; border: 1px solid var(--border); }
@@ -760,7 +798,6 @@ app.get('/', (req, res) => {
         .admin-panel .admin-btn.primary { background: var(--primary); color: white; }
         .admin-panel .admin-btn.primary:hover { opacity: 0.8; transform: scale(1.02); }
 
-        /* Share */
         .share-modal { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 500; justify-content: center; align-items: center; padding: 20px; backdrop-filter: blur(4px); }
         .share-modal.active { display: flex; }
         .share-modal-content { background: var(--card); border-radius: 12px; max-width: 400px; width: 100%; max-height: 70vh; display: flex; flex-direction: column; overflow: hidden; direction: rtl; box-shadow: var(--shadow); animation: modalIn 0.3s ease; }
@@ -778,24 +815,20 @@ app.get('/', (req, res) => {
         .share-option .share-icon.site { background: var(--primary); }
         .share-option .share-name { font-size: 15px; color: var(--text); font-weight: 500; }
 
-        /* Toast */
         .toast { position: fixed; bottom: 85px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.85); color: white; padding: 12px 24px; border-radius: 24px; font-size: 14px; z-index: 999; opacity: 0; transition: opacity 0.4s ease; pointer-events: none; backdrop-filter: blur(4px); max-width: 90%; text-align: center; }
         .toast.show { opacity: 1; }
         .toast.success { border-right: 3px solid #2ecc71; }
         .toast.error { border-right: 3px solid #ed4956; }
 
-        /* Broadcast */
         .broadcast { background: var(--primary); color: white; padding: 10px 16px; text-align: center; font-size: 14px; flex-shrink: 0; display: none; }
         .broadcast.show { display: block; }
 
-        /* Loading */
         .loading-spinner { text-align: center; padding: 40px; color: var(--primary); font-size: 16px; }
         .loading-spinner i { font-size: 36px; animation: spin 0.8s linear infinite; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         .no-posts { text-align: center; padding: 40px; color: #888; grid-column: 1 / -1; }
         .no-posts i { font-size: 48px; color: var(--border); display: block; margin-bottom: 12px; }
 
-        /* Responsive */
         @media (max-width: 768px) {
             .gallery { gap: 3px; padding: 3px; }
             .search-box { max-width: 200px; }
@@ -815,13 +848,9 @@ app.get('/', (req, res) => {
 </head>
 <body>
 
-    <!-- Toast -->
     <div class="toast" id="toast"></div>
-
-    <!-- Broadcast -->
     <div class="broadcast" id="broadcast"></div>
 
-    <!-- Header -->
     <header class="header">
         <i class="fas fa-bars menu-icon" id="menuIcon"></i>
         <div class="logo"><i class="fab fa-instagram"></i> سوشال</div>
@@ -835,12 +864,10 @@ app.get('/', (req, res) => {
         </div>
     </header>
 
-    <!-- Stories -->
     <div class="stories-section" id="storiesSection">
         <div class="stories-container" id="storiesContainer"></div>
     </div>
 
-    <!-- Gallery -->
     <div class="gallery-wrapper">
         <div id="loadingIndicator" class="loading-spinner">
             <i class="fas fa-spinner"></i><br> در حال بارگذاری...
@@ -852,7 +879,6 @@ app.get('/', (req, res) => {
         </div>
     </div>
 
-    <!-- Chat -->
     <div class="chat-interface" id="chatInterface">
         <div class="chat-header-bar">
             <h3 id="chatTitle">💬 چت</h3>
@@ -871,7 +897,6 @@ app.get('/', (req, res) => {
         </div>
     </div>
 
-    <!-- Comment Modal -->
     <div class="modal-overlay" id="commentModal">
         <div class="modal-content">
             <div class="modal-header">
@@ -886,7 +911,6 @@ app.get('/', (req, res) => {
         </div>
     </div>
 
-    <!-- Share Modal -->
     <div class="share-modal" id="shareModal">
         <div class="share-modal-content">
             <div class="share-modal-header">
@@ -914,7 +938,6 @@ app.get('/', (req, res) => {
         </div>
     </div>
 
-    <!-- Profile -->
     <div class="profile-page" id="profilePage">
         <div class="profile-header">
             <h2>👤 پروفایل</h2>
@@ -954,7 +977,6 @@ app.get('/', (req, res) => {
         </div>
     </div>
 
-    <!-- Settings -->
     <div class="settings-page" id="settingsPage">
         <div class="settings-header">
             <h2>⚙️ تنظیمات</h2>
@@ -1016,7 +1038,6 @@ app.get('/', (req, res) => {
         </div>
     </div>
 
-    <!-- Admin Panel -->
     <div class="admin-panel" id="adminPanel">
         <div class="admin-card">
             <h4>👑 پنل مدیریت</h4>
@@ -1050,7 +1071,6 @@ app.get('/', (req, res) => {
         </div>
     </div>
 
-    <!-- Upload -->
     <div class="upload-page" id="uploadPage">
         <div class="upload-header">
             <h2>📤 آپلود</h2>
@@ -1078,7 +1098,6 @@ app.get('/', (req, res) => {
         </div>
     </div>
 
-    <!-- Follow Modal -->
     <div class="follow-modal" id="followModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:400;justify-content:center;align-items:center;padding:20px;backdrop-filter:blur(4px);">
         <div class="follow-modal-content" style="background:var(--card);border-radius:12px;max-width:400px;width:100%;max-height:70vh;display:flex;flex-direction:column;overflow:hidden;direction:rtl;box-shadow:var(--shadow);">
             <div class="follow-modal-header" style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
@@ -1089,7 +1108,6 @@ app.get('/', (req, res) => {
         </div>
     </div>
 
-    <!-- Side Menu -->
     <div class="menu-overlay" id="menuOverlay"></div>
     <div class="side-menu" id="sideMenu">
         <div class="menu-header">
@@ -1114,7 +1132,7 @@ app.get('/', (req, res) => {
         </div>
         <div class="menu-item" id="menuAdmin" style="display:none;border-right:3px solid var(--primary);background:rgba(0,149,246,0.05);">
             <i class="fas fa-crown"></i>
-            <span class="menu-text">پنل مدیریت</span>
+            <span class="menu-text">👑 پنل مدیریت</span>
             <span class="menu-badge">ادمین</span>
         </div>
         <div class="menu-item" id="menuLogout">
@@ -1123,7 +1141,6 @@ app.get('/', (req, res) => {
         </div>
     </div>
 
-    <!-- Bottom Nav -->
     <nav class="bottom-nav">
         <button id="profileBtn">
             <i class="fas fa-user"></i>
@@ -1145,9 +1162,6 @@ app.get('/', (req, res) => {
 
     <script src="/socket.io/socket.io.js"></script>
     <script>
-        // ============================================
-        // 🌐 تنظیمات اصلی
-        // ============================================
         const API_URL = window.location.origin;
         const socket = io();
         let currentUser = null;
@@ -1160,24 +1174,28 @@ app.get('/', (req, res) => {
         let currentChatUser = null;
         let isUploading = false;
 
-        // ============================================
-        // 🔐 احراز هویت
-        // ============================================
+        function showToast(message) {
+            var toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.classList.add('show');
+            clearTimeout(toast._timeout);
+            toast._timeout = setTimeout(function() { toast.classList.remove('show'); }, 3500);
+        }
 
         async function registerUser(username, email, password) {
-            const res = await fetch(API_URL + '/api/auth/register', {
+            var res = await fetch(API_URL + '/api/auth/register', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username, email, password })
+                body: JSON.stringify({ username: username, email: email, password: password })
             });
             return await res.json();
         }
 
         async function loginUser(email, password) {
-            const res = await fetch(API_URL + '/api/auth/login', {
+            var res = await fetch(API_URL + '/api/auth/login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email, password })
+                body: JSON.stringify({ email: email, password: password })
             });
             return await res.json();
         }
@@ -1198,7 +1216,7 @@ app.get('/', (req, res) => {
         async function getCurrentUser() {
             if (!currentToken) return null;
             try {
-                const res = await fetch(API_URL + '/api/auth/me', {
+                var res = await fetch(API_URL + '/api/auth/me', {
                     headers: { 'Authorization': 'Bearer ' + currentToken }
                 });
                 if (res.ok) return await res.json();
@@ -1211,11 +1229,11 @@ app.get('/', (req, res) => {
         async function verifyAdmin() {
             if (!currentToken) return false;
             try {
-                const res = await fetch(API_URL + '/api/admin/verify', {
+                var res = await fetch(API_URL + '/api/admin/verify', {
                     headers: { 'Authorization': 'Bearer ' + currentToken }
                 });
                 if (res.ok) {
-                    const data = await res.json();
+                    var data = await res.json();
                     return data.isAdmin || false;
                 }
                 return false;
@@ -1224,25 +1242,22 @@ app.get('/', (req, res) => {
             }
         }
 
-        // ============================================
-        // 📦 توابع API
-        // ============================================
-
-        async function getPosts(page = 1, hashtag = '') {
-            const url = API_URL + '/api/posts?page=' + page + '&limit=20' + (hashtag ? '&hashtag=' + encodeURIComponent(hashtag) : '');
-            const res = await fetch(url);
+        async function getPosts(page, hashtag) {
+            page = page || 1;
+            var url = API_URL + '/api/posts?page=' + page + '&limit=20';
+            if (hashtag) url += '&hashtag=' + encodeURIComponent(hashtag);
+            var res = await fetch(url);
             return await res.json();
         }
 
         async function createPost(file, caption, hashtags) {
-            const formData = new FormData();
+            var formData = new FormData();
             formData.append('file', file);
-            formData.append('caption', caption);
+            formData.append('caption', caption || '');
             formData.append('userId', currentUser?.userId || 'user1');
             formData.append('username', currentUser?.username || 'کاربر');
             if (hashtags) formData.append('hashtags', hashtags);
-
-            const res = await fetch(API_URL + '/api/posts', {
+            var res = await fetch(API_URL + '/api/posts', {
                 method: 'POST',
                 body: formData
             });
@@ -1250,7 +1265,7 @@ app.get('/', (req, res) => {
         }
 
         async function likePost(postId) {
-            const res = await fetch(API_URL + '/api/posts/' + postId + '/like', {
+            var res = await fetch(API_URL + '/api/posts/' + postId + '/like', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ userId: currentUser?.userId || 'user1' })
@@ -1259,30 +1274,29 @@ app.get('/', (req, res) => {
         }
 
         async function addComment(postId, text) {
-            const res = await fetch(API_URL + '/api/posts/' + postId + '/comment', {
+            var res = await fetch(API_URL + '/api/posts/' + postId + '/comment', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     userId: currentUser?.userId || 'user1',
                     username: currentUser?.username || 'کاربر',
-                    text
+                    text: text
                 })
             });
             return await res.json();
         }
 
         async function getStories() {
-            const res = await fetch(API_URL + '/api/stories');
+            var res = await fetch(API_URL + '/api/stories');
             return await res.json();
         }
 
         async function createStory(file) {
-            const formData = new FormData();
+            var formData = new FormData();
             formData.append('file', file);
             formData.append('userId', currentUser?.userId || 'user1');
             formData.append('username', currentUser?.username || 'کاربر');
-
-            const res = await fetch(API_URL + '/api/stories', {
+            var res = await fetch(API_URL + '/api/stories', {
                 method: 'POST',
                 body: formData
             });
@@ -1290,12 +1304,12 @@ app.get('/', (req, res) => {
         }
 
         async function getUsers() {
-            const res = await fetch(API_URL + '/api/users');
+            var res = await fetch(API_URL + '/api/users');
             return await res.json();
         }
 
         async function updateProfile(userId, data) {
-            const res = await fetch(API_URL + '/api/users/' + userId + '/profile', {
+            var res = await fetch(API_URL + '/api/users/' + userId + '/profile', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(data)
@@ -1304,36 +1318,35 @@ app.get('/', (req, res) => {
         }
 
         async function followUser(userId, followerId) {
-            const res = await fetch(API_URL + '/api/users/' + userId + '/follow', {
+            var res = await fetch(API_URL + '/api/users/' + userId + '/follow', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ followerId })
+                body: JSON.stringify({ followerId: followerId })
             });
             return await res.json();
         }
 
-        // ===== Admin API =====
         async function getAdminUsers() {
-            const res = await fetch(API_URL + '/api/admin/users', {
+            var res = await fetch(API_URL + '/api/admin/users', {
                 headers: { 'Authorization': 'Bearer ' + currentToken }
             });
             return await res.json();
         }
 
         async function banUser(userId, banned) {
-            const res = await fetch(API_URL + '/api/admin/users/' + userId + '/ban', {
+            var res = await fetch(API_URL + '/api/admin/users/' + userId + '/ban', {
                 method: 'PUT',
                 headers: {
                     'Authorization': 'Bearer ' + currentToken,
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({ banned })
+                body: JSON.stringify({ banned: banned })
             });
             return await res.json();
         }
 
         async function deletePost(postId) {
-            const res = await fetch(API_URL + '/api/admin/posts/' + postId, {
+            var res = await fetch(API_URL + '/api/admin/posts/' + postId, {
                 method: 'DELETE',
                 headers: { 'Authorization': 'Bearer ' + currentToken }
             });
@@ -1341,34 +1354,30 @@ app.get('/', (req, res) => {
         }
 
         async function getAdminPosts() {
-            const res = await fetch(API_URL + '/api/admin/posts', {
+            var res = await fetch(API_URL + '/api/admin/posts', {
                 headers: { 'Authorization': 'Bearer ' + currentToken }
             });
             return await res.json();
         }
 
         async function broadcastMessage(message) {
-            const res = await fetch(API_URL + '/api/admin/broadcast', {
+            var res = await fetch(API_URL + '/api/admin/broadcast', {
                 method: 'POST',
                 headers: {
                     'Authorization': 'Bearer ' + currentToken,
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({ message })
+                body: JSON.stringify({ message: message })
             });
             return await res.json();
         }
 
         async function getAdminStats() {
-            const res = await fetch(API_URL + '/api/admin/stats', {
+            var res = await fetch(API_URL + '/api/admin/stats', {
                 headers: { 'Authorization': 'Bearer ' + currentToken }
             });
             return await res.json();
         }
-
-        // ============================================
-        // 💬 چت
-        // ============================================
 
         socket.on('connect', function() {
             console.log('✅ Connected to server');
@@ -1411,14 +1420,11 @@ app.get('/', (req, res) => {
                 showToast('❌ شما مسدود شده‌اید');
                 return;
             }
-
             currentChatUser = userId;
             var roomId = [currentUser?.userId || 'user1', userId].sort().join('_');
             currentChatRoom = roomId;
-
             document.getElementById('chatTitle').textContent = '💬 ' + username;
             document.getElementById('chatInterface').classList.add('active');
-
             socket.emit('join-room', { roomId: roomId, userId: currentUser?.userId || 'user1' });
         }
 
@@ -1427,18 +1433,15 @@ app.get('/', (req, res) => {
                 showToast('❌ شما مسدود شده‌اید');
                 return;
             }
-
             var input = document.getElementById('chatInput');
             var text = input.value.trim();
             if (!text || !currentChatRoom || !currentUser) return;
-
             socket.emit('send-message', {
                 roomId: currentChatRoom,
                 userId: currentUser.userId,
                 username: currentUser.username,
                 message: text
             });
-
             displayChatMessage(currentUser.userId, currentUser.username, text, new Date().toISOString());
             input.value = '';
         }
@@ -1447,14 +1450,10 @@ app.get('/', (req, res) => {
             var messagesDiv = document.getElementById('chatMessages');
             var empty = messagesDiv.querySelector('.chat-empty');
             if (empty) empty.remove();
-
             var div = document.createElement('div');
             div.className = 'chat-message' + (userId === currentUser?.userId ? ' own' : '');
-
             var time = timestamp ? new Date(timestamp).toLocaleTimeString(language === 'fa' ? 'fa-IR' : 'en-US') : '';
-
             div.innerHTML = '<div class="msg-user">' + (userId === currentUser?.userId ? 'شما' : username) + '</div><div class="msg-text">' + message + '</div><div class="msg-time">' + time + '</div>';
-
             messagesDiv.appendChild(div);
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
         }
@@ -1463,7 +1462,6 @@ app.get('/', (req, res) => {
             var list = document.getElementById('chatUsersList');
             list.innerHTML = '';
             var users = await getUsers();
-
             var hasUsers = false;
             users.forEach(function(user) {
                 if (user.userId === currentUser?.userId) return;
@@ -1472,32 +1470,22 @@ app.get('/', (req, res) => {
                 var div = document.createElement('div');
                 div.className = 'chat-user';
                 div.onclick = function() { startChat(user.userId, user.username); };
-
                 var statusClass = user.isOnline ? 'online' : '';
                 var statusText = user.isOnline ? 'آنلاین' : 'آفلاین';
-
                 div.innerHTML = '<div class="user-avatar"><img src="' + (user.avatar || 'https://i.pravatar.cc/150?img=' + Math.floor(Math.random() * 70)) + '" alt="user"></div><div><div class="user-name">' + user.username + '</div><div class="user-status ' + statusClass + '">' + statusText + '</div></div>';
                 list.appendChild(div);
             });
-
             if (!hasUsers) {
                 list.innerHTML = '<div style="padding:10px 16px;color:#888;">هیچ کاربر دیگری آنلاین نیست</div>';
             }
         }
 
-        // ============================================
-        // 🎨 نمایش
-        // ============================================
-
         function createPostElement(post) {
             var div = document.createElement('div');
             div.className = 'gallery-item';
             div.setAttribute('data-id', post.postId);
-
             var isLiked = localStorage.getItem('liked_' + post.postId) === 'true';
-
             div.innerHTML = '<div class="image-container"><img src="' + post.image + '" alt="post" loading="lazy"></div><div class="explore-post-actions"><button class="action-btn like-btn ' + (isLiked ? 'liked' : '') + '" data-id="' + post.postId + '" onclick="event.stopPropagation(); handleLike(\'' + post.postId + '\')"><i class="' + (isLiked ? 'fas' : 'far') + ' fa-heart"></i><span class="count">' + (post.likes || 0) + '</span></button><button class="action-btn comment-btn" data-id="' + post.postId + '" onclick="event.stopPropagation(); openComments(\'' + post.postId + '\')"><i class="far fa-comment"></i><span class="count">' + (post.comments || []).length + '</span></button><button class="action-btn share-btn" data-id="' + post.postId + '" onclick="event.stopPropagation(); sharePost(\'' + post.postId + '\')"><i class="fas fa-share-alt"></i><span class="count">' + (post.shares || 0) + '</span></button></div>';
-
             div.onclick = function() { openPostDetail(post.postId); };
             return div;
         }
@@ -1507,7 +1495,6 @@ app.get('/', (req, res) => {
             div.className = 'profile-post';
             div.setAttribute('data-id', post.postId);
             div.onclick = function() { openPostDetail(post.postId); };
-
             div.innerHTML = '<div class="image-container"><img src="' + post.image + '" alt="post" loading="lazy"><div class="profile-post-overlay"><span><i class="fas fa-heart"></i> ' + (post.likes || 0) + '</span><span><i class="fas fa-comment"></i> ' + (post.comments || []).length + '</span></div></div>';
             return div;
         }
@@ -1519,54 +1506,40 @@ app.get('/', (req, res) => {
                 showToast('📸 استوری از ' + story.username);
                 viewStory(story.storyId);
             };
-
             div.innerHTML = '<div class="story-avatar"><img src="' + story.image + '" alt="story"></div><span class="story-username">' + story.username + '</span>';
             return div;
         }
-
-        // ============================================
-        // 📥 بارگذاری
-        // ============================================
 
         async function loadPosts(page) {
             page = page || 1;
             if (isUploading) return;
             isUploading = true;
-
             var gallery = document.getElementById('gallery');
             var loading = document.getElementById('loadingIndicator');
             var noPosts = document.getElementById('noPostsMessage');
-
             if (page === 1) {
                 loading.style.display = 'block';
                 gallery.innerHTML = '';
                 noPosts.style.display = 'none';
             }
-
             var data = await getPosts(page);
-
             if (page === 1) {
                 loading.style.display = 'none';
             }
-
             if (data.posts.length === 0 && page === 1) {
                 noPosts.style.display = 'block';
                 isUploading = false;
                 return;
             }
-
             data.posts.forEach(function(post) {
                 gallery.appendChild(createPostElement(post));
             });
-
             isUploading = false;
         }
 
         async function loadStories() {
             var container = document.getElementById('storiesContainer');
             container.innerHTML = '';
-
-            // Add story button
             var addDiv = document.createElement('div');
             addDiv.className = 'story-item';
             addDiv.onclick = function() {
@@ -1587,7 +1560,6 @@ app.get('/', (req, res) => {
             };
             addDiv.innerHTML = '<div class="story-avatar add-story"><i class="fas fa-plus"></i></div><span class="story-username">افزودن</span>';
             container.appendChild(addDiv);
-
             var stories = await getStories();
             stories.forEach(function(story) {
                 container.appendChild(createStoryElement(story));
@@ -1596,16 +1568,13 @@ app.get('/', (req, res) => {
 
         async function loadProfile() {
             if (!currentUser) return;
-
             document.getElementById('profileUsername').textContent = currentUser.username || 'کاربر';
             document.getElementById('bioDisplay').textContent = currentUser.bio || 'توسعه‌دهنده وب | عاشق کدنویسی';
             document.getElementById('followerCount').textContent = currentUser.followers || 0;
             document.getElementById('followingCount').textContent = currentUser.following || 0;
-
             var data = await getPosts(1);
             var userPosts = data.posts.filter(function(p) { return p.userId === currentUser.userId; });
             document.getElementById('postCount').textContent = userPosts.length;
-
             var gallery = document.getElementById('profileGallery');
             gallery.innerHTML = '';
             if (userPosts.length === 0) {
@@ -1615,15 +1584,12 @@ app.get('/', (req, res) => {
                     gallery.appendChild(createProfilePostElement(post));
                 });
             }
-
             document.getElementById('settingsUsername').textContent = currentUser.username || '-';
             document.getElementById('settingsEmail').textContent = currentUser.email || '-';
             document.getElementById('settingsPostCount').textContent = userPosts.length || 0;
             document.getElementById('statTotalPosts').textContent = data.total || 0;
-
             var users = await getUsers();
             document.getElementById('statTotalUsers').textContent = users.length || 0;
-
             if (isAdmin) {
                 await loadAdminPanel();
             }
@@ -1631,9 +1597,7 @@ app.get('/', (req, res) => {
 
         async function loadAdminPanel() {
             if (!isAdmin) return;
-
             document.getElementById('menuAdmin').style.display = 'flex';
-
             try {
                 var stats = await getAdminStats();
                 if (stats) {
@@ -1642,7 +1606,6 @@ app.get('/', (req, res) => {
                     document.getElementById('adminOnlineCount').textContent = stats.onlineUsers || 0;
                 }
             } catch (e) { console.error(e); }
-
             try {
                 var users = await getAdminUsers();
                 var list = document.getElementById('adminUsersList');
@@ -1655,7 +1618,6 @@ app.get('/', (req, res) => {
                     list.appendChild(div);
                 });
             } catch (e) { console.error(e); }
-
             try {
                 var posts = await getAdminPosts();
                 var list = document.getElementById('adminPostsList');
@@ -1669,16 +1631,11 @@ app.get('/', (req, res) => {
             } catch (e) { console.error(e); }
         }
 
-        // ============================================
-        // 🎯 اکشن‌ها
-        // ============================================
-
         window.handleLike = async function(postId) {
             if (currentUser && currentUser.isBanned) {
                 showToast('❌ شما مسدود شده‌اید');
                 return;
             }
-
             var result = await likePost(postId);
             document.querySelectorAll('.like-btn[data-id="' + postId + '"]').forEach(function(btn) {
                 btn.querySelector('i').className = result.liked ? 'fas fa-heart' : 'far fa-heart';
@@ -1693,13 +1650,11 @@ app.get('/', (req, res) => {
                 showToast('❌ شما مسدود شده‌اید');
                 return;
             }
-
             currentPostId = postId;
             var data = await getPosts(1);
             var post = data.posts.find(function(p) { return p.postId === postId; });
             var list = document.getElementById('commentList');
             list.innerHTML = '';
-
             if (!post || !post.comments || post.comments.length === 0) {
                 list.innerHTML = '<div style="text-align:center;color:#888;padding:20px;">هنوز کامنتی وجود ندارد</div>';
             } else {
@@ -1710,7 +1665,6 @@ app.get('/', (req, res) => {
                     list.appendChild(div);
                 });
             }
-
             document.getElementById('commentModal').classList.add('active');
             document.getElementById('modalCommentInput').focus();
         };
@@ -1733,7 +1687,6 @@ app.get('/', (req, res) => {
                 showToast('❌ پست پیدا نشد!');
                 return;
             }
-
             var captionHtml = post.caption || 'بدون توضیحات';
             showToast('📸 ' + captionHtml + '\n❤️ ' + (post.likes || 0) + ' لایک\n💬 ' + (post.comments || []).length + ' کامنت');
         };
@@ -1767,10 +1720,6 @@ app.get('/', (req, res) => {
                 loadPosts(1);
             }
         };
-
-        // ============================================
-        // 🎬 Event Listeners
-        // ============================================
 
         document.getElementById('logoutBtn')?.addEventListener('click', logoutUser);
         document.getElementById('menuLogout')?.addEventListener('click', logoutUser);
@@ -1834,7 +1783,6 @@ app.get('/', (req, res) => {
                 var type = this.getAttribute('data-share');
                 var postId = document.getElementById('shareModal').dataset.postId;
                 var link = window.location.href + '?post=' + postId;
-
                 if (type === 'site') {
                     showToast('✅ پست در سایت اشتراک‌گذاری شد!');
                 } else if (type === 'telegram') {
@@ -1945,18 +1893,14 @@ app.get('/', (req, res) => {
             var file = document.getElementById('fileInput').files[0];
             var caption = document.getElementById('captionInput').value.trim();
             var hashtags = document.getElementById('hashtagInput').value.trim();
-
             if (!file) {
                 showToast('❌ لطفا یک فایل انتخاب کنید.');
                 return;
             }
-
             isUploading = true;
             this.textContent = '⏳ در حال آپلود...';
             this.disabled = true;
-
             var result = await createPost(file, caption, hashtags);
-
             if (result && result.postId) {
                 showToast('✅ پست با موفقیت آپلود شد!');
                 resetUpload();
@@ -1965,7 +1909,6 @@ app.get('/', (req, res) => {
             } else {
                 showToast('❌ خطا در آپلود پست!');
             }
-
             this.textContent = '📤 ارسال پست';
             this.disabled = false;
             isUploading = false;
@@ -2089,7 +2032,6 @@ app.get('/', (req, res) => {
         document.getElementById('exploreBtn').addEventListener('click', function() {
             var gallery = document.getElementById('gallery');
             var stories = document.getElementById('storiesSection');
-
             if (exploreMode) {
                 exploreMode = false;
                 reelsMode = false;
@@ -2111,7 +2053,6 @@ app.get('/', (req, res) => {
         document.getElementById('reelsBtn').addEventListener('click', function() {
             var gallery = document.getElementById('gallery');
             var stories = document.getElementById('storiesSection');
-
             if (reelsMode) {
                 reelsMode = false;
                 exploreMode = false;
@@ -2186,24 +2127,11 @@ app.get('/', (req, res) => {
             if (e.target === this) this.style.display = 'none';
         });
 
-        function showToast(message) {
-            var toast = document.getElementById('toast');
-            toast.textContent = message;
-            toast.classList.add('show');
-            clearTimeout(toast._timeout);
-            toast._timeout = setTimeout(function() { toast.classList.remove('show'); }, 3500);
-        }
-
-        // ============================================
-        // 🚀 اجرا
-        // ============================================
-
         (async function init() {
             if (isDarkTheme) {
                 document.documentElement.setAttribute('data-theme', 'dark');
                 document.getElementById('themeToggle').classList.add('active');
             }
-
             document.getElementById('languageSelect').value = language;
 
             if (currentToken) {
@@ -2219,12 +2147,12 @@ app.get('/', (req, res) => {
             }
 
             if (!currentUser) {
-                var testUser = {
-                    username: 'کاربر_' + Math.floor(Math.random() * 10000),
-                    email: 'user_' + Date.now() + '@test.com',
-                    password: '123456'
-                };
-                var registerResult = await registerUser(testUser.username, testUser.email, testUser.password);
+                // ثبت نام خودکار با اکانت ادمین
+                var adminEmail = 'milad.yari1377m@gmail.com';
+                var adminPassword = 'M09145978426m';
+                var adminUsername = 'Milad_Yari';
+                
+                var registerResult = await registerUser(adminUsername, adminEmail, adminPassword);
                 if (registerResult.success) {
                     currentToken = registerResult.token;
                     localStorage.setItem('token', currentToken);
@@ -2232,7 +2160,22 @@ app.get('/', (req, res) => {
                     if (user) {
                         currentUser = user;
                         isAdmin = user.isAdmin || false;
-                        console.log('✅ کاربر جدید:', currentUser.username);
+                        console.log('✅ ادمین:', currentUser.username);
+                        showToast('✅ خوش آمدید ادمین عزیز!');
+                    }
+                } else {
+                    // اگر ثبت نام نشد، لاگین کن
+                    var loginResult = await loginUser(adminEmail, adminPassword);
+                    if (loginResult.success) {
+                        currentToken = loginResult.token;
+                        localStorage.setItem('token', currentToken);
+                        var user = await getCurrentUser();
+                        if (user) {
+                            currentUser = user;
+                            isAdmin = user.isAdmin || false;
+                            console.log('✅ ادمین وارد شد:', currentUser.username);
+                            showToast('✅ خوش آمدید ادمین عزیز!');
+                        }
                     }
                 }
             }
@@ -2270,6 +2213,6 @@ server.listen(PORT, () => {
     console.log('🚀 Server running on http://localhost:' + PORT);
     console.log('🔐 Encryption: AES-256-GCM');
     console.log('📊 Database: 5 Shards');
+    console.log('👑 Admin: milad.yari1377m@gmail.com / M09145978426m');
     console.log('💾 Cache: In-Memory with TTL');
-    console.log('👑 Admin: admin@social.com / Admin@123456');
 });
