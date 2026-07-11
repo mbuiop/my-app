@@ -11,9 +11,10 @@ import logging
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-import aioredis
+import aioredis  # ✅ درست: aioredis
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
 import aiofiles
@@ -55,7 +56,7 @@ class Post(BaseModel):
     user_id: str
     username: str
     media: str
-    type: str = "image"  # image or video
+    type: str = "image"
     caption: str = ""
     likes: int = 0
     comments: int = 0
@@ -75,7 +76,7 @@ class ChatMessage(BaseModel):
     id: str
     from_user: str
     to_user: str
-    message: str  # encrypted
+    message: str
     created_at: datetime = datetime.now()
     read: bool = False
 
@@ -109,7 +110,7 @@ class Database:
         self._client = AsyncIOMotorClient(Config.MONGO_URI)
         self.db = self._client.social_media
         
-        # Redis
+        # Redis (با استفاده از aioredis)
         self._redis = await aioredis.from_url(Config.REDIS_URL, decode_responses=True)
         
         # Create indexes
@@ -129,13 +130,13 @@ class Database:
         return self._redis
 
 # ===================================================
-# WebSocket Manager with Connection Pooling
+# WebSocket Manager
 # ===================================================
 
 class ConnectionManager:
     def __init__(self):
         self.active_connections: Dict[str, WebSocket] = {}
-        self.user_connections: Dict[str, str] = {}  # user_id -> connection_id
+        self.user_connections: Dict[str, str] = {}
         self._lock = asyncio.Lock()
     
     async def connect(self, websocket: WebSocket, user_id: str) -> str:
@@ -143,7 +144,6 @@ class ConnectionManager:
         connection_id = str(uuid.uuid4())
         
         async with self._lock:
-            # Disconnect existing connection for this user
             if user_id in self.user_connections:
                 old_conn_id = self.user_connections[user_id]
                 if old_conn_id in self.active_connections:
@@ -156,7 +156,6 @@ class ConnectionManager:
             self.active_connections[connection_id] = websocket
             self.user_connections[user_id] = connection_id
         
-        # Set user_id in websocket state
         websocket.state.user_id = user_id
         websocket.state.connection_id = connection_id
         
@@ -244,7 +243,6 @@ async def get_stories(
     user_id: str = Depends(get_current_user),
     db: Database = Depends(get_db)
 ):
-    """Get all active stories"""
     stories = await db.mongo.stories.find(
         {"expires_at": {"$gt": datetime.now()}}
     ).limit(20).to_list(None)
@@ -269,20 +267,17 @@ async def get_posts(
     user_id: str = Depends(get_current_user),
     db: Database = Depends(get_db)
 ):
-    """Get posts based on mode (explore, reels, following)"""
     query = {}
     
     if mode == "following":
-        # Get users that the current user follows
         follow_key = f"followers:{user_id}"
         following = await db.redis.smembers(follow_key)
         if following:
             query["user_id"] = {"$in": list(following)}
         else:
-            query = {"_id": {"$exists": True}}  # No following, show all
+            query = {}
     
     if mode == "reels":
-        # Get video posts only
         query["type"] = "video"
     
     posts = await db.mongo.posts.find(query).sort(
@@ -292,8 +287,6 @@ async def get_posts(
     result = []
     for post in posts:
         post_id = str(post["_id"])
-        
-        # Check if user liked this post
         liked_key = f"likes:{post_id}"
         liked = await db.redis.sismember(liked_key, user_id)
         
@@ -320,7 +313,6 @@ async def get_post(
     user_id: str = Depends(get_current_user),
     db: Database = Depends(get_db)
 ):
-    """Get single post with details"""
     from bson import ObjectId
     
     post = await db.mongo.posts.find_one({"_id": ObjectId(post_id)})
@@ -351,7 +343,6 @@ async def get_comments(
     limit: int = 50,
     db: Database = Depends(get_db)
 ):
-    """Get comments for a post"""
     from bson import ObjectId
     
     comments = await db.mongo.comments.find(
@@ -372,14 +363,12 @@ async def add_comment(
     user_id: str = Depends(get_current_user),
     db: Database = Depends(get_db)
 ):
-    """Add a comment to a post"""
     from bson import ObjectId
     
     text = data.get("text", "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="Comment text is required")
     
-    # Get user info
     user_key = f"user:{user_id}"
     username = await db.redis.hget(user_key, "username") or "کاربر"
     
@@ -394,17 +383,14 @@ async def add_comment(
     
     await db.mongo.comments.insert_one(comment)
     
-    # Increment comment count
     result = await db.mongo.posts.update_one(
         {"_id": ObjectId(post_id)},
         {"$inc": {"comments": 1}}
     )
     
-    # Get updated count
     post = await db.mongo.posts.find_one({"_id": ObjectId(post_id)})
     comments_count = post.get("comments", 0) if post else 0
     
-    # Notify via WebSocket
     if post:
         await manager.broadcast({
             "type": "new_comment",
@@ -424,7 +410,6 @@ async def toggle_like(
     user_id: str = Depends(get_current_user),
     db: Database = Depends(get_db)
 ):
-    """Toggle like on a post"""
     from bson import ObjectId
     
     unlike = data.get("unlike", False) if data else False
@@ -435,16 +420,13 @@ async def toggle_like(
     else:
         await db.redis.sadd(liked_key, user_id)
     
-    # Get like count from Redis
     likes = await db.redis.scard(liked_key)
     
-    # Update MongoDB (async)
     await db.mongo.posts.update_one(
         {"_id": ObjectId(post_id)},
         {"$set": {"likes": likes}}
     )
     
-    # Notify via WebSocket
     await manager.broadcast({
         "type": "like_update",
         "post_id": post_id,
@@ -461,7 +443,6 @@ async def share_post(
     user_id: str = Depends(get_current_user),
     db: Database = Depends(get_db)
 ):
-    """Share a post"""
     from bson import ObjectId
     
     result = await db.mongo.posts.update_one(
@@ -480,15 +461,13 @@ async def increment_view(
     user_id: str = Depends(get_current_user),
     db: Database = Depends(get_db)
 ):
-    """Increment post view count"""
     from bson import ObjectId
     
-    # Use Redis for rate limiting (one view per user per hour)
     view_key = f"views:{post_id}:{user_id}"
     if await db.redis.setnx(view_key, "1"):
         await db.redis.expire(view_key, 3600)
         
-        result = await db.mongo.posts.update_one(
+        await db.mongo.posts.update_one(
             {"_id": ObjectId(post_id)},
             {"$inc": {"views": 1}}
         )
@@ -500,23 +479,16 @@ async def get_profile(
     user_id: str = Depends(get_current_user),
     db: Database = Depends(get_db)
 ):
-    """Get user profile"""
     user_key = f"user:{user_id}"
     
-    # Get user data from Redis
     username = await db.redis.hget(user_key, "username") or user_id[:8]
     bio = await db.redis.hget(user_key, "bio") or "توسعه‌دهنده وب | عاشق کدنویسی"
     posts = int(await db.redis.hget(user_key, "posts") or 0)
     
-    # Get followers/following counts
     followers = await db.redis.scard(f"followers:{user_id}")
     following = await db.redis.scard(f"following:{user_id}")
-    
-    # Check if user is following the profile (for other users)
-    # For simplicity, just check self
     is_following = False
     
-    # Get user's posts
     user_posts = await db.mongo.posts.find(
         {"user_id": user_id}
     ).sort("created_at", -1).limit(20).to_list(None)
@@ -555,7 +527,6 @@ async def update_bio(
     user_id: str = Depends(get_current_user),
     db: Database = Depends(get_db)
 ):
-    """Update user bio"""
     bio = data.get("bio", "").strip()
     if not bio:
         raise HTTPException(status_code=400, detail="Bio is required")
@@ -571,13 +542,11 @@ async def toggle_follow(
     user_id: str = Depends(get_current_user),
     db: Database = Depends(get_db)
 ):
-    """Toggle follow/unfollow a user"""
     target_user = data.get("username", user_id) if data else user_id
     
     if target_user == user_id:
         return {"following": False, "followers": 0}
     
-    # Check if already following
     follow_key = f"following:{user_id}"
     is_following = await db.redis.sismember(follow_key, target_user)
     
@@ -590,7 +559,6 @@ async def toggle_follow(
         await db.redis.sadd(f"followers:{target_user}", user_id)
         following = True
     
-    # Get updated follower count
     followers = await db.redis.scard(f"followers:{target_user}")
     
     return {"following": following, "followers": followers}
@@ -601,7 +569,6 @@ async def get_follow_list(
     user_id: str = Depends(get_current_user),
     db: Database = Depends(get_db)
 ):
-    """Get followers or following list"""
     if type == "followers":
         users = await db.redis.smembers(f"followers:{user_id}")
     else:
@@ -627,15 +594,6 @@ async def get_chats(
     user_id: str = Depends(get_current_user),
     db: Database = Depends(get_db)
 ):
-    """Get chat list for user"""
-    # Get all users the user has chatted with
-    pipeline = [
-        {"$match": {"$or": [{"from_user": user_id}, {"to_user": user_id}]}},
-        {"$group": {"_id": "$from_user", "last": {"$max": "$created_at"}}},
-        {"$sort": {"last": -1}}
-    ]
-    
-    # Get distinct chat partners
     chat_partners = await db.mongo.chat_messages.aggregate([
         {"$match": {"$or": [{"from_user": user_id}, {"to_user": user_id}]}},
         {"$group": {"_id": {
@@ -692,7 +650,6 @@ async def get_chat_messages(
     current_user: str = Depends(get_current_user),
     db: Database = Depends(get_db)
 ):
-    """Get chat messages between current user and another user"""
     messages = await db.mongo.chat_messages.find({
         "$or": [
             {"$and": [{"from_user": current_user}, {"to_user": user_id}]},
@@ -718,7 +675,6 @@ async def send_chat_message(
     current_user: str = Depends(get_current_user),
     db: Database = Depends(get_db)
 ):
-    """Send an encrypted chat message"""
     to_user = data.get("to")
     message = data.get("message")
     
@@ -729,14 +685,13 @@ async def send_chat_message(
         "id": generate_id(),
         "from_user": current_user,
         "to_user": to_user,
-        "message": message,  # Already encrypted on client
+        "message": message,
         "created_at": datetime.now(),
         "read": False
     }
     
     await db.mongo.chat_messages.insert_one(chat_message)
     
-    # Notify recipient via WebSocket
     await manager.send_to_user(to_user, {
         "type": "new_message",
         "from": current_user,
@@ -753,8 +708,6 @@ async def upload_post(
     user_id: str = Depends(get_current_user),
     db: Database = Depends(get_db)
 ):
-    """Upload a new post (image or video)"""
-    # Validate file type
     content_type = media.content_type
     is_video = content_type.startswith("video/")
     is_image = content_type.startswith("image/")
@@ -762,22 +715,18 @@ async def upload_post(
     if not is_video and not is_image:
         raise HTTPException(status_code=400, detail="Only images and videos are allowed")
     
-    # Generate filename
     ext = media.filename.split(".")[-1] if "." in media.filename else "jpg"
     filename = f"{uuid.uuid4().hex}.{ext}"
     filepath = os.path.join(Config.UPLOAD_DIR, filename)
     
-    # Save file
     async with aiofiles.open(filepath, "wb") as f:
         content = await media.read()
         if len(content) > Config.MAX_UPLOAD_SIZE:
             raise HTTPException(status_code=400, detail="File too large")
         await f.write(content)
     
-    # Create post in database
     media_url = f"/uploads/{filename}"
     
-    # Get user info
     user_key = f"user:{user_id}"
     username = await db.redis.hget(user_key, "username") or user_id[:8]
     
@@ -797,10 +746,8 @@ async def upload_post(
     result = await db.mongo.posts.insert_one(post)
     post_id = str(result.inserted_id)
     
-    # Update user post count
     await db.redis.hincrby(user_key, "posts", 1)
     
-    # Notify via WebSocket
     await manager.broadcast({
         "type": "new_post",
         "post_id": post_id,
@@ -819,8 +766,6 @@ async def search_posts(
     user_id: str = Depends(get_current_user),
     db: Database = Depends(get_db)
 ):
-    """Search posts by caption or username"""
-    # Simple text search using MongoDB
     results = await db.mongo.posts.find({
         "$or": [
             {"caption": {"$regex": q, "$options": "i"}},
@@ -853,13 +798,12 @@ async def search_posts(
 
 @app.websocket("/ws/{user_id}")
 async def websocket_endpoint(websocket: WebSocket, user_id: str):
+    db = await Database.get_instance()
     connection_id = await manager.connect(websocket, user_id)
     
     try:
-        # Send connection confirmation
         await websocket.send_json({"type": "connected", "user_id": user_id})
         
-        # Initialize user in Redis
         user_key = f"user:{user_id}"
         await db.redis.hsetnx(user_key, "username", user_id[:8])
         
@@ -869,7 +813,6 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
             msg_type = data.get("type")
             
             if msg_type == "chat":
-                # Handle chat message with encryption (already encrypted on client)
                 to_user = data.get("to")
                 message = data.get("message")
                 
@@ -901,7 +844,6 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                     })
             
             elif msg_type == "read_receipt":
-                # Mark messages as read
                 to_user = data.get("to")
                 if to_user:
                     await db.mongo.chat_messages.update_many(
@@ -917,15 +859,11 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
         await manager.disconnect(connection_id)
 
 # ===================================================
-# Static Files (for uploaded media)
+# Static Files
 # ===================================================
-
-from fastapi.staticfiles import StaticFiles
 
 @app.get("/uploads/{filename}")
 async def serve_media(filename: str):
-    """Serve uploaded media files"""
-    from fastapi.responses import FileResponse
     filepath = os.path.join(Config.UPLOAD_DIR, filename)
     if not os.path.exists(filepath):
         raise HTTPException(status_code=404, detail="File not found")
