@@ -47,18 +47,222 @@ function log(msg) {
 }
 
 // ============================================
-// 📊 دیتابیس
+// 📊 دیتابیس با ۵ شارد
 // ============================================
-let users = {};
-let posts = [];
-let stories = [];
-let chatMessages = {};
-let likes = {};
-let followers = {};
-let currentId = 1;
-let storyId = 1;
-let userSessions = new Map();
-const onlineUsers = {};
+class Database {
+    constructor() {
+        this.shards = {};
+        this.shardCount = 5;
+        for (let i = 0; i < this.shardCount; i++) {
+            this.shards[i] = {
+                users: {},
+                posts: [],
+                stories: [],
+                messages: {},
+                likes: {},
+                comments: {}
+            };
+        }
+        this.currentId = 1;
+        this.storyId = 1;
+        this.sessions = {};
+        this.onlineUsers = {};
+        this.currentUserSessions = {};
+    }
+
+    getShard(key) {
+        const hash = crypto.createHash('md5').update(key).digest('hex');
+        return parseInt(hash.substring(0, 2), 16) % this.shardCount;
+    }
+
+    getShardById(id) {
+        if (!id) return 0;
+        const hash = crypto.createHash('md5').update(id).digest('hex');
+        return parseInt(hash.substring(0, 2), 16) % this.shardCount;
+    }
+
+    // ===== Users =====
+    getUserByEmail(email) {
+        for (let i = 0; i < this.shardCount; i++) {
+            for (const key in this.shards[i].users) {
+                if (this.shards[i].users[key].email === email) {
+                    return this.shards[i].users[key];
+                }
+            }
+        }
+        return null;
+    }
+
+    getUserById(userId) {
+        const shard = this.getShardById(userId);
+        return this.shards[shard].users[userId] || null;
+    }
+
+    saveUser(user) {
+        const shard = this.getShard(user.userId);
+        this.shards[shard].users[user.userId] = user;
+        return user;
+    }
+
+    getAllUsers() {
+        let all = [];
+        for (let i = 0; i < this.shardCount; i++) {
+            for (const key in this.shards[i].users) {
+                all.push(this.shards[i].users[key]);
+            }
+        }
+        return all;
+    }
+
+    updateUser(userId, data) {
+        const shard = this.getShardById(userId);
+        if (this.shards[shard].users[userId]) {
+            this.shards[shard].users[userId] = { ...this.shards[shard].users[userId], ...data };
+            return this.shards[shard].users[userId];
+        }
+        return null;
+    }
+
+    // ===== Posts =====
+    savePost(post) {
+        const shard = this.getShardById(post.postId);
+        this.shards[shard].posts.unshift(post);
+        return post;
+    }
+
+    getPosts(page, limit, hashtag) {
+        page = page || 1;
+        limit = limit || 20;
+        let all = [];
+        for (let i = 0; i < this.shardCount; i++) {
+            all = all.concat(this.shards[i].posts);
+        }
+        if (hashtag) {
+            all = all.filter(p => p.hashtags && p.hashtags.some(h => h.toLowerCase() === hashtag.toLowerCase()));
+        }
+        all.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        const start = (page - 1) * limit;
+        return {
+            posts: all.slice(start, start + limit),
+            total: all.length,
+            page: page,
+            totalPages: Math.ceil(all.length / limit)
+        };
+    }
+
+    getPostById(postId) {
+        const shard = this.getShardById(postId);
+        return this.shards[shard].posts.find(p => p.postId === postId) || null;
+    }
+
+    deletePost(postId) {
+        const shard = this.getShardById(postId);
+        const idx = this.shards[shard].posts.findIndex(p => p.postId === postId);
+        if (idx !== -1) {
+            this.shards[shard].posts.splice(idx, 1);
+            return true;
+        }
+        return false;
+    }
+
+    likePost(postId, userId) {
+        const shard = this.getShardById(postId);
+        const post = this.shards[shard].posts.find(p => p.postId === postId);
+        if (!post) return { liked: false, likes: 0 };
+        const key = postId + '_' + userId;
+        if (this.shards[shard].likes[key]) {
+            delete this.shards[shard].likes[key];
+            post.likes -= 1;
+            return { liked: false, likes: post.likes };
+        } else {
+            this.shards[shard].likes[key] = true;
+            post.likes += 1;
+            return { liked: true, likes: post.likes };
+        }
+    }
+
+    addComment(postId, comment) {
+        const shard = this.getShardById(postId);
+        const post = this.shards[shard].posts.find(p => p.postId === postId);
+        if (!post) return false;
+        if (!post.comments) post.comments = [];
+        post.comments.push(comment);
+        return true;
+    }
+
+    // ===== Stories =====
+    saveStory(story) {
+        const shard = this.getShardById(story.storyId);
+        this.shards[shard].stories.push(story);
+        return story;
+    }
+
+    getStories() {
+        let all = [];
+        const now = Date.now();
+        for (let i = 0; i < this.shardCount; i++) {
+            all = all.concat(this.shards[i].stories.filter(s => {
+                return (now - new Date(s.createdAt).getTime()) < 24 * 60 * 60 * 1000;
+            }));
+        }
+        return all.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    }
+
+    viewStory(storyId, userId) {
+        const shard = this.getShardById(storyId);
+        const story = this.shards[shard].stories.find(s => s.storyId === storyId);
+        if (story && !story.viewers) story.viewers = [];
+        if (story && !story.viewers.includes(userId)) {
+            story.views = (story.views || 0) + 1;
+            story.viewers.push(userId);
+            return true;
+        }
+        return false;
+    }
+
+    // ===== Messages =====
+    saveMessage(roomId, msg) {
+        const shard = this.getShardById(roomId);
+        if (!this.shards[shard].messages[roomId]) {
+            this.shards[shard].messages[roomId] = [];
+        }
+        this.shards[shard].messages[roomId].push(msg);
+        return msg;
+    }
+
+    getMessages(roomId, limit) {
+        limit = limit || 50;
+        const shard = this.getShardById(roomId);
+        if (!this.shards[shard].messages[roomId]) return [];
+        return this.shards[shard].messages[roomId].slice(-limit);
+    }
+
+    // ===== Stats =====
+    getStats() {
+        let users = 0;
+        let posts = 0;
+        let stories = 0;
+        let messages = 0;
+        for (let i = 0; i < this.shardCount; i++) {
+            users += Object.keys(this.shards[i].users).length;
+            posts += this.shards[i].posts.length;
+            stories += this.shards[i].stories.length;
+            for (const room in this.shards[i].messages) {
+                messages += this.shards[i].messages[room].length;
+            }
+        }
+        return {
+            totalUsers: users,
+            totalPosts: posts,
+            totalStories: stories,
+            totalMessages: messages,
+            onlineUsers: Object.keys(this.onlineUsers).length || 0,
+            shardCount: this.shardCount
+        };
+    }
+}
+
+const db = new Database();
 
 const ADMIN_EMAIL = 'milad.yari1377m@gmail.com';
 const ADMIN_PASSWORD = 'M09145978426m';
@@ -67,20 +271,25 @@ const ADMIN_PASSWORD = 'M09145978426m';
 // 📡 API
 // ============================================
 
-// ثبت نام
+// ===== ثبت نام =====
 app.post('/api/auth/register', (req, res) => {
     const { username, email, password } = req.body;
+    
     if (!username || !email || !password) {
         return res.status(400).json({ error: 'همه فیلدها الزامی هستند' });
     }
-    if (users[email]) {
+
+    if (db.getUserByEmail(email)) {
         return res.status(400).json({ error: 'این ایمیل قبلاً ثبت شده است' });
     }
-    const userId = 'user_' + (currentId++);
-    users[email] = {
-        userId,
-        username,
-        email,
+
+    const userId = 'user_' + uuidv4();
+    const isAdmin = email === ADMIN_EMAIL;
+
+    const user = {
+        userId: userId,
+        username: username,
+        email: email,
         password: hashPassword(password),
         bio: '',
         avatar: '',
@@ -89,28 +298,33 @@ app.post('/api/auth/register', (req, res) => {
         postsCount: 0,
         language: 'fa',
         theme: 'light',
-        createdAt: new Date().toISOString(),
         isOnline: false,
-        isAdmin: email === ADMIN_EMAIL,
+        isAdmin: isAdmin,
         isBanned: false,
+        createdAt: new Date().toISOString(),
         lastSeen: new Date().toISOString()
     };
+
+    db.saveUser(user);
     const token = generateToken();
-    userSessions.set(token, userId);
-    log('User registered: ' + username + ' (' + email + ')');
+    db.currentUserSessions[token] = userId;
+    db.onlineUsers[userId] = { socketId: null, username: username };
+
+    log('User registered: ' + username + ' (' + email + ') - Admin: ' + isAdmin);
+
     res.json({
         success: true,
-        token,
+        token: token,
         user: {
-            userId,
-            username,
-            email,
+            userId: userId,
+            username: username,
+            email: email,
             bio: '',
             avatar: '',
             followers: 0,
             following: 0,
             postsCount: 0,
-            isAdmin: users[email].isAdmin,
+            isAdmin: isAdmin,
             isBanned: false,
             language: 'fa',
             theme: 'light'
@@ -118,35 +332,44 @@ app.post('/api/auth/register', (req, res) => {
     });
 });
 
-// ورود
+// ===== ورود =====
 app.post('/api/auth/login', (req, res) => {
     const { email, password } = req.body;
+
     if (!email || !password) {
         return res.status(400).json({ error: 'ایمیل و رمز عبور الزامی است' });
     }
-    const user = users[email];
+
+    const user = db.getUserByEmail(email);
     if (!user || user.password !== hashPassword(password)) {
         return res.status(401).json({ error: 'ایمیل یا رمز عبور اشتباه است' });
     }
+
     if (user.isBanned) {
         return res.status(403).json({ error: 'این کاربر مسدود شده است' });
     }
+
     const token = generateToken();
-    userSessions.set(token, user.userId);
+    db.currentUserSessions[token] = user.userId;
+    db.onlineUsers[user.userId] = { socketId: null, username: user.username };
     user.isOnline = true;
     user.lastSeen = new Date().toISOString();
+    db.updateUser(user.userId, { isOnline: true, lastSeen: user.lastSeen });
+
+    log('User logged in: ' + user.username);
+
     res.json({
         success: true,
-        token,
+        token: token,
         user: {
             userId: user.userId,
             username: user.username,
             email: user.email,
-            bio: user.bio,
-            avatar: user.avatar,
-            followers: user.followers,
-            following: user.following,
-            postsCount: user.postsCount,
+            bio: user.bio || '',
+            avatar: user.avatar || '',
+            followers: user.followers || 0,
+            following: user.following || 0,
+            postsCount: user.postsCount || 0,
             isAdmin: user.isAdmin || false,
             isBanned: user.isBanned || false,
             language: user.language || 'fa',
@@ -155,38 +378,48 @@ app.post('/api/auth/login', (req, res) => {
     });
 });
 
-// خروج
+// ===== خروج =====
 app.post('/api/auth/logout', (req, res) => {
     const { token } = req.body;
-    if (token) {
-        const userId = userSessions.get(token);
-        if (userId && users[userId]) {
-            users[userId].isOnline = false;
-            users[userId].lastSeen = new Date().toISOString();
-        }
-        userSessions.delete(token);
+    if (token && db.currentUserSessions[token]) {
+        const userId = db.currentUserSessions[token];
+        delete db.currentUserSessions[token];
+        delete db.onlineUsers[userId];
+        db.updateUser(userId, { isOnline: false, lastSeen: new Date().toISOString() });
     }
     res.json({ success: true });
 });
 
-// اطلاعات کاربر
+// ===== اطلاعات کاربر =====
 app.get('/api/auth/me', (req, res) => {
     const token = req.headers.authorization?.split(' ')[1];
-    if (!token) return res.status(401).json({ error: 'Unauthorized' });
-    const userId = userSessions.get(token);
-    if (!userId) return res.status(401).json({ error: 'Invalid token' });
-    const user = Object.values(users).find(u => u.userId === userId);
-    if (!user) return res.status(404).json({ error: 'User not found' });
-    if (user.isBanned) return res.status(403).json({ error: 'User is banned' });
+    if (!token) {
+        return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const userId = db.currentUserSessions[token];
+    if (!userId) {
+        return res.status(401).json({ error: 'Invalid token' });
+    }
+
+    const user = db.getUserById(userId);
+    if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (user.isBanned) {
+        return res.status(403).json({ error: 'User is banned' });
+    }
+
     res.json({
         userId: user.userId,
         username: user.username,
         email: user.email,
-        bio: user.bio,
-        avatar: user.avatar,
-        followers: user.followers,
-        following: user.following,
-        postsCount: user.postsCount,
+        bio: user.bio || '',
+        avatar: user.avatar || '',
+        followers: user.followers || 0,
+        following: user.following || 0,
+        postsCount: user.postsCount || 0,
         isAdmin: user.isAdmin || false,
         isBanned: user.isBanned || false,
         language: user.language || 'fa',
@@ -198,9 +431,9 @@ app.get('/api/auth/me', (req, res) => {
 app.post('/api/admin/verify', (req, res) => {
     const token = req.headers.authorization?.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'Unauthorized' });
-    const userId = userSessions.get(token);
+    const userId = db.currentUserSessions[token];
     if (!userId) return res.status(401).json({ error: 'Invalid token' });
-    const user = Object.values(users).find(u => u.userId === userId);
+    const user = db.getUserById(userId);
     if (!user || !user.isAdmin) return res.status(403).json({ error: 'Admin access required' });
     res.json({ success: true, isAdmin: true });
 });
@@ -208,136 +441,153 @@ app.post('/api/admin/verify', (req, res) => {
 app.get('/api/admin/users', (req, res) => {
     const token = req.headers.authorization?.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'Unauthorized' });
-    const userId = userSessions.get(token);
+    const userId = db.currentUserSessions[token];
     if (!userId) return res.status(401).json({ error: 'Invalid token' });
-    const admin = Object.values(users).find(u => u.userId === userId);
+    const admin = db.getUserById(userId);
     if (!admin || !admin.isAdmin) return res.status(403).json({ error: 'Admin access required' });
-    const list = Object.values(users).map(u => ({
+
+    const users = db.getAllUsers().map(u => ({
         userId: u.userId,
         username: u.username,
         email: u.email,
-        bio: u.bio,
-        avatar: u.avatar,
-        followers: u.followers,
-        following: u.following,
-        postsCount: u.postsCount,
+        bio: u.bio || '',
+        avatar: u.avatar || '',
+        followers: u.followers || 0,
+        following: u.following || 0,
+        postsCount: u.postsCount || 0,
         isAdmin: u.isAdmin || false,
         isBanned: u.isBanned || false,
         isOnline: u.isOnline || false,
         createdAt: u.createdAt,
         lastSeen: u.lastSeen
     }));
-    res.json(list);
+    res.json(users);
 });
 
 app.put('/api/admin/users/:userId/ban', (req, res) => {
     const token = req.headers.authorization?.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'Unauthorized' });
-    const userId = userSessions.get(token);
-    if (!userId) return res.status(401).json({ error: 'Invalid token' });
-    const admin = Object.values(users).find(u => u.userId === userId);
+    const adminId = db.currentUserSessions[token];
+    if (!adminId) return res.status(401).json({ error: 'Invalid token' });
+    const admin = db.getUserById(adminId);
     if (!admin || !admin.isAdmin) return res.status(403).json({ error: 'Admin access required' });
-    const targetId = req.params.userId;
+
+    const { userId } = req.params;
     const { banned } = req.body;
-    const target = Object.values(users).find(u => u.userId === targetId);
-    if (!target) return res.status(404).json({ error: 'User not found' });
-    if (target.isAdmin) return res.status(403).json({ error: 'Cannot ban admin' });
-    target.isBanned = banned;
+    const user = db.getUserById(userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (user.isAdmin) return res.status(403).json({ error: 'Cannot ban admin' });
+
+    db.updateUser(userId, { isBanned: banned });
+    if (banned) {
+        // قطع اتصال کاربر
+        delete db.onlineUsers[userId];
+    }
     res.json({ success: true, isBanned: banned });
 });
 
 app.get('/api/admin/posts', (req, res) => {
     const token = req.headers.authorization?.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'Unauthorized' });
-    const userId = userSessions.get(token);
+    const userId = db.currentUserSessions[token];
     if (!userId) return res.status(401).json({ error: 'Invalid token' });
-    const admin = Object.values(users).find(u => u.userId === userId);
+    const admin = db.getUserById(userId);
     if (!admin || !admin.isAdmin) return res.status(403).json({ error: 'Admin access required' });
-    res.json(posts);
+
+    const result = db.getPosts(1, 1000);
+    res.json(result.posts);
 });
 
 app.delete('/api/admin/posts/:postId', (req, res) => {
     const token = req.headers.authorization?.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'Unauthorized' });
-    const userId = userSessions.get(token);
-    if (!userId) return res.status(401).json({ error: 'Invalid token' });
-    const admin = Object.values(users).find(u => u.userId === userId);
+    const adminId = db.currentUserSessions[token];
+    if (!adminId) return res.status(401).json({ error: 'Invalid token' });
+    const admin = db.getUserById(adminId);
     if (!admin || !admin.isAdmin) return res.status(403).json({ error: 'Admin access required' });
-    const postId = req.params.postId;
-    const index = posts.findIndex(p => p.postId === postId);
-    if (index === -1) return res.status(404).json({ error: 'Post not found' });
-    posts.splice(index, 1);
-    res.json({ success: true });
+
+    const { postId } = req.params;
+    const deleted = db.deletePost(postId);
+    res.json({ success: deleted });
 });
 
 app.post('/api/admin/broadcast', (req, res) => {
     const token = req.headers.authorization?.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'Unauthorized' });
-    const userId = userSessions.get(token);
-    if (!userId) return res.status(401).json({ error: 'Invalid token' });
-    const admin = Object.values(users).find(u => u.userId === userId);
+    const adminId = db.currentUserSessions[token];
+    if (!adminId) return res.status(401).json({ error: 'Invalid token' });
+    const admin = db.getUserById(adminId);
     if (!admin || !admin.isAdmin) return res.status(403).json({ error: 'Admin access required' });
+
     const { message } = req.body;
     if (!message) return res.status(400).json({ error: 'Message required' });
-    io.emit('broadcast', { message, from: admin.username, timestamp: new Date().toISOString() });
-    res.json({ success: true, message });
+
+    io.emit('broadcast', {
+        message: message,
+        from: admin.username,
+        timestamp: new Date().toISOString()
+    });
+
+    res.json({ success: true, message: message });
 });
 
 app.get('/api/admin/stats', (req, res) => {
     const token = req.headers.authorization?.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'Unauthorized' });
-    const userId = userSessions.get(token);
+    const userId = db.currentUserSessions[token];
     if (!userId) return res.status(401).json({ error: 'Invalid token' });
-    const admin = Object.values(users).find(u => u.userId === userId);
+    const admin = db.getUserById(userId);
     if (!admin || !admin.isAdmin) return res.status(403).json({ error: 'Admin access required' });
-    res.json({
-        totalUsers: Object.keys(users).length,
-        totalPosts: posts.length,
-        totalStories: stories.length,
-        onlineUsers: Object.keys(onlineUsers).length || 0,
-        admins: Object.values(users).filter(u => u.isAdmin).length,
-        banned: Object.values(users).filter(u => u.isBanned).length
-    });
+
+    const stats = db.getStats();
+    res.json(stats);
 });
 
 // ===== کاربران =====
 app.get('/api/users', (req, res) => {
-    const list = Object.values(users).map(u => ({
+    const users = db.getAllUsers().map(u => ({
         userId: u.userId,
         username: u.username,
-        avatar: u.avatar,
-        bio: u.bio,
-        followers: u.followers,
-        following: u.following,
+        avatar: u.avatar || '',
+        bio: u.bio || '',
+        followers: u.followers || 0,
+        following: u.following || 0,
         isOnline: u.isOnline || false,
         isBanned: u.isBanned || false,
         lastSeen: u.lastSeen
     }));
-    res.json(list);
+    res.json(users);
 });
 
 app.put('/api/users/:userId/profile', (req, res) => {
     const { userId } = req.params;
     const { bio, avatar, language, theme } = req.body;
-    const user = Object.values(users).find(u => u.userId === userId);
+    const user = db.getUserById(userId);
     if (!user) return res.status(404).json({ error: 'User not found' });
+
     if (bio !== undefined) user.bio = bio;
     if (avatar !== undefined) user.avatar = avatar;
     if (language !== undefined) user.language = language;
     if (theme !== undefined) user.theme = theme;
-    res.json({ success: true, user });
+
+    db.updateUser(userId, user);
+    res.json({ success: true, user: user });
 });
 
 app.post('/api/users/:userId/follow', (req, res) => {
     const { userId } = req.params;
     const { followerId } = req.body;
-    const target = Object.values(users).find(u => u.userId === userId);
-    const follower = Object.values(users).find(u => u.userId === followerId);
+
+    const target = db.getUserById(userId);
+    const follower = db.getUserById(followerId);
+
     if (!target || !follower) return res.status(404).json({ error: 'User not found' });
     if (userId === followerId) return res.status(400).json({ error: 'Cannot follow yourself' });
-    target.followers += 1;
-    follower.following += 1;
-    res.json({ success: true, followers: target.followers });
+
+    db.updateUser(userId, { followers: (target.followers || 0) + 1 });
+    db.updateUser(followerId, { following: (follower.following || 0) + 1 });
+
+    res.json({ success: true, followers: target.followers + 1 });
 });
 
 // ===== پست‌ها =====
@@ -349,7 +599,7 @@ const storage = multer.diskStorage({
 });
 
 const upload = multer({
-    storage,
+    storage: storage,
     limits: { fileSize: 200 * 1024 * 1024 },
     fileFilter: (req, file, cb) => {
         const allowed = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'video/mp4', 'video/webm'];
@@ -359,29 +609,26 @@ const upload = multer({
 
 app.get('/api/posts', (req, res) => {
     const { page = 1, limit = 20, hashtag } = req.query;
-    const skip = (page - 1) * limit;
-    let filtered = [...posts];
-    if (hashtag) {
-        filtered = filtered.filter(p => p.hashtags && p.hashtags.some(h => h.toLowerCase() === hashtag.toLowerCase()));
-    }
-    const total = filtered.length;
-    const paginated = filtered.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-        .slice(skip, skip + parseInt(limit));
-    res.json({ posts: paginated, total, page: parseInt(page), totalPages: Math.ceil(total / limit) });
+    const result = db.getPosts(parseInt(page), parseInt(limit), hashtag);
+    res.json(result);
 });
 
 app.post('/api/posts', upload.single('file'), (req, res) => {
     const { caption, userId, username, hashtags } = req.body;
     const file = req.file;
+
     if (!file) return res.status(400).json({ error: 'فایل انتخاب نشده است' });
-    const user = Object.values(users).find(u => u.userId === userId);
+
+    const user = db.getUserById(userId);
     if (!user) return res.status(404).json({ error: 'User not found' });
     if (user.isBanned) return res.status(403).json({ error: 'User is banned' });
+
     const isVideo = file.mimetype.startsWith('video/');
-    const postId = 'post_' + (currentId++);
+    const postId = 'post_' + uuidv4();
+
     const newPost = {
-        postId,
-        userId,
+        postId: postId,
+        userId: userId,
         username: username || user.username,
         image: '/uploads/posts/' + file.filename,
         caption: caption || '',
@@ -390,11 +637,13 @@ app.post('/api/posts', upload.single('file'), (req, res) => {
         comments: [],
         shares: 0,
         views: 0,
-        isVideo,
+        isVideo: isVideo,
         createdAt: new Date().toISOString()
     };
-    posts.unshift(newPost);
-    user.postsCount = (user.postsCount || 0) + 1;
+
+    db.savePost(newPost);
+    db.updateUser(userId, { postsCount: (user.postsCount || 0) + 1 });
+
     log('Post created: ' + postId + ' by ' + username);
     res.status(201).json(newPost);
 });
@@ -402,40 +651,36 @@ app.post('/api/posts', upload.single('file'), (req, res) => {
 app.put('/api/posts/:postId/like', (req, res) => {
     const { postId } = req.params;
     const { userId } = req.body;
-    const post = posts.find(p => p.postId === postId);
-    if (!post) return res.status(404).json({ error: 'Post not found' });
-    const user = Object.values(users).find(u => u.userId === userId);
+
+    const user = db.getUserById(userId);
     if (!user || user.isBanned) return res.status(403).json({ error: 'User is banned' });
-    const key = postId + '_' + userId;
-    if (likes[key]) {
-        likes[key] = false;
-        post.likes -= 1;
-    } else {
-        likes[key] = true;
-        post.likes += 1;
-    }
-    res.json({ liked: !!likes[key], likes: post.likes });
+
+    const result = db.likePost(postId, userId);
+    res.json(result);
 });
 
 app.post('/api/posts/:postId/comment', (req, res) => {
     const { postId } = req.params;
     const { userId, username, text } = req.body;
-    const post = posts.find(p => p.postId === postId);
-    if (!post) return res.status(404).json({ error: 'Post not found' });
-    const user = Object.values(users).find(u => u.userId === userId);
+
+    const user = db.getUserById(userId);
     if (!user || user.isBanned) return res.status(403).json({ error: 'User is banned' });
+
     const comment = {
-        commentId: 'cmt_' + (currentId++),
-        userId,
-        username: username || 'کاربر',
-        text,
+        commentId: 'cmt_' + uuidv4(),
+        userId: userId,
+        username: username || user.username,
+        text: text,
         createdAt: new Date().toISOString()
     };
-    post.comments.push(comment);
-    res.json({ success: true, comment });
+
+    const added = db.addComment(postId, comment);
+    if (!added) return res.status(404).json({ error: 'Post not found' });
+
+    res.json({ success: true, comment: comment });
 });
 
-// ===== استوری =====
+// ===== استوری‌ها =====
 const storyStorage = multer.diskStorage({
     destination: './uploads/stories/',
     filename: (req, file, cb) => {
@@ -453,41 +698,43 @@ const storyUpload = multer({
 });
 
 app.get('/api/stories', (req, res) => {
-    const now = Date.now();
-    const active = stories.filter(s => (now - new Date(s.createdAt).getTime()) < 24 * 60 * 60 * 1000);
-    res.json(active);
+    const stories = db.getStories();
+    res.json(stories);
 });
 
 app.post('/api/stories', storyUpload.single('file'), (req, res) => {
     const { userId, username } = req.body;
     const file = req.file;
+
     if (!file) return res.status(400).json({ error: 'فایل انتخاب نشده است' });
-    const user = Object.values(users).find(u => u.userId === userId);
+
+    const user = db.getUserById(userId);
     if (!user || user.isBanned) return res.status(403).json({ error: 'User is banned' });
+
     const isVideo = file.mimetype.startsWith('video/');
+    const storyId = 'story_' + uuidv4();
+
     const newStory = {
-        storyId: 'story_' + (storyId++),
-        userId,
-        username: username || 'کاربر',
+        storyId: storyId,
+        userId: userId,
+        username: username || user.username,
         image: '/uploads/stories/' + file.filename,
-        isVideo,
+        isVideo: isVideo,
         views: 0,
         viewers: [],
         createdAt: new Date().toISOString()
     };
-    stories.push(newStory);
+
+    db.saveStory(newStory);
     res.status(201).json(newStory);
 });
 
 app.post('/api/stories/:storyId/view', (req, res) => {
     const { storyId } = req.params;
     const { userId } = req.body;
-    const story = stories.find(s => s.storyId === storyId);
-    if (story && !story.viewers.includes(userId)) {
-        story.views += 1;
-        story.viewers.push(userId);
-    }
-    res.json({ success: true });
+
+    const viewed = db.viewStory(storyId, userId);
+    res.json({ success: viewed });
 });
 
 // ============================================
@@ -499,12 +746,16 @@ io.on('connection', (socket) => {
 
     socket.on('register', (data) => {
         const { userId, username } = data;
-        onlineUsers[userId] = socket.id;
+        if (db.onlineUsers[userId]) {
+            db.onlineUsers[userId].socketId = socket.id;
+        }
         socket.userId = userId;
         socket.username = username;
-        const user = Object.values(users).find(u => u.userId === userId);
-        if (user) { user.isOnline = true; user.lastSeen = new Date().toISOString(); }
-        io.emit('users-online', Object.keys(onlineUsers));
+        const user = db.getUserById(userId);
+        if (user) {
+            db.updateUser(userId, { isOnline: true, lastSeen: new Date().toISOString() });
+        }
+        io.emit('users-online', Object.keys(db.onlineUsers));
         log('User online: ' + username);
     });
 
@@ -512,28 +763,26 @@ io.on('connection', (socket) => {
         const { roomId, userId } = data;
         socket.join(roomId);
         socket.roomId = roomId;
-        if (chatMessages[roomId]) {
-            socket.emit('history', chatMessages[roomId].slice(-50));
-        }
+        const messages = db.getMessages(roomId, 50);
+        socket.emit('history', messages);
         log('User joined room: ' + userId + ' -> ' + roomId);
     });
 
     socket.on('send-message', (data) => {
         const { roomId, userId, username, message } = data;
-        const user = Object.values(users).find(u => u.userId === userId);
+        const user = db.getUserById(userId);
         if (user && user.isBanned) {
             socket.emit('error', { message: 'You are banned' });
             return;
         }
         const msgData = {
-            messageId: 'msg_' + (currentId++),
-            userId,
-            username,
+            messageId: 'msg_' + uuidv4(),
+            userId: userId,
+            username: username,
             message: message,
             timestamp: new Date().toISOString()
         };
-        if (!chatMessages[roomId]) chatMessages[roomId] = [];
-        chatMessages[roomId].push(msgData);
+        db.saveMessage(roomId, msgData);
         io.to(roomId).emit('receive-message', msgData);
         log('Message: ' + username + ' -> ' + roomId);
     });
@@ -546,17 +795,16 @@ io.on('connection', (socket) => {
 
     socket.on('disconnect', () => {
         if (socket.userId) {
-            delete onlineUsers[socket.userId];
-            const user = Object.values(users).find(u => u.userId === socket.userId);
-            if (user) { user.isOnline = false; user.lastSeen = new Date().toISOString(); }
-            io.emit('users-online', Object.keys(onlineUsers));
+            delete db.onlineUsers[socket.userId];
+            db.updateUser(socket.userId, { isOnline: false, lastSeen: new Date().toISOString() });
+            io.emit('users-online', Object.keys(db.onlineUsers));
             log('User disconnected: ' + socket.userId);
         }
     });
 });
 
 // ============================================
-// 🌐 صفحه HTML کامل
+// 🌐 صفحه HTML
 // ============================================
 app.get('/', (req, res) => {
     res.send(`<!DOCTYPE html>
@@ -1178,10 +1426,6 @@ app.get('/', (req, res) => {
         let isUploading = false;
         let isLogin = true;
 
-        // ============================================
-        // 📱 توابع
-        // ============================================
-
         function showToast(msg) {
             var toast = document.getElementById('toast');
             toast.textContent = msg;
@@ -1769,7 +2013,6 @@ app.get('/', (req, res) => {
         // 🎬 Event Listeners
         // ============================================
 
-        // Login/Register
         document.getElementById('loginBtn').addEventListener('click', async function() {
             clearError();
             var username = document.getElementById('loginUsername').value.trim();
@@ -1833,11 +2076,9 @@ app.get('/', (req, res) => {
             clearError();
         });
 
-        // Logout
         document.getElementById('logoutBtn')?.addEventListener('click', logoutUser);
         document.getElementById('menuLogout')?.addEventListener('click', logoutUser);
 
-        // Chat
         document.getElementById('chatOpenBtn').addEventListener('click', function() {
             document.getElementById('chatInterface').classList.add('active');
             renderChatUsers();
@@ -1857,7 +2098,6 @@ app.get('/', (req, res) => {
             if (e.key === 'Enter') sendChatMessage();
         });
 
-        // Comments
         document.getElementById('modalSendComment').addEventListener('click', async function() {
             var input = document.getElementById('modalCommentInput');
             var text = input.value.trim();
@@ -1885,7 +2125,6 @@ app.get('/', (req, res) => {
             }
         });
 
-        // Share
         document.getElementById('closeShareModal').addEventListener('click', function() {
             document.getElementById('shareModal').classList.remove('active');
         });
@@ -1914,7 +2153,6 @@ app.get('/', (req, res) => {
             });
         });
 
-        // Profile
         document.getElementById('profileBtn').addEventListener('click', function() {
             document.getElementById('profilePage').classList.add('active');
             loadProfile();
@@ -1955,7 +2193,6 @@ app.get('/', (req, res) => {
             }
         });
 
-        // Upload
         document.getElementById('uploadBtn').addEventListener('click', function() {
             if (currentUser && currentUser.isBanned) {
                 showToast('❌ شما مسدود شده‌اید');
@@ -2044,7 +2281,6 @@ app.get('/', (req, res) => {
             document.getElementById('hashtagInput').value = '';
         }
 
-        // Side Menu
         document.getElementById('menuIcon').addEventListener('click', function() {
             document.getElementById('sideMenu').classList.add('active');
             document.getElementById('menuOverlay').classList.add('active');
@@ -2094,7 +2330,6 @@ app.get('/', (req, res) => {
             loadAdminPanel();
         });
 
-        // Settings
         document.getElementById('settingsOpenBtn').addEventListener('click', function() {
             document.getElementById('settingsPage').classList.add('active');
             loadProfile();
@@ -2128,7 +2363,6 @@ app.get('/', (req, res) => {
             showToast(isDarkTheme ? '🌙 تم تاریک' : '☀️ تم روشن');
         }
 
-        // Admin
         document.getElementById('broadcastBtn').addEventListener('click', async function() {
             var input = document.getElementById('broadcastInput');
             var message = input.value.trim();
@@ -2147,7 +2381,6 @@ app.get('/', (req, res) => {
             if (e.target === this) this.classList.remove('active');
         });
 
-        // Explore / Reels
         var exploreMode = true;
         var reelsMode = false;
 
@@ -2192,7 +2425,6 @@ app.get('/', (req, res) => {
             }
         });
 
-        // Search
         document.getElementById('searchInput').addEventListener('input', function() {
             var query = this.value.trim();
             if (query.startsWith('#')) {
@@ -2210,7 +2442,6 @@ app.get('/', (req, res) => {
             }
         });
 
-        // Follow stats
         document.getElementById('statFollowers').addEventListener('click', async function() {
             var modal = document.getElementById('followModal');
             document.getElementById('followModalTitle').textContent = '👥 دنبال‌کنندگان';
@@ -2250,10 +2481,6 @@ app.get('/', (req, res) => {
         document.getElementById('followModal').addEventListener('click', function(e) {
             if (e.target === this) this.style.display = 'none';
         });
-
-        // ============================================
-        // 🚀 شروع
-        // ============================================
 
         if (isDarkTheme) {
             document.documentElement.setAttribute('data-theme', 'dark');
