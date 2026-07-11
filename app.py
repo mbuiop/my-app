@@ -1,1317 +1,953 @@
-from flask import Flask, request, jsonify, send_from_directory, session
-from flask_cors import CORS
-from flask_socketio import SocketIO, emit, join_room, leave_room
-from flask_sqlalchemy import SQLAlchemy
-from werkzeug.utils import secure_filename
-from datetime import datetime, timedelta
-from functools import wraps
-import hashlib
-import jwt
-import os
+import asyncio
 import json
-import redis
-import threading
-import time
+import os
 import uuid
-import shutil
-from PIL import Image
-import ffmpeg
+import hashlib
+import base64
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Any
+from functools import lru_cache
+import logging
 
-# ==================== تنظیمات پیشرفته ====================
-app = Flask(__name__, static_folder='../frontend', static_url_path='')
-app.config['SECRET_KEY'] = 'your-super-secret-key-change-this-in-production'
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///instagram.db'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SQLALCHEMY_POOL_SIZE'] = 50
-app.config['SQLALCHEMY_POOL_RECYCLE'] = 3600
-app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB
-app.config['UPLOAD_FOLDER'] = 'uploads'
-app.config['THUMBNAIL_FOLDER'] = 'thumbnails'
-app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'gif', 'mp4', 'mov', 'avi', 'webm'}
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form, Request, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+import aioredis
+from motor.motor_asyncio import AsyncIOMotorClient
+from bson import ObjectId
+import aiofiles
+import uvicorn
 
-# اطمینان از وجود پوشه‌ها
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-os.makedirs(app.config['THUMBNAIL_FOLDER'], exist_ok=True)
+# ===================================================
+# Configuration
+# ===================================================
 
-CORS(app, origins='*')
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
-
-# ==================== Redis برای کش ====================
-try:
-    redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
-    redis_available = True
-except:
-    redis_available = False
-    print("⚠️ Redis not available, running without cache")
-
-# ==================== دیتابیس ====================
-db = SQLAlchemy(app)
-
-# ==================== مدل‌های حرفه‌ای ====================
-class User(db.Model):
-    __tablename__ = 'users'
-    id = db.Column(db.Integer, primary_key=True)
-    uuid = db.Column(db.String(36), unique=True, default=lambda: str(uuid.uuid4()))
-    username = db.Column(db.String(80), unique=True, nullable=False, index=True)
-    email = db.Column(db.String(120), unique=True, nullable=False)
-    password_hash = db.Column(db.String(200), nullable=False)
-    full_name = db.Column(db.String(100))
-    bio = db.Column(db.String(300), default='')
-    avatar = db.Column(db.String(200), default='https://i.pravatar.cc/150?img=10')
-    is_verified = db.Column(db.Boolean, default=False)
-    is_private = db.Column(db.Boolean, default=False)
-    is_active = db.Column(db.Boolean, default=True)
-    last_seen = db.Column(db.DateTime, default=datetime.utcnow)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+class Config:
+    MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+    REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+    SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-this")
+    UPLOAD_DIR = "uploads"
+    MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
     
-    posts = db.relationship('Post', backref='author', lazy='dynamic')
-    stories = db.relationship('Story', backref='author', lazy='dynamic')
-    followers = db.relationship('Follow', foreign_keys='Follow.following_id', backref='following_user', lazy='dynamic')
-    following = db.relationship('Follow', foreign_keys='Follow.follower_id', backref='follower_user', lazy='dynamic')
-    likes = db.relationship('Like', backref='user', lazy='dynamic')
-    comments = db.relationship('Comment', backref='user', lazy='dynamic')
-    sent_messages = db.relationship('Message', foreign_keys='Message.sender_id', backref='sender', lazy='dynamic')
-    received_messages = db.relationship('Message', foreign_keys='Message.receiver_id', backref='receiver', lazy='dynamic')
-    notifications = db.relationship('Notification', backref='user', lazy='dynamic')
+    @classmethod
+    def ensure_directories(cls):
+        os.makedirs(cls.UPLOAD_DIR, exist_ok=True)
 
-class Post(db.Model):
-    __tablename__ = 'posts'
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
-    media_type = db.Column(db.String(20), default='image')  # image, video
-    media_url = db.Column(db.String(500), nullable=False)
-    thumbnail_url = db.Column(db.String(500))
-    caption = db.Column(db.String(2200), default='')
-    location = db.Column(db.String(100))
-    views = db.Column(db.Integer, default=0)
-    likes_count = db.Column(db.Integer, default=0)
-    comments_count = db.Column(db.Integer, default=0)
-    shares_count = db.Column(db.Integer, default=0)
-    is_archived = db.Column(db.Boolean, default=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+Config.ensure_directories()
+
+# ===================================================
+# Database Models
+# ===================================================
+
+class User(BaseModel):
+    id: str
+    username: str
+    avatar: str
+    bio: str = ""
+    followers: int = 0
+    following: int = 0
+    posts: int = 0
+    created_at: datetime = datetime.now()
+
+class Post(BaseModel):
+    id: str
+    user_id: str
+    username: str
+    media: str
+    type: str = "image"  # image or video
+    caption: str = ""
+    likes: int = 0
+    comments: int = 0
+    shares: int = 0
+    views: int = 0
+    created_at: datetime = datetime.now()
+
+class Comment(BaseModel):
+    id: str
+    post_id: str
+    user_id: str
+    username: str
+    text: str
+    created_at: datetime = datetime.now()
+
+class ChatMessage(BaseModel):
+    id: str
+    from_user: str
+    to_user: str
+    message: str  # encrypted
+    created_at: datetime = datetime.now()
+    read: bool = False
+
+class Story(BaseModel):
+    id: str
+    user_id: str
+    username: str
+    avatar: str
+    media: str
+    created_at: datetime = datetime.now()
+    expires_at: datetime = datetime.now() + timedelta(hours=24)
+
+# ===================================================
+# Database Connection Pool
+# ===================================================
+
+class Database:
+    _instance = None
+    _client = None
+    _redis = None
     
-    likes = db.relationship('Like', backref='post', lazy='dynamic')
-    comments = db.relationship('Comment', backref='post', lazy='dynamic')
-    hashtags = db.relationship('PostHashtag', backref='post', lazy='dynamic')
-
-class Story(db.Model):
-    __tablename__ = 'stories'
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
-    media_type = db.Column(db.String(20), default='image')
-    media_url = db.Column(db.String(500), nullable=False)
-    thumbnail_url = db.Column(db.String(500))
-    caption = db.Column(db.String(200))
-    views = db.Column(db.Integer, default=0)
-    expires_at = db.Column(db.DateTime, nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    @classmethod
+    async def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = Database()
+            await cls._instance.connect()
+        return cls._instance
     
-    viewers = db.relationship('StoryView', backref='story', lazy='dynamic')
-
-class StoryView(db.Model):
-    __tablename__ = 'story_views'
-    id = db.Column(db.Integer, primary_key=True)
-    story_id = db.Column(db.Integer, db.ForeignKey('stories.id'), nullable=False)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    viewed_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-class Follow(db.Model):
-    __tablename__ = 'follows'
-    id = db.Column(db.Integer, primary_key=True)
-    follower_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
-    following_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
-    status = db.Column(db.String(20), default='accepted')  # pending, accepted, rejected
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    async def connect(self):
+        # MongoDB
+        self._client = AsyncIOMotorClient(Config.MONGO_URI)
+        self.db = self._client.social_media
+        
+        # Redis
+        self._redis = await aioredis.from_url(Config.REDIS_URL, decode_responses=True)
+        
+        # Create indexes
+        await self.db.posts.create_index("created_at")
+        await self.db.posts.create_index("user_id")
+        await self.db.comments.create_index("post_id")
+        await self.db.chat_messages.create_index([("from_user", 1), ("to_user", 1)])
+        await self.db.chat_messages.create_index("created_at")
+        await self.db.stories.create_index("expires_at", expireAfterSeconds=0)
     
-    __table_args__ = (db.UniqueConstraint('follower_id', 'following_id', name='unique_follow'),)
-
-class Like(db.Model):
-    __tablename__ = 'likes'
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
-    post_id = db.Column(db.Integer, db.ForeignKey('posts.id'), nullable=False, index=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    @property
+    def mongo(self):
+        return self.db
     
-    __table_args__ = (db.UniqueConstraint('user_id', 'post_id', name='unique_like'),)
+    @property
+    def redis(self):
+        return self._redis
 
-class Comment(db.Model):
-    __tablename__ = 'comments'
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
-    post_id = db.Column(db.Integer, db.ForeignKey('posts.id'), nullable=False, index=True)
-    parent_id = db.Column(db.Integer, db.ForeignKey('comments.id'))
-    text = db.Column(db.String(300), nullable=False)
-    likes_count = db.Column(db.Integer, default=0)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+# ===================================================
+# WebSocket Manager with Connection Pooling
+# ===================================================
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: Dict[str, WebSocket] = {}
+        self.user_connections: Dict[str, str] = {}  # user_id -> connection_id
+        self._lock = asyncio.Lock()
     
-    replies = db.relationship('Comment', backref=db.backref('parent', remote_side=[id]), lazy='dynamic')
-
-class Message(db.Model):
-    __tablename__ = 'messages'
-    id = db.Column(db.Integer, primary_key=True)
-    sender_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
-    receiver_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
-    message_type = db.Column(db.String(20), default='text')  # text, image, video, audio
-    content = db.Column(db.String(2000))
-    media_url = db.Column(db.String(500))
-    is_read = db.Column(db.Boolean, default=False)
-    read_at = db.Column(db.DateTime)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
-
-class Notification(db.Model):
-    __tablename__ = 'notifications'
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
-    actor_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    type = db.Column(db.String(50), nullable=False)  # like, comment, follow, mention
-    target_id = db.Column(db.Integer)  # post_id or user_id
-    is_read = db.Column(db.Boolean, default=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
-
-class Hashtag(db.Model):
-    __tablename__ = 'hashtags'
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), unique=True, nullable=False, index=True)
-    posts_count = db.Column(db.Integer, default=0)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-class PostHashtag(db.Model):
-    __tablename__ = 'post_hashtags'
-    id = db.Column(db.Integer, primary_key=True)
-    post_id = db.Column(db.Integer, db.ForeignKey('posts.id'), nullable=False)
-    hashtag_id = db.Column(db.Integer, db.ForeignKey('hashtags.id'), nullable=False)
+    async def connect(self, websocket: WebSocket, user_id: str) -> str:
+        await websocket.accept()
+        connection_id = str(uuid.uuid4())
+        
+        async with self._lock:
+            # Disconnect existing connection for this user
+            if user_id in self.user_connections:
+                old_conn_id = self.user_connections[user_id]
+                if old_conn_id in self.active_connections:
+                    try:
+                        await self.active_connections[old_conn_id].close()
+                    except:
+                        pass
+                    del self.active_connections[old_conn_id]
+            
+            self.active_connections[connection_id] = websocket
+            self.user_connections[user_id] = connection_id
+        
+        # Set user_id in websocket state
+        websocket.state.user_id = user_id
+        websocket.state.connection_id = connection_id
+        
+        return connection_id
     
-    __table_args__ = (db.UniqueConstraint('post_id', 'hashtag_id', name='unique_post_hashtag'),)
-
-class SavedPost(db.Model):
-    __tablename__ = 'saved_posts'
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
-    post_id = db.Column(db.Integer, db.ForeignKey('posts.id'), nullable=False, index=True)
-    collection_name = db.Column(db.String(100), default='default')
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    async def disconnect(self, connection_id: str):
+        async with self._lock:
+            if connection_id in self.active_connections:
+                ws = self.active_connections[connection_id]
+                user_id = getattr(ws.state, 'user_id', None)
+                if user_id and user_id in self.user_connections:
+                    del self.user_connections[user_id]
+                del self.active_connections[connection_id]
     
-    __table_args__ = (db.UniqueConstraint('user_id', 'post_id', name='unique_save'),)
-
-class Report(db.Model):
-    __tablename__ = 'reports'
-    id = db.Column(db.Integer, primary_key=True)
-    reporter_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    target_type = db.Column(db.String(20), nullable=False)  # post, comment, user
-    target_id = db.Column(db.Integer, nullable=False)
-    reason = db.Column(db.String(300), nullable=False)
-    status = db.Column(db.String(20), default='pending')  # pending, reviewed, resolved
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-# ==================== سیستم کش ====================
-class CacheService:
-    @staticmethod
-    def get(key):
-        if redis_available:
-            return redis_client.get(key)
-        return None
-    
-    @staticmethod
-    def set(key, value, expire=3600):
-        if redis_available:
-            redis_client.setex(key, expire, value)
-    
-    @staticmethod
-    def delete(key):
-        if redis_available:
-            redis_client.delete(key)
-    
-    @staticmethod
-    def clear_pattern(pattern):
-        if redis_available:
-            for key in redis_client.scan_iter(pattern):
-                redis_client.delete(key)
-
-# ==================== دکوراتورهای امنیتی ====================
-def token_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        token = request.headers.get('Authorization')
-        if not token:
-            return jsonify({'error': 'توکن احراز هویت یافت نشد'}), 401
-        try:
-            token = token.split(' ')[1]
-            data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
-            current_user = User.query.get(data['user_id'])
-            if not current_user:
-                return jsonify({'error': 'کاربر یافت نشد'}), 401
-        except:
-            return jsonify({'error': 'توکن نامعتبر است'}), 401
-        return f(current_user, *args, **kwargs)
-    return decorated
-
-def rate_limit(limit=60, window=60):
-    def decorator(f):
-        @wraps(f)
-        def decorated(*args, **kwargs):
-            ip = request.remote_addr
-            key = f"rate_limit:{ip}:{f.__name__}"
-            if redis_available:
-                count = redis_client.get(key)
-                if count and int(count) >= limit:
-                    return jsonify({'error': 'درخواست بیش از حد. لطفاً بعداً تلاش کنید'}), 429
-                redis_client.incr(key)
-                redis_client.expire(key, window)
-            return f(*args, **kwargs)
-        return decorated
-    return decorator
-
-# ==================== توابع کمکی ====================
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
-
-def generate_thumbnail(filepath, output_path, size=(300, 300)):
-    try:
-        img = Image.open(filepath)
-        img.thumbnail(size)
-        img.save(output_path)
-        return True
-    except:
+    async def send_to_user(self, user_id: str, data: dict):
+        async with self._lock:
+            if user_id in self.user_connections:
+                conn_id = self.user_connections[user_id]
+                if conn_id in self.active_connections:
+                    try:
+                        await self.active_connections[conn_id].send_json(data)
+                        return True
+                    except:
+                        pass
         return False
+    
+    async def broadcast(self, data: dict, exclude_user: str = None):
+        async with self._lock:
+            for conn_id, ws in self.active_connections.items():
+                user_id = getattr(ws.state, 'user_id', None)
+                if user_id != exclude_user:
+                    try:
+                        await ws.send_json(data)
+                    except:
+                        pass
 
-def generate_video_thumbnail(filepath, output_path):
-    try:
-        ffmpeg.input(filepath, ss=1).output(output_path, vframes=1, format='image2').run(quiet=True)
-        return True
-    except:
-        return False
+manager = ConnectionManager()
 
-def get_user_from_token():
-    token = request.headers.get('Authorization')
-    if not token:
-        return None
-    try:
-        token = token.split(' ')[1]
-        data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
-        return User.query.get(data['user_id'])
-    except:
-        return None
+# ===================================================
+# FastAPI Application
+# ===================================================
 
-def send_notification(user_id, actor_id, type, target_id):
-    notification = Notification(
-        user_id=user_id,
-        actor_id=actor_id,
-        type=type,
-        target_id=target_id
-    )
-    db.session.add(notification)
-    db.session.commit()
-    
-    # ارسال نوتیفیکیشن از طریق WebSocket
-    socketio.emit('new_notification', {
-        'user_id': user_id,
-        'type': type,
-        'actor_id': actor_id,
-        'target_id': target_id
-    }, room=f'user_{user_id}')
+app = FastAPI(title="Social Media API", version="1.0.0")
 
-# ==================== API‌ها ====================
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# ---------- احراز هویت ----------
-@app.route('/api/auth/register', methods=['POST'])
-@rate_limit(10, 60)
-def register():
-    data = request.json
-    username = data.get('username', '').strip()
-    email = data.get('email', '').strip()
-    password = data.get('password', '').strip()
-    full_name = data.get('full_name', '').strip()
-    
-    if not username or not email or not password:
-        return jsonify({'error': 'همه فیلدها الزامی هستند'}), 400
-    
-    if User.query.filter_by(username=username).first():
-        return jsonify({'error': 'این نام کاربری قبلاً ثبت شده است'}), 400
-    
-    if User.query.filter_by(email=email).first():
-        return jsonify({'error': 'این ایمیل قبلاً ثبت شده است'}), 400
-    
-    password_hash = hashlib.sha256(password.encode()).hexdigest()
-    user = User(
-        username=username,
-        email=email,
-        password_hash=password_hash,
-        full_name=full_name
-    )
-    db.session.add(user)
-    db.session.commit()
-    
-    token = jwt.encode({'user_id': user.id, 'exp': datetime.utcnow() + timedelta(days=30)}, 
-                       app.config['SECRET_KEY'], algorithm='HS256')
-    
-    return jsonify({
-        'message': 'ثبت نام با موفقیت انجام شد',
-        'token': token,
-        'user': {
-            'id': user.id,
-            'username': user.username,
-            'email': user.email,
-            'full_name': user.full_name,
-            'avatar': user.avatar
-        }
-    })
+# ===================================================
+# Dependency Injection
+# ===================================================
 
-@app.route('/api/auth/login', methods=['POST'])
-@rate_limit(20, 60)
-def login():
-    data = request.json
-    identifier = data.get('identifier', '').strip()
-    password = data.get('password', '').strip()
-    
-    if not identifier or not password:
-        return jsonify({'error': 'نام کاربری/ایمیل و رمز عبور الزامی هستند'}), 400
-    
-    user = User.query.filter((User.username == identifier) | (User.email == identifier)).first()
-    if not user:
-        return jsonify({'error': 'کاربر یافت نشد'}), 404
-    
-    password_hash = hashlib.sha256(password.encode()).hexdigest()
-    if user.password_hash != password_hash:
-        return jsonify({'error': 'رمز عبور اشتباه است'}), 401
-    
-    token = jwt.encode({'user_id': user.id, 'exp': datetime.utcnow() + timedelta(days=30)}, 
-                       app.config['SECRET_KEY'], algorithm='HS256')
-    
-    user.last_seen = datetime.utcnow()
-    db.session.commit()
-    
-    return jsonify({
-        'message': 'ورود با موفقیت انجام شد',
-        'token': token,
-        'user': {
-            'id': user.id,
-            'username': user.username,
-            'email': user.email,
-            'full_name': user.full_name,
-            'avatar': user.avatar,
-            'bio': user.bio,
-            'is_verified': user.is_verified
-        }
-    })
+async def get_db() -> Database:
+    return await Database.get_instance()
 
-@app.route('/api/auth/me', methods=['GET'])
-@token_required
-def get_current_user(current_user):
-    return jsonify({
-        'id': current_user.id,
-        'username': current_user.username,
-        'email': current_user.email,
-        'full_name': current_user.full_name,
-        'bio': current_user.bio,
-        'avatar': current_user.avatar,
-        'is_verified': current_user.is_verified,
-        'is_private': current_user.is_private,
-        'last_seen': current_user.last_seen.isoformat() if current_user.last_seen else None
-    })
+async def get_current_user(request: Request) -> str:
+    user_id = request.headers.get("X-User-ID")
+    if not user_id:
+        user_id = f"user_{uuid.uuid4().hex[:8]}"
+    return user_id
 
-# ---------- کاربران ----------
-@app.route('/api/users/<int:user_id>', methods=['GET'])
-def get_user(user_id):
-    # کش کردن
-    cache_key = f"user:{user_id}"
-    cached = CacheService.get(cache_key)
-    if cached:
-        return jsonify(json.loads(cached))
+# ===================================================
+# Helper Functions
+# ===================================================
+
+def generate_id() -> str:
+    return str(ObjectId())
+
+def get_avatar_url(user_id: str) -> str:
+    return f"https://i.pravatar.cc/150?img={hash(user_id) % 70 + 1}"
+
+def get_media_url(filename: str) -> str:
+    return f"/uploads/{filename}"
+
+# ===================================================
+# API Routes
+# ===================================================
+
+@app.get("/api/stories")
+async def get_stories(
+    user_id: str = Depends(get_current_user),
+    db: Database = Depends(get_db)
+):
+    """Get all active stories"""
+    stories = await db.mongo.stories.find(
+        {"expires_at": {"$gt": datetime.now()}}
+    ).limit(20).to_list(None)
     
-    user = User.query.get(user_id)
-    if not user:
-        return jsonify({'error': 'کاربر یافت نشد'}), 404
+    return {
+        "stories": [
+            {
+                "id": str(s["_id"]),
+                "username": s["username"],
+                "avatar": s["avatar"],
+                "media": s["media"],
+                "created_at": s["created_at"].isoformat()
+            }
+            for s in stories
+        ]
+    }
+
+@app.get("/api/posts")
+async def get_posts(
+    mode: str = "explore",
+    limit: int = 50,
+    user_id: str = Depends(get_current_user),
+    db: Database = Depends(get_db)
+):
+    """Get posts based on mode (explore, reels, following)"""
+    query = {}
     
-    posts = Post.query.filter_by(user_id=user_id, is_archived=False).count()
-    followers_count = Follow.query.filter_by(following_id=user_id, status='accepted').count()
-    following_count = Follow.query.filter_by(follower_id=user_id, status='accepted').count()
+    if mode == "following":
+        # Get users that the current user follows
+        follow_key = f"followers:{user_id}"
+        following = await db.redis.smembers(follow_key)
+        if following:
+            query["user_id"] = {"$in": list(following)}
+        else:
+            query = {"_id": {"$exists": True}}  # No following, show all
     
-    result = {
-        'id': user.id,
-        'username': user.username,
-        'full_name': user.full_name,
-        'bio': user.bio,
-        'avatar': user.avatar,
-        'is_verified': user.is_verified,
-        'is_private': user.is_private,
-        'posts_count': posts,
-        'followers': followers_count,
-        'following': following_count,
-        'last_seen': user.last_seen.isoformat() if user.last_seen else None,
-        'created_at': user.created_at.isoformat()
+    if mode == "reels":
+        # Get video posts only
+        query["type"] = "video"
+    
+    posts = await db.mongo.posts.find(query).sort(
+        "created_at", -1
+    ).limit(limit).to_list(None)
+    
+    result = []
+    for post in posts:
+        post_id = str(post["_id"])
+        
+        # Check if user liked this post
+        liked_key = f"likes:{post_id}"
+        liked = await db.redis.sismember(liked_key, user_id)
+        
+        result.append({
+            "id": post_id,
+            "user_id": post["user_id"],
+            "username": post.get("username", "کاربر"),
+            "media": post["media"],
+            "type": post.get("type", "image"),
+            "caption": post.get("caption", ""),
+            "likes": post.get("likes", 0),
+            "comments": post.get("comments", 0),
+            "shares": post.get("shares", 0),
+            "views": post.get("views", 0),
+            "liked": liked,
+            "created_at": post["created_at"].isoformat()
+        })
+    
+    return {"posts": result}
+
+@app.get("/api/post/{post_id}")
+async def get_post(
+    post_id: str,
+    user_id: str = Depends(get_current_user),
+    db: Database = Depends(get_db)
+):
+    """Get single post with details"""
+    from bson import ObjectId
+    
+    post = await db.mongo.posts.find_one({"_id": ObjectId(post_id)})
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    
+    liked_key = f"likes:{post_id}"
+    liked = await db.redis.sismember(liked_key, user_id)
+    
+    return {
+        "id": str(post["_id"]),
+        "user_id": post["user_id"],
+        "username": post.get("username", "کاربر"),
+        "media": post["media"],
+        "type": post.get("type", "image"),
+        "caption": post.get("caption", ""),
+        "likes": post.get("likes", 0),
+        "comments": post.get("comments", 0),
+        "shares": post.get("shares", 0),
+        "views": post.get("views", 0),
+        "liked": liked,
+        "created_at": post["created_at"].isoformat()
+    }
+
+@app.get("/api/comments/{post_id}")
+async def get_comments(
+    post_id: str,
+    limit: int = 50,
+    db: Database = Depends(get_db)
+):
+    """Get comments for a post"""
+    from bson import ObjectId
+    
+    comments = await db.mongo.comments.find(
+        {"post_id": post_id}
+    ).sort("created_at", 1).limit(limit).to_list(None)
+    
+    return {
+        "comments": [
+            f"{c['username']}: {c['text']}"
+            for c in comments
+        ]
+    }
+
+@app.post("/api/comment/{post_id}")
+async def add_comment(
+    post_id: str,
+    data: dict,
+    user_id: str = Depends(get_current_user),
+    db: Database = Depends(get_db)
+):
+    """Add a comment to a post"""
+    from bson import ObjectId
+    
+    text = data.get("text", "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Comment text is required")
+    
+    # Get user info
+    user_key = f"user:{user_id}"
+    username = await db.redis.hget(user_key, "username") or "کاربر"
+    
+    comment = {
+        "id": generate_id(),
+        "post_id": post_id,
+        "user_id": user_id,
+        "username": username,
+        "text": text,
+        "created_at": datetime.now()
     }
     
-    CacheService.set(cache_key, json.dumps(result), expire=300)
-    return jsonify(result)
-
-@app.route('/api/users/<int:user_id>/posts', methods=['GET'])
-def get_user_posts(user_id):
-    page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('per_page', 20, type=int)
+    await db.mongo.comments.insert_one(comment)
     
-    posts = Post.query.filter_by(user_id=user_id, is_archived=False)\
-        .order_by(Post.created_at.desc())\
-        .paginate(page=page, per_page=per_page, error_out=False)
-    
-    result = []
-    for p in posts.items:
-        result.append({
-            'id': p.id,
-            'media_type': p.media_type,
-            'media_url': p.media_url,
-            'thumbnail_url': p.thumbnail_url,
-            'caption': p.caption,
-            'likes_count': p.likes_count,
-            'comments_count': p.comments_count,
-            'views': p.views,
-            'created_at': p.created_at.isoformat()
-        })
-    
-    return jsonify({
-        'items': result,
-        'total': posts.total,
-        'page': posts.page,
-        'pages': posts.pages
-    })
-
-@app.route('/api/users/<int:user_id>/follow', methods=['POST'])
-@token_required
-@rate_limit(50, 60)
-def follow_user(current_user, user_id):
-    if current_user.id == user_id:
-        return jsonify({'error': 'نمی‌توانید خودتان را دنبال کنید'}), 400
-    
-    target_user = User.query.get(user_id)
-    if not target_user:
-        return jsonify({'error': 'کاربر یافت نشد'}), 404
-    
-    existing = Follow.query.filter_by(follower_id=current_user.id, following_id=user_id).first()
-    if existing:
-        db.session.delete(existing)
-        db.session.commit()
-        CacheService.delete(f"user:{user_id}")
-        CacheService.delete(f"user:{current_user.id}")
-        return jsonify({'following': False, 'message': 'آنفالو شد'})
-    
-    follow = Follow(follower_id=current_user.id, following_id=user_id)
-    db.session.add(follow)
-    db.session.commit()
-    
-    send_notification(user_id, current_user.id, 'follow', current_user.id)
-    CacheService.delete(f"user:{user_id}")
-    CacheService.delete(f"user:{current_user.id}")
-    
-    return jsonify({'following': True, 'message': 'فالو شد'})
-
-@app.route('/api/users/<int:user_id>/followers', methods=['GET'])
-def get_followers(user_id):
-    page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('per_page', 20, type=int)
-    
-    followers = Follow.query.filter_by(following_id=user_id, status='accepted')\
-        .join(User, User.id == Follow.follower_id)\
-        .paginate(page=page, per_page=per_page, error_out=False)
-    
-    result = []
-    for f in followers.items:
-        user = User.query.get(f.follower_id)
-        result.append({
-            'id': user.id,
-            'username': user.username,
-            'full_name': user.full_name,
-            'avatar': user.avatar,
-            'is_verified': user.is_verified
-        })
-    
-    return jsonify({
-        'items': result,
-        'total': followers.total,
-        'page': followers.page,
-        'pages': followers.pages
-    })
-
-@app.route('/api/users/<int:user_id>/following', methods=['GET'])
-def get_following(user_id):
-    page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('per_page', 20, type=int)
-    
-    following = Follow.query.filter_by(follower_id=user_id, status='accepted')\
-        .join(User, User.id == Follow.following_id)\
-        .paginate(page=page, per_page=per_page, error_out=False)
-    
-    result = []
-    for f in following.items:
-        user = User.query.get(f.following_id)
-        result.append({
-            'id': user.id,
-            'username': user.username,
-            'full_name': user.full_name,
-            'avatar': user.avatar,
-            'is_verified': user.is_verified
-        })
-    
-    return jsonify({
-        'items': result,
-        'total': following.total,
-        'page': following.page,
-        'pages': following.pages
-    })
-
-@app.route('/api/users/update', methods=['PUT'])
-@token_required
-def update_profile(current_user):
-    data = request.json
-    if 'bio' in data:
-        current_user.bio = data['bio'][:300]
-    if 'full_name' in data:
-        current_user.full_name = data['full_name'][:100]
-    if 'is_private' in data:
-        current_user.is_private = data['is_private']
-    
-    db.session.commit()
-    CacheService.delete(f"user:{current_user.id}")
-    
-    return jsonify({'message': 'پروفایل با موفقیت به‌روزرسانی شد'})
-
-# ---------- پست‌ها ----------
-@app.route('/api/posts', methods=['GET'])
-def get_posts():
-    page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('per_page', 20, type=int)
-    user_id = request.args.get('user_id', type=int)
-    
-    query = Post.query.filter_by(is_archived=False)
-    if user_id:
-        query = query.filter_by(user_id=user_id)
-    
-    posts = query.order_by(Post.created_at.desc())\
-        .paginate(page=page, per_page=per_page, error_out=False)
-    
-    result = []
-    for p in posts.items:
-        user = User.query.get(p.user_id)
-        result.append({
-            'id': p.id,
-            'user_id': p.user_id,
-            'username': user.username if user else 'unknown',
-            'user_avatar': user.avatar if user else '',
-            'is_verified': user.is_verified if user else False,
-            'media_type': p.media_type,
-            'media_url': p.media_url,
-            'thumbnail_url': p.thumbnail_url,
-            'caption': p.caption,
-            'location': p.location,
-            'views': p.views,
-            'likes': p.likes_count,
-            'comments': p.comments_count,
-            'shares': p.shares_count,
-            'created_at': p.created_at.isoformat()
-        })
-    
-    return jsonify({
-        'items': result,
-        'total': posts.total,
-        'page': posts.page,
-        'pages': posts.pages
-    })
-
-@app.route('/api/posts/<int:post_id>', methods=['GET'])
-def get_post(post_id):
-    p = Post.query.get(post_id)
-    if not p:
-        return jsonify({'error': 'پست یافت نشد'}), 404
-    
-    # افزایش بازدید
-    p.views += 1
-    db.session.commit()
-    
-    user = User.query.get(p.user_id)
-    comments = Comment.query.filter_by(post_id=p.id, parent_id=None)\
-        .order_by(Comment.created_at.desc()).limit(10).all()
-    
-    return jsonify({
-        'id': p.id,
-        'user_id': p.user_id,
-        'username': user.username if user else 'unknown',
-        'user_avatar': user.avatar if user else '',
-        'is_verified': user.is_verified if user else False,
-        'media_type': p.media_type,
-        'media_url': p.media_url,
-        'thumbnail_url': p.thumbnail_url,
-        'caption': p.caption,
-        'location': p.location,
-        'views': p.views,
-        'likes': p.likes_count,
-        'comments': [{
-            'id': c.id,
-            'user_id': c.user_id,
-            'username': User.query.get(c.user_id).username,
-            'user_avatar': User.query.get(c.user_id).avatar,
-            'text': c.text,
-            'likes_count': c.likes_count,
-            'created_at': c.created_at.isoformat()
-        } for c in comments],
-        'created_at': p.created_at.isoformat()
-    })
-
-@app.route('/api/posts', methods=['POST'])
-@token_required
-@rate_limit(20, 60)
-def create_post(current_user):
-    caption = request.form.get('caption', '')
-    location = request.form.get('location', '')
-    media_type = request.form.get('media_type', 'image')
-    
-    if 'file' not in request.files:
-        return jsonify({'error': 'فایلی ارسال نشده است'}), 400
-    
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': 'فایلی انتخاب نشده است'}), 400
-    
-    if not allowed_file(file.filename):
-        return jsonify({'error': 'فرمت فایل پشتیبانی نمی‌شود'}), 400
-    
-    # ذخیره فایل
-    ext = file.filename.rsplit('.', 1)[1].lower()
-    filename = f"{datetime.utcnow().timestamp()}_{uuid.uuid4().hex[:8]}.{ext}"
-    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-    file.save(filepath)
-    
-    # تولید تامب‌نیل
-    thumbnail_path = None
-    if media_type == 'image':
-        thumb_filename = f"thumb_{filename}"
-        thumb_path = os.path.join(app.config['THUMBNAIL_FOLDER'], thumb_filename)
-        if generate_thumbnail(filepath, thumb_path):
-            thumbnail_path = f"/thumbnails/{thumb_filename}"
-    elif media_type == 'video':
-        thumb_filename = f"thumb_{filename}.jpg"
-        thumb_path = os.path.join(app.config['THUMBNAIL_FOLDER'], thumb_filename)
-        if generate_video_thumbnail(filepath, thumb_path):
-            thumbnail_path = f"/thumbnails/{thumb_filename}"
-    
-    # ذخیره در دیتابیس
-    post = Post(
-        user_id=current_user.id,
-        media_type=media_type,
-        media_url=f"/uploads/{filename}",
-        thumbnail_url=thumbnail_path,
-        caption=caption,
-        location=location
+    # Increment comment count
+    result = await db.mongo.posts.update_one(
+        {"_id": ObjectId(post_id)},
+        {"$inc": {"comments": 1}}
     )
-    db.session.add(post)
-    db.session.commit()
     
-    # استخراج هشتگ‌ها
-    import re
-    hashtags = re.findall(r'#([\w]+)', caption)
-    for tag_name in hashtags:
-        hashtag = Hashtag.query.filter_by(name=tag_name).first()
-        if not hashtag:
-            hashtag = Hashtag(name=tag_name)
-            db.session.add(hashtag)
-            db.session.flush()
-        ph = PostHashtag(post_id=post.id, hashtag_id=hashtag.id)
-        db.session.add(ph)
-        hashtag.posts_count += 1
+    # Get updated count
+    post = await db.mongo.posts.find_one({"_id": ObjectId(post_id)})
+    comments_count = post.get("comments", 0) if post else 0
     
-    db.session.commit()
-    CacheService.clear_pattern("posts:*")
-    
-    return jsonify({
-        'message': 'پست با موفقیت ایجاد شد',
-        'id': post.id,
-        'media_url': post.media_url
-    })
-
-@app.route('/api/posts/<int:post_id>/like', methods=['POST'])
-@token_required
-def like_post(current_user, post_id):
-    post = Post.query.get(post_id)
-    if not post:
-        return jsonify({'error': 'پست یافت نشد'}), 404
-    
-    existing = Like.query.filter_by(user_id=current_user.id, post_id=post_id).first()
-    if existing:
-        db.session.delete(existing)
-        post.likes_count -= 1
-        db.session.commit()
-        return jsonify({'liked': False, 'likes_count': post.likes_count})
-    
-    like = Like(user_id=current_user.id, post_id=post_id)
-    db.session.add(like)
-    post.likes_count += 1
-    db.session.commit()
-    
-    if post.user_id != current_user.id:
-        send_notification(post.user_id, current_user.id, 'like', post_id)
-    
-    return jsonify({'liked': True, 'likes_count': post.likes_count})
-
-@app.route('/api/posts/<int:post_id>/comment', methods=['POST'])
-@token_required
-def add_comment(current_user, post_id):
-    data = request.json
-    text = data.get('text', '').strip()
-    parent_id = data.get('parent_id')
-    
-    if not text:
-        return jsonify({'error': 'متن کامنت نمی‌تواند خالی باشد'}), 400
-    
-    post = Post.query.get(post_id)
-    if not post:
-        return jsonify({'error': 'پست یافت نشد'}), 404
-    
-    comment = Comment(
-        user_id=current_user.id,
-        post_id=post_id,
-        parent_id=parent_id,
-        text=text
-    )
-    db.session.add(comment)
-    post.comments_count += 1
-    db.session.commit()
-    
-    if post.user_id != current_user.id:
-        send_notification(post.user_id, current_user.id, 'comment', post_id)
-    
-    return jsonify({
-        'message': 'کامنت با موفقیت ارسال شد',
-        'id': comment.id,
-        'username': current_user.username,
-        'user_avatar': current_user.avatar,
-        'text': comment.text,
-        'created_at': comment.created_at.isoformat()
-    })
-
-@app.route('/api/posts/<int:post_id>/comments', methods=['GET'])
-def get_post_comments(post_id):
-    page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('per_page', 20, type=int)
-    
-    comments = Comment.query.filter_by(post_id=post_id, parent_id=None)\
-        .order_by(Comment.created_at.desc())\
-        .paginate(page=page, per_page=per_page, error_out=False)
-    
-    result = []
-    for c in comments.items:
-        user = User.query.get(c.user_id)
-        replies = Comment.query.filter_by(parent_id=c.id).count()
-        result.append({
-            'id': c.id,
-            'user_id': c.user_id,
-            'username': user.username if user else 'unknown',
-            'user_avatar': user.avatar if user else '',
-            'text': c.text,
-            'likes_count': c.likes_count,
-            'replies_count': replies,
-            'created_at': c.created_at.isoformat()
+    # Notify via WebSocket
+    if post:
+        await manager.broadcast({
+            "type": "new_comment",
+            "post_id": post_id,
+            "user_id": user_id,
+            "username": username,
+            "text": text,
+            "comments": comments_count
         })
     
-    return jsonify({
-        'items': result,
-        'total': comments.total,
-        'page': comments.page,
-        'pages': comments.pages
-    })
+    return {"success": True, "comments": comments_count}
 
-@app.route('/api/posts/<int:post_id>/share', methods=['POST'])
-@token_required
-def share_post(current_user, post_id):
-    post = Post.query.get(post_id)
-    if not post:
-        return jsonify({'error': 'پست یافت نشد'}), 404
+@app.post("/api/like/{post_id}")
+async def toggle_like(
+    post_id: str,
+    data: dict = None,
+    user_id: str = Depends(get_current_user),
+    db: Database = Depends(get_db)
+):
+    """Toggle like on a post"""
+    from bson import ObjectId
     
-    post.shares_count += 1
-    db.session.commit()
+    unlike = data.get("unlike", False) if data else False
+    liked_key = f"likes:{post_id}"
     
-    return jsonify({'message': 'پست با موفقیت به اشتراک گذاشته شد', 'shares_count': post.shares_count})
-
-@app.route('/api/posts/<int:post_id>/save', methods=['POST'])
-@token_required
-def save_post(current_user, post_id):
-    data = request.json
-    collection = data.get('collection', 'default')
-    
-    post = Post.query.get(post_id)
-    if not post:
-        return jsonify({'error': 'پست یافت نشد'}), 404
-    
-    existing = SavedPost.query.filter_by(user_id=current_user.id, post_id=post_id).first()
-    if existing:
-        db.session.delete(existing)
-        db.session.commit()
-        return jsonify({'saved': False})
-    
-    saved = SavedPost(
-        user_id=current_user.id,
-        post_id=post_id,
-        collection_name=collection
-    )
-    db.session.add(saved)
-    db.session.commit()
-    
-    return jsonify({'saved': True})
-
-# ---------- استوری‌ها ----------
-@app.route('/api/stories', methods=['GET'])
-def get_stories():
-    now = datetime.utcnow()
-    stories = Story.query.filter(Story.expires_at > now)\
-        .order_by(Story.created_at.desc()).all()
-    
-    result = []
-    for s in stories:
-        user = User.query.get(s.user_id)
-        result.append({
-            'id': s.id,
-            'user_id': s.user_id,
-            'username': user.username if user else 'unknown',
-            'user_avatar': user.avatar if user else '',
-            'media_type': s.media_type,
-            'media_url': s.media_url,
-            'thumbnail_url': s.thumbnail_url,
-            'caption': s.caption,
-            'views': s.views,
-            'expires_at': s.expires_at.isoformat(),
-            'created_at': s.created_at.isoformat()
-        })
-    
-    return jsonify(result)
-
-@app.route('/api/stories', methods=['POST'])
-@token_required
-@rate_limit(10, 60)
-def create_story(current_user):
-    caption = request.form.get('caption', '')
-    
-    if 'file' not in request.files:
-        return jsonify({'error': 'فایلی ارسال نشده است'}), 400
-    
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': 'فایلی انتخاب نشده است'}), 400
-    
-    if not allowed_file(file.filename):
-        return jsonify({'error': 'فرمت فایل پشتیبانی نمی‌شود'}), 400
-    
-    ext = file.filename.rsplit('.', 1)[1].lower()
-    filename = f"story_{datetime.utcnow().timestamp()}_{uuid.uuid4().hex[:8]}.{ext}"
-    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-    file.save(filepath)
-    
-    media_type = 'image' if ext in ['png', 'jpg', 'jpeg', 'gif'] else 'video'
-    thumbnail_path = None
-    if media_type == 'image':
-        thumb_filename = f"thumb_{filename}"
-        thumb_path = os.path.join(app.config['THUMBNAIL_FOLDER'], thumb_filename)
-        if generate_thumbnail(filepath, thumb_path):
-            thumbnail_path = f"/thumbnails/{thumb_filename}"
+    if unlike:
+        await db.redis.srem(liked_key, user_id)
     else:
-        thumb_filename = f"thumb_{filename}.jpg"
-        thumb_path = os.path.join(app.config['THUMBNAIL_FOLDER'], thumb_filename)
-        if generate_video_thumbnail(filepath, thumb_path):
-            thumbnail_path = f"/thumbnails/{thumb_filename}"
+        await db.redis.sadd(liked_key, user_id)
     
-    story = Story(
-        user_id=current_user.id,
-        media_type=media_type,
-        media_url=f"/uploads/{filename}",
-        thumbnail_url=thumbnail_path,
-        caption=caption,
-        expires_at=datetime.utcnow() + timedelta(hours=24)
+    # Get like count from Redis
+    likes = await db.redis.scard(liked_key)
+    
+    # Update MongoDB (async)
+    await db.mongo.posts.update_one(
+        {"_id": ObjectId(post_id)},
+        {"$set": {"likes": likes}}
     )
-    db.session.add(story)
-    db.session.commit()
     
-    return jsonify({
-        'message': 'استوری با موفقیت ایجاد شد',
-        'id': story.id,
-        'media_url': story.media_url
+    # Notify via WebSocket
+    await manager.broadcast({
+        "type": "like_update",
+        "post_id": post_id,
+        "user_id": user_id,
+        "likes": likes,
+        "liked": not unlike
     })
+    
+    return {"likes": likes, "liked": not unlike}
 
-@app.route('/api/stories/<int:story_id>/view', methods=['POST'])
-@token_required
-def view_story(current_user, story_id):
-    story = Story.query.get(story_id)
-    if not story:
-        return jsonify({'error': 'استوری یافت نشد'}), 404
+@app.post("/api/share/{post_id}")
+async def share_post(
+    post_id: str,
+    user_id: str = Depends(get_current_user),
+    db: Database = Depends(get_db)
+):
+    """Share a post"""
+    from bson import ObjectId
     
-    existing = StoryView.query.filter_by(story_id=story_id, user_id=current_user.id).first()
-    if not existing:
-        view = StoryView(story_id=story_id, user_id=current_user.id)
-        db.session.add(view)
-        story.views += 1
-        db.session.commit()
+    result = await db.mongo.posts.update_one(
+        {"_id": ObjectId(post_id)},
+        {"$inc": {"shares": 1}}
+    )
     
-    return jsonify({'message': 'استوری مشاهده شد'})
+    post = await db.mongo.posts.find_one({"_id": ObjectId(post_id)})
+    shares = post.get("shares", 0) if post else 0
+    
+    return {"success": True, "shares": shares}
 
-# ---------- پیام‌ها (چت) ----------
-@app.route('/api/messages', methods=['GET'])
-@token_required
-def get_messages(current_user):
-    user_id = request.args.get('user_id', type=int)
-    if not user_id:
-        return jsonify({'error': 'شناسه کاربر مورد نیاز است'}), 400
+@app.post("/api/view/{post_id}")
+async def increment_view(
+    post_id: str,
+    user_id: str = Depends(get_current_user),
+    db: Database = Depends(get_db)
+):
+    """Increment post view count"""
+    from bson import ObjectId
     
-    messages = Message.query.filter(
-        ((Message.sender_id == current_user.id) & (Message.receiver_id == user_id)) |
-        ((Message.sender_id == user_id) & (Message.receiver_id == current_user.id))
-    ).order_by(Message.created_at).all()
+    # Use Redis for rate limiting (one view per user per hour)
+    view_key = f"views:{post_id}:{user_id}"
+    if await db.redis.setnx(view_key, "1"):
+        await db.redis.expire(view_key, 3600)
+        
+        result = await db.mongo.posts.update_one(
+            {"_id": ObjectId(post_id)},
+            {"$inc": {"views": 1}}
+        )
     
-    # علامت‌گذاری به عنوان خوانده شده
-    for m in messages:
-        if m.receiver_id == current_user.id and not m.is_read:
-            m.is_read = True
-            m.read_at = datetime.utcnow()
-    db.session.commit()
+    return {"success": True}
+
+@app.get("/api/profile")
+async def get_profile(
+    user_id: str = Depends(get_current_user),
+    db: Database = Depends(get_db)
+):
+    """Get user profile"""
+    user_key = f"user:{user_id}"
     
-    result = []
-    for m in messages:
-        result.append({
-            'id': m.id,
-            'sender_id': m.sender_id,
-            'receiver_id': m.receiver_id,
-            'message_type': m.message_type,
-            'content': m.content,
-            'media_url': m.media_url,
-            'is_read': m.is_read,
-            'created_at': m.created_at.isoformat()
+    # Get user data from Redis
+    username = await db.redis.hget(user_key, "username") or user_id[:8]
+    bio = await db.redis.hget(user_key, "bio") or "توسعه‌دهنده وب | عاشق کدنویسی"
+    posts = int(await db.redis.hget(user_key, "posts") or 0)
+    
+    # Get followers/following counts
+    followers = await db.redis.scard(f"followers:{user_id}")
+    following = await db.redis.scard(f"following:{user_id}")
+    
+    # Check if user is following the profile (for other users)
+    # For simplicity, just check self
+    is_following = False
+    
+    # Get user's posts
+    user_posts = await db.mongo.posts.find(
+        {"user_id": user_id}
+    ).sort("created_at", -1).limit(20).to_list(None)
+    
+    profile_posts = []
+    for post in user_posts:
+        post_id = str(post["_id"])
+        liked_key = f"likes:{post_id}"
+        liked = await db.redis.sismember(liked_key, user_id)
+        
+        profile_posts.append({
+            "id": post_id,
+            "media": post["media"],
+            "type": post.get("type", "image"),
+            "likes": post.get("likes", 0),
+            "comments": post.get("comments", 0),
+            "shares": post.get("shares", 0),
+            "views": post.get("views", 0),
+            "liked": liked
         })
     
-    return jsonify(result)
+    return {
+        "username": username,
+        "bio": bio,
+        "avatar": get_avatar_url(user_id),
+        "posts": posts,
+        "followers": followers,
+        "following": following,
+        "is_following": is_following,
+        "profile_posts": profile_posts
+    }
 
-@app.route('/api/messages', methods=['POST'])
-@token_required
-def send_message(current_user):
-    data = request.json
-    receiver_id = data.get('receiver_id')
-    message_type = data.get('message_type', 'text')
-    content = data.get('content', '')
-    media_url = data.get('media_url')
+@app.post("/api/profile/bio")
+async def update_bio(
+    data: dict,
+    user_id: str = Depends(get_current_user),
+    db: Database = Depends(get_db)
+):
+    """Update user bio"""
+    bio = data.get("bio", "").strip()
+    if not bio:
+        raise HTTPException(status_code=400, detail="Bio is required")
     
-    if not receiver_id:
-        return jsonify({'error': 'شناسه گیرنده مورد نیاز است'}), 400
+    user_key = f"user:{user_id}"
+    await db.redis.hset(user_key, "bio", bio)
     
-    receiver = User.query.get(receiver_id)
-    if not receiver:
-        return jsonify({'error': 'کاربر گیرنده یافت نشد'}), 404
-    
-    if message_type == 'text' and not content:
-        return jsonify({'error': 'متن پیام نمی‌تواند خالی باشد'}), 400
-    
-    message = Message(
-        sender_id=current_user.id,
-        receiver_id=receiver_id,
-        message_type=message_type,
-        content=content,
-        media_url=media_url
-    )
-    db.session.add(message)
-    db.session.commit()
-    
-    # ارسال از طریق WebSocket
-    socketio.emit('new_message', {
-        'id': message.id,
-        'sender_id': message.sender_id,
-        'receiver_id': message.receiver_id,
-        'message_type': message.message_type,
-        'content': message.content,
-        'media_url': message.media_url,
-        'created_at': message.created_at.isoformat()
-    }, room=f'user_{receiver_id}')
-    
-    return jsonify({
-        'message': 'پیام با موفقیت ارسال شد',
-        'id': message.id,
-        'created_at': message.created_at.isoformat()
-    })
+    return {"success": True}
 
-@app.route('/api/messages/conversations', methods=['GET'])
-@token_required
-def get_conversations(current_user):
-    # لیست گفتگوها
-    sent = db.session.query(Message.receiver_id).filter_by(sender_id=current_user.id).distinct().all()
-    received = db.session.query(Message.sender_id).filter_by(receiver_id=current_user.id).distinct().all()
+@app.post("/api/follow/toggle")
+async def toggle_follow(
+    data: dict = None,
+    user_id: str = Depends(get_current_user),
+    db: Database = Depends(get_db)
+):
+    """Toggle follow/unfollow a user"""
+    target_user = data.get("username", user_id) if data else user_id
     
-    user_ids = set([r[0] for r in sent] + [r[0] for r in received])
+    if target_user == user_id:
+        return {"following": False, "followers": 0}
+    
+    # Check if already following
+    follow_key = f"following:{user_id}"
+    is_following = await db.redis.sismember(follow_key, target_user)
+    
+    if is_following:
+        await db.redis.srem(follow_key, target_user)
+        await db.redis.srem(f"followers:{target_user}", user_id)
+        following = False
+    else:
+        await db.redis.sadd(follow_key, target_user)
+        await db.redis.sadd(f"followers:{target_user}", user_id)
+        following = True
+    
+    # Get updated follower count
+    followers = await db.redis.scard(f"followers:{target_user}")
+    
+    return {"following": following, "followers": followers}
+
+@app.get("/api/follow/{type}")
+async def get_follow_list(
+    type: str,
+    user_id: str = Depends(get_current_user),
+    db: Database = Depends(get_db)
+):
+    """Get followers or following list"""
+    if type == "followers":
+        users = await db.redis.smembers(f"followers:{user_id}")
+    else:
+        users = await db.redis.smembers(f"following:{user_id}")
+    
     result = []
-    for uid in user_ids:
-        user = User.query.get(uid)
-        if user:
-            last_msg = Message.query.filter(
-                ((Message.sender_id == current_user.id) & (Message.receiver_id == uid)) |
-                ((Message.sender_id == uid) & (Message.receiver_id == current_user.id))
-            ).order_by(Message.created_at.desc()).first()
+    for uid in list(users)[:50]:
+        user_key = f"user:{uid}"
+        username = await db.redis.hget(user_key, "username") or uid[:8]
+        is_following = await db.redis.sismember(f"following:{user_id}", uid)
+        
+        result.append({
+            "id": uid,
+            "name": username,
+            "avatar": get_avatar_url(uid),
+            "is_following": is_following
+        })
+    
+    return {"users": result}
+
+@app.get("/api/chats")
+async def get_chats(
+    user_id: str = Depends(get_current_user),
+    db: Database = Depends(get_db)
+):
+    """Get chat list for user"""
+    # Get all users the user has chatted with
+    pipeline = [
+        {"$match": {"$or": [{"from_user": user_id}, {"to_user": user_id}]}},
+        {"$group": {"_id": "$from_user", "last": {"$max": "$created_at"}}},
+        {"$sort": {"last": -1}}
+    ]
+    
+    # Get distinct chat partners
+    chat_partners = await db.mongo.chat_messages.aggregate([
+        {"$match": {"$or": [{"from_user": user_id}, {"to_user": user_id}]}},
+        {"$group": {"_id": {
+            "$cond": [
+                {"$eq": ["$from_user", user_id]},
+                "$to_user",
+                "$from_user"
+            ]
+        }}},
+        {"$lookup": {
+            "from": "chat_messages",
+            "let": {"partner": "$_id"},
+            "pipeline": [
+                {"$match": {
+                    "$expr": {
+                        "$or": [
+                            {"$and": [{"$eq": ["$from_user", user_id]}, {"$eq": ["$to_user", "$$partner"]}]},
+                            {"$and": [{"$eq": ["$from_user", "$$partner"]}, {"$eq": ["$to_user", user_id]}]}
+                        ]
+                    }
+                }},
+                {"$sort": {"created_at": -1}},
+                {"$limit": 1}
+            ],
+            "as": "last_msg"
+        }},
+        {"$unwind": {"path": "$last_msg", "preserveNullAndEmptyArrays": True}},
+        {"$sort": {"last_msg.created_at": -1}},
+        {"$limit": 50}
+    ]).to_list(None)
+    
+    chats = []
+    for partner in chat_partners:
+        partner_id = partner["_id"]
+        if partner_id != user_id:
+            user_key = f"user:{partner_id}"
+            username = await db.redis.hget(user_key, "username") or partner_id[:8]
+            last_msg = partner.get("last_msg", {})
             
-            unread = Message.query.filter_by(sender_id=uid, receiver_id=current_user.id, is_read=False).count()
-            
-            result.append({
-                'user_id': user.id,
-                'username': user.username,
-                'full_name': user.full_name,
-                'avatar': user.avatar,
-                'last_message': last_msg.content if last_msg else None,
-                'last_message_time': last_msg.created_at.isoformat() if last_msg else None,
-                'unread_count': unread
+            chats.append({
+                "id": partner_id,
+                "name": username,
+                "avatar": get_avatar_url(partner_id),
+                "last_message": "پیام جدید" if not last_msg else "پیام رمزنگاری شده",
+                "time": "همین حالا" if not last_msg else last_msg.get("created_at", datetime.now()).strftime("%H:%M")
             })
     
-    return jsonify(result)
+    return {"chats": chats}
 
-# ---------- اعلان‌ها ----------
-@app.route('/api/notifications', methods=['GET'])
-@token_required
-def get_notifications(current_user):
-    page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('per_page', 20, type=int)
+@app.get("/api/chat/{user_id}")
+async def get_chat_messages(
+    user_id: str,
+    limit: int = 100,
+    current_user: str = Depends(get_current_user),
+    db: Database = Depends(get_db)
+):
+    """Get chat messages between current user and another user"""
+    messages = await db.mongo.chat_messages.find({
+        "$or": [
+            {"$and": [{"from_user": current_user}, {"to_user": user_id}]},
+            {"$and": [{"from_user": user_id}, {"to_user": current_user}]}
+        ]
+    }).sort("created_at", -1).limit(limit).to_list(None)
     
-    notifications = Notification.query.filter_by(user_id=current_user.id)\
-        .order_by(Notification.created_at.desc())\
-        .paginate(page=page, per_page=per_page, error_out=False)
+    return {
+        "messages": [
+            {
+                "id": str(m["_id"]),
+                "sender": m["from_user"],
+                "text": m["message"],
+                "time": m["created_at"].isoformat()
+            }
+            for m in reversed(messages)
+        ]
+    }
+
+@app.post("/api/chat/send")
+async def send_chat_message(
+    data: dict,
+    current_user: str = Depends(get_current_user),
+    db: Database = Depends(get_db)
+):
+    """Send an encrypted chat message"""
+    to_user = data.get("to")
+    message = data.get("message")
     
-    result = []
-    for n in notifications.items:
-        actor = User.query.get(n.actor_id)
-        result.append({
-            'id': n.id,
-            'type': n.type,
-            'actor_id': n.actor_id,
-            'actor_username': actor.username if actor else 'unknown',
-            'actor_avatar': actor.avatar if actor else '',
-            'target_id': n.target_id,
-            'is_read': n.is_read,
-            'created_at': n.created_at.isoformat()
+    if not to_user or not message:
+        raise HTTPException(status_code=400, detail="Missing required fields")
+    
+    chat_message = {
+        "id": generate_id(),
+        "from_user": current_user,
+        "to_user": to_user,
+        "message": message,  # Already encrypted on client
+        "created_at": datetime.now(),
+        "read": False
+    }
+    
+    await db.mongo.chat_messages.insert_one(chat_message)
+    
+    # Notify recipient via WebSocket
+    await manager.send_to_user(to_user, {
+        "type": "new_message",
+        "from": current_user,
+        "message": message,
+        "time": datetime.now().isoformat()
+    })
+    
+    return {"success": True}
+
+@app.post("/api/upload")
+async def upload_post(
+    media: UploadFile = File(...),
+    caption: str = Form(""),
+    user_id: str = Depends(get_current_user),
+    db: Database = Depends(get_db)
+):
+    """Upload a new post (image or video)"""
+    # Validate file type
+    content_type = media.content_type
+    is_video = content_type.startswith("video/")
+    is_image = content_type.startswith("image/")
+    
+    if not is_video and not is_image:
+        raise HTTPException(status_code=400, detail="Only images and videos are allowed")
+    
+    # Generate filename
+    ext = media.filename.split(".")[-1] if "." in media.filename else "jpg"
+    filename = f"{uuid.uuid4().hex}.{ext}"
+    filepath = os.path.join(Config.UPLOAD_DIR, filename)
+    
+    # Save file
+    async with aiofiles.open(filepath, "wb") as f:
+        content = await media.read()
+        if len(content) > Config.MAX_UPLOAD_SIZE:
+            raise HTTPException(status_code=400, detail="File too large")
+        await f.write(content)
+    
+    # Create post in database
+    media_url = f"/uploads/{filename}"
+    
+    # Get user info
+    user_key = f"user:{user_id}"
+    username = await db.redis.hget(user_key, "username") or user_id[:8]
+    
+    post = {
+        "user_id": user_id,
+        "username": username,
+        "media": media_url,
+        "type": "video" if is_video else "image",
+        "caption": caption,
+        "likes": 0,
+        "comments": 0,
+        "shares": 0,
+        "views": 0,
+        "created_at": datetime.now()
+    }
+    
+    result = await db.mongo.posts.insert_one(post)
+    post_id = str(result.inserted_id)
+    
+    # Update user post count
+    await db.redis.hincrby(user_key, "posts", 1)
+    
+    # Notify via WebSocket
+    await manager.broadcast({
+        "type": "new_post",
+        "post_id": post_id,
+        "user_id": user_id,
+        "username": username,
+        "media": media_url,
+        "caption": caption
+    })
+    
+    return {"success": True, "post_id": post_id}
+
+@app.get("/api/search")
+async def search_posts(
+    q: str,
+    limit: int = 30,
+    user_id: str = Depends(get_current_user),
+    db: Database = Depends(get_db)
+):
+    """Search posts by caption or username"""
+    # Simple text search using MongoDB
+    results = await db.mongo.posts.find({
+        "$or": [
+            {"caption": {"$regex": q, "$options": "i"}},
+            {"username": {"$regex": q, "$options": "i"}}
+        ]
+    }).sort("created_at", -1).limit(limit).to_list(None)
+    
+    posts = []
+    for post in results:
+        post_id = str(post["_id"])
+        liked_key = f"likes:{post_id}"
+        liked = await db.redis.sismember(liked_key, user_id)
+        
+        posts.append({
+            "id": post_id,
+            "media": post["media"],
+            "type": post.get("type", "image"),
+            "likes": post.get("likes", 0),
+            "comments": post.get("comments", 0),
+            "shares": post.get("shares", 0),
+            "views": post.get("views", 0),
+            "liked": liked
         })
     
-    # علامت‌گذاری همه به عنوان خوانده شده
-    for n in notifications.items:
-        n.is_read = True
-    db.session.commit()
+    return {"results": posts}
+
+# ===================================================
+# WebSocket Handler
+# ===================================================
+
+@app.websocket("/ws/{user_id}")
+async def websocket_endpoint(websocket: WebSocket, user_id: str):
+    connection_id = await manager.connect(websocket, user_id)
     
-    return jsonify({
-        'items': result,
-        'total': notifications.total,
-        'page': notifications.page,
-        'pages': notifications.pages
-    })
-
-# ---------- جستجو ----------
-@app.route('/api/search', methods=['GET'])
-def search():
-    q = request.args.get('q', '').strip()
-    if not q or len(q) < 2:
-        return jsonify({'users': [], 'posts': [], 'hashtags': []})
-    
-    # جستجوی کاربران
-    users = User.query.filter(
-        (User.username.contains(q)) | (User.full_name.contains(q))
-    ).limit(10).all()
-    
-    # جستجوی پست‌ها
-    posts = Post.query.filter(
-        Post.caption.contains(q),
-        Post.is_archived == False
-    ).order_by(Post.created_at.desc()).limit(10).all()
-    
-    # جستجوی هشتگ‌ها
-    hashtags = Hashtag.query.filter(Hashtag.name.contains(q)).limit(10).all()
-    
-    return jsonify({
-        'users': [{
-            'id': u.id,
-            'username': u.username,
-            'full_name': u.full_name,
-            'avatar': u.avatar,
-            'is_verified': u.is_verified
-        } for u in users],
-        'posts': [{
-            'id': p.id,
-            'media_url': p.media_url,
-            'thumbnail_url': p.thumbnail_url,
-            'caption': p.caption,
-            'likes_count': p.likes_count
-        } for p in posts],
-        'hashtags': [{
-            'name': h.name,
-            'posts_count': h.posts_count
-        } for h in hashtags]
-    })
-
-# ---------- هشتگ‌ها ----------
-@app.route('/api/hashtags/<name>', methods=['GET'])
-def get_hashtag(name):
-    hashtag = Hashtag.query.filter_by(name=name).first()
-    if not hashtag:
-        return jsonify({'error': 'هشتگ یافت نشد'}), 404
-    
-    posts = Post.query.join(PostHashtag).filter(
-        PostHashtag.hashtag_id == hashtag.id,
-        Post.is_archived == False
-    ).order_by(Post.created_at.desc()).limit(20).all()
-    
-    return jsonify({
-        'hashtag': {
-            'name': hashtag.name,
-            'posts_count': hashtag.posts_count
-        },
-        'posts': [{
-            'id': p.id,
-            'media_url': p.media_url,
-            'thumbnail_url': p.thumbnail_url,
-            'caption': p.caption,
-            'likes_count': p.likes_count,
-            'created_at': p.created_at.isoformat()
-        } for p in posts]
-    })
-
-# ---------- فایل‌های استاتیک ----------
-@app.route('/uploads/<filename>')
-def uploaded_file(filename):
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
-
-@app.route('/thumbnails/<filename>')
-def thumbnail_file(filename):
-    return send_from_directory(app.config['THUMBNAIL_FOLDER'], filename)
-
-@app.route('/')
-def serve_index():
-    return send_from_directory('../frontend', 'index.html')
-
-# ==================== WebSocket رویدادها ====================
-@socketio.on('connect')
-def handle_connect():
-    user = get_user_from_token()
-    if user:
-        join_room(f'user_{user.id}')
-        emit('connected', {'user_id': user.id})
-    else:
-        emit('error', {'message': 'احراز هویت نشده'})
-
-@socketio.on('disconnect')
-def handle_disconnect():
-    user = get_user_from_token()
-    if user:
-        leave_room(f'user_{user.id}')
-
-@socketio.on('typing')
-def handle_typing(data):
-    receiver_id = data.get('receiver_id')
-    if receiver_id:
-        emit('typing', {'sender_id': data.get('sender_id'), 'is_typing': data.get('is_typing', True)}, 
-             room=f'user_{receiver_id}')
-
-@socketio.on('message_read')
-def handle_message_read(data):
-    message_id = data.get('message_id')
-    if message_id:
-        message = Message.query.get(message_id)
-        if message:
-            message.is_read = True
-            message.read_at = datetime.utcnow()
-            db.session.commit()
-
-# ==================== پاکسازی خودکار استوری‌ها ====================
-def cleanup_stories():
-    with app.app_context():
+    try:
+        # Send connection confirmation
+        await websocket.send_json({"type": "connected", "user_id": user_id})
+        
+        # Initialize user in Redis
+        user_key = f"user:{user_id}"
+        await db.redis.hsetnx(user_key, "username", user_id[:8])
+        
         while True:
-            time.sleep(3600)  # هر ساعت
-            expired = Story.query.filter(Story.expires_at < datetime.utcnow()).all()
-            for story in expired:
-                db.session.delete(story)
-            db.session.commit()
-            print(f"🧹 Cleaned up {len(expired)} expired stories")
+            data = await websocket.receive_json()
+            
+            msg_type = data.get("type")
+            
+            if msg_type == "chat":
+                # Handle chat message with encryption (already encrypted on client)
+                to_user = data.get("to")
+                message = data.get("message")
+                
+                if to_user and message:
+                    chat_message = {
+                        "id": generate_id(),
+                        "from_user": user_id,
+                        "to_user": to_user,
+                        "message": message,
+                        "created_at": datetime.now(),
+                        "read": False
+                    }
+                    
+                    await db.mongo.chat_messages.insert_one(chat_message)
+                    await manager.send_to_user(to_user, {
+                        "type": "new_message",
+                        "from": user_id,
+                        "message": message,
+                        "time": datetime.now().isoformat()
+                    })
+            
+            elif msg_type == "typing":
+                to_user = data.get("to")
+                if to_user:
+                    await manager.send_to_user(to_user, {
+                        "type": "typing",
+                        "from": user_id,
+                        "is_typing": data.get("is_typing", True)
+                    })
+            
+            elif msg_type == "read_receipt":
+                # Mark messages as read
+                to_user = data.get("to")
+                if to_user:
+                    await db.mongo.chat_messages.update_many(
+                        {"from_user": to_user, "to_user": user_id, "read": False},
+                        {"$set": {"read": True}}
+                    )
+            
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logging.error(f"WebSocket error: {e}")
+    finally:
+        await manager.disconnect(connection_id)
 
-# ==================== دیتای اولیه ====================
-def init_db():
-    db.create_all()
-    
-    if not User.query.first():
-        # ایجاد کاربر ادمین
-        admin = User(
-            username='admin',
-            email='admin@instagram.com',
-            password_hash=hashlib.sha256('admin123'.encode()).hexdigest(),
-            full_name='مدیر سیستم',
-            is_verified=True
-        )
-        db.session.add(admin)
-        db.session.flush()
-        
-        # ایجاد کاربران نمونه
-        users = []
-        for i in range(1, 11):
-            user = User(
-                username=f'user{i}',
-                email=f'user{i}@example.com',
-                password_hash=hashlib.sha256('password123'.encode()).hexdigest(),
-                full_name=f'کاربر {i}',
-                avatar=f'https://i.pravatar.cc/150?img={i+10}'
-            )
-            db.session.add(user)
-            users.append(user)
-        
-        db.session.commit()
-        
-        # ایجاد پست‌های نمونه
-        import random
-        sample_images = [
-            'https://picsum.photos/600/600?random=1',
-            'https://picsum.photos/600/600?random=2',
-            'https://picsum.photos/600/600?random=3',
-            'https://picsum.photos/600/600?random=4',
-            'https://picsum.photos/600/600?random=5',
-            'https://picsum.photos/600/600?random=6',
-            'https://picsum.photos/600/600?random=7',
-            'https://picsum.photos/600/600?random=8',
-            'https://picsum.photos/600/600?random=9',
-            'https://picsum.photos/600/600?random=10',
-        ]
-        
-        captions = [
-            'یک روز زیبا در طبیعت 🌿 #طبیعت #سفر',
-            'غروب قشنگ امروز 🌅 #غروب #عشق',
-            'عکس جدید از سفر 🏔️ #سفر #کوه',
-            'لحظات خوش با دوستان 😊 #دوستی',
-            'هنر در طبیعت 🎨 #هنر #طبیعت',
-            'شهر در شب 🌃 #شهر #شب',
-            'رویای آبی 💙 #رویا #آبی',
-            'صبحانه امروز ☕ #صبحانه #قهوه',
-            'گل‌های زیبا 🌸 #گل #طبیعت',
-            'سفر به جنوب 🌴 #سفر #جنوب'
-        ]
-        
-        for i, user in enumerate(users[:5]):
-            for j in range(2):
-                idx = (i * 2 + j) % len(sample_images)
-                post = Post(
-                    user_id=user.id,
-                    media_type='image',
-                    media_url=sample_images[idx],
-                    caption=captions[idx],
-                    views=random.randint(100, 3000),
-                    likes_count=random.randint(20, 500),
-                    comments_count=random.randint(5, 100)
-                )
-                db.session.add(post)
-        
-        db.session.commit()
-        print("✅ دیتابیس با موفقیت مقداردهی اولیه شد")
+# ===================================================
+# Static Files (for uploaded media)
+# ===================================================
 
-# ==================== اجرا ====================
-if __name__ == '__main__':
-    with app.app_context():
-        init_db()
-    
-    # شروع پاکسازی خودکار استوری‌ها
-    threading.Thread(target=cleanup_stories, daemon=True).start()
-    
-    print("🚀 سرور با موفقیت راه‌اندازی شد!")
-    print("📍 آدرس: http://localhost:5000")
-    print("🔐 API: http://localhost:5000/api")
-    print("💬 WebSocket: ws://localhost:5000/socket.io")
-    
-    socketio.run(app, debug=True, host='0.0.0.0', port=5000, allow_unsafe_werkzeug=True)
+from fastapi.staticfiles import StaticFiles
+
+@app.get("/uploads/{filename}")
+async def serve_media(filename: str):
+    """Serve uploaded media files"""
+    from fastapi.responses import FileResponse
+    filepath = os.path.join(Config.UPLOAD_DIR, filename)
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(filepath)
+
+# ===================================================
+# Health Check
+# ===================================================
+
+@app.get("/api/health")
+async def health_check():
+    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+
+# ===================================================
+# Main Entry Point
+# ===================================================
+
+if __name__ == "__main__":
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=5000,
+        workers=4,
+        log_level="info"
+    )
