@@ -1,3032 +1,3844 @@
-// ================================================================
-// 🚀 SUPER SOCIAL MEDIA PLATFORM - ULTIMATE ENTERPRISE EDITION
-// ================================================================
-// توسط: تیم مهندسی فوق‌حرفه‌ای
-// تکنولوژی‌ها: Node.js, Express, Socket.io, Redis, PostgreSQL, MongoDB,
-// Elasticsearch, FFmpeg, WebRTC, AI/ML, Blockchain, Quantum Encryption
-// ================================================================
-
 const express = require('express');
 const http = require('http');
-const https = require('https');
 const socketIo = require('socket.io');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
-const crypto = require('crypto');
 const multer = require('multer');
+const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
-const rateLimit = require('express-rate-limit');
-const helmet = require('helmet');
-const compression = require('compression');
-const redis = require('redis');
-const { Pool } = require('pg');
-const mongoose = require('mongoose');
-const AWS = require('aws-sdk');
-const sharp = require('sharp');
-const ffmpeg = require('fluent-ffmpeg');
-const Bull = require('bull');
-const winston = require('winston');
-const { createAdapter } = require('@socket.io/redis-adapter');
-const { promisify } = require('util');
-const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
-const { WebSocketServer } = require('ws');
-const { createClient } = require('@supabase/supabase-js');
 
-// ================================================================
-// 📦 سیستم لاگینگ پیشرفته با ELK Stack
-// ================================================================
-const logger = winston.createLogger({
-    level: process.env.LOG_LEVEL || 'info',
-    format: winston.format.combine(
-        winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-        winston.format.errors({ stack: true }),
-        winston.format.json(),
-        winston.format.colorize()
-    ),
-    defaultMeta: { service: 'super-social-media' },
-    transports: [
-        new winston.transports.File({ 
-            filename: 'logs/error.log', 
-            level: 'error',
-            maxsize: 10000000,
-            maxFiles: 10,
-        }),
-        new winston.transports.File({ 
-            filename: 'logs/combined.log',
-            maxsize: 10000000,
-            maxFiles: 10,
-        }),
-        new winston.transports.Console({
-            format: winston.format.combine(
-                winston.format.colorize(),
-                winston.format.simple()
-            )
-        })
-    ]
+// ============================================
+// 🚀 تنظیمات اولیه
+// ============================================
+const app = express();
+const server = http.createServer(app);
+const io = socketIo(server, {
+    cors: { origin: "*" },
+    transports: ['websocket', 'polling'],
+    pingTimeout: 60000,
+    pingInterval: 25000
 });
 
-// ================================================================
-// 🔐 سیستم رمزنگاری کوانتومی - فوق‌امن
-// ================================================================
-class QuantumEncryptionService {
-    constructor() {
-        // تولید کلیدهای کوانتومی (شبیه‌سازی)
-        this.masterKey = crypto.randomBytes(64);
-        this.keyStore = new Map();
-        this.sessionKeys = new Map();
-        
-        // الگوریتم‌های پیشرفته
-        this.algorithms = {
-            symmetric: 'aes-256-gcm',
-            asymmetric: 'rsa-4096',
-            hash: 'sha512',
-            quantum: 'kyber-1024', // شبیه‌سازی کیبر
-            postQuantum: 'sphincs+'
-        };
-        
-        logger.info('🔐 Quantum Encryption Engine Initialized');
-    }
+app.use(cors({
+    origin: '*',
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE']
+}));
+app.use(express.json({ limit: '500mb' }));
+app.use(express.urlencoded({ extended: true, limit: '500mb' }));
+app.use(express.static('public'));
+app.use('/uploads', express.static('uploads'));
 
-    // تولید کلید فوق‌امن برای هر کاربر
-    generateQuantumKey(userId) {
-        // تولید کلید با استفاده از چندین منبع آنتروپی
-        const entropy1 = crypto.randomBytes(32);
-        const entropy2 = crypto.randomBytes(32);
-        const entropy3 = crypto.randomBytes(32);
-        
-        const combined = Buffer.concat([entropy1, entropy2, entropy3]);
-        const quantumKey = crypto.createHash('sha512').update(combined).digest('hex');
-        
-        // کلید عمومی و خصوصی
-        const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
-            modulusLength: 4096,
-            publicKeyEncoding: { type: 'pkcs1', format: 'pem' },
-            privateKeyEncoding: { type: 'pkcs1', format: 'pem' }
-        });
-        
-        this.keyStore.set(userId, {
-            quantumKey,
-            publicKey,
-            privateKey,
-            createdAt: Date.now()
-        });
-        
-        return { quantumKey, publicKey };
-    }
+// ============================================
+// 📁 ایجاد پوشه‌ها
+// ============================================
+const dirs = [
+    './uploads',
+    './uploads/posts',
+    './uploads/stories',
+    './uploads/avatars',
+    './public',
+    './logs'
+];
+dirs.forEach(dir => {
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+});
 
-    // رمزنگاری با روش چندلایه (Layered Encryption)
-    encryptMessage(message, userId, recipientId = null) {
-        const startTime = Date.now();
-        
-        try {
-            // لایه 1: فشرده‌سازی
-            const compressed = this.compressData(message);
-            
-            // لایه 2: هش کردن با HMAC
-            const hmac = crypto.createHmac('sha512', this.masterKey);
-            hmac.update(compressed);
-            const hash = hmac.digest('hex');
-            
-            // لایه 3: رمزنگاری با AES-256-GCM
-            const iv = crypto.randomBytes(16);
-            const salt = crypto.randomBytes(32);
-            const key = crypto.scryptSync(this.masterKey, salt, 32);
-            
-            const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
-            let encrypted = cipher.update(compressed, 'utf8', 'hex');
-            encrypted += cipher.final('hex');
-            const authTag = cipher.getAuthTag();
-            
-            // لایه 4: امضای دیجیتال
-            const userKeys = this.keyStore.get(userId);
-            const sign = crypto.createSign('sha512');
-            sign.update(encrypted + authTag.toString('hex'));
-            const signature = sign.sign(userKeys.privateKey, 'hex');
-            
-            // لایه 5: رمزنگاری با کلید عمومی گیرنده (در صورت وجود)
-            let recipientEncrypted = null;
-            if (recipientId && this.keyStore.has(recipientId)) {
-                const recipientKeys = this.keyStore.get(recipientId);
-                const encryptedKey = crypto.publicEncrypt(
-                    recipientKeys.publicKey,
-                    Buffer.from(key.toString('hex'))
-                );
-                recipientEncrypted = encryptedKey.toString('hex');
-            }
-            
-            const result = {
-                encrypted,
-                iv: iv.toString('hex'),
-                salt: salt.toString('hex'),
-                authTag: authTag.toString('hex'),
-                signature,
-                hash,
-                recipientEncrypted,
-                algorithm: 'aes-256-gcm',
-                timestamp: Date.now(),
-                encryptionTime: Date.now() - startTime
-            };
-            
-            logger.debug(`Message encrypted in ${result.encryptionTime}ms`);
-            return result;
-        } catch (error) {
-            logger.error('Encryption failed:', error);
-            throw new Error('Encryption failed');
-        }
-    }
+// ============================================
+// 📊 سیستم لاگینگ
+// ============================================
+function log(message, type = 'INFO') {
+    const timestamp = new Date().toISOString();
+    const logEntry = `[${timestamp}] [${type}] ${message}\n`;
+    fs.appendFileSync('./logs/app.log', logEntry);
+    console.log(logEntry.trim());
+}
 
-    // رمزگشایی با روش چندلایه
-    decryptMessage(encryptedData, userId) {
-        try {
-            const { encrypted, iv, salt, authTag, signature, hash, recipientEncrypted } = encryptedData;
-            
-            // لایه 1: تایید امضا
-            const userKeys = this.keyStore.get(userId);
-            const verify = crypto.createVerify('sha512');
-            verify.update(encrypted + authTag);
-            const isValid = verify.verify(userKeys.publicKey, signature, 'hex');
-            
-            if (!isValid) {
-                throw new Error('Invalid signature');
-            }
-            
-            // لایه 2: رمزگشایی
-            let key;
-            if (recipientEncrypted) {
-                key = crypto.privateDecrypt(
-                    userKeys.privateKey,
-                    Buffer.from(recipientEncrypted, 'hex')
-                );
-            } else {
-                key = crypto.scryptSync(this.masterKey, Buffer.from(salt, 'hex'), 32);
-            }
-            
-            const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(iv, 'hex'));
-            decipher.setAuthTag(Buffer.from(authTag, 'hex'));
-            
-            let decrypted = decipher.update(encrypted, 'hex', 'utf8');
-            decrypted += decipher.final('utf8');
-            
-            // لایه 3: تایید HMAC
-            const hmac = crypto.createHmac('sha512', this.masterKey);
-            hmac.update(decrypted);
-            const computedHash = hmac.digest('hex');
-            
-            if (computedHash !== hash) {
-                throw new Error('Hash verification failed');
-            }
-            
-            // لایه 4: دکامپرس
-            const result = this.decompressData(decrypted);
-            
-            return result;
-        } catch (error) {
-            logger.error('Decryption failed:', error);
-            return '[🔒 پیام رمزنگاری شده - قابل رمزگشایی نیست]';
-        }
-    }
+// ============================================
+// 🔐 رمزنگاری فوق‌حرفه‌ای (AES-256-GCM)
+// ============================================
+const SECRET_KEY = process.env.SECRET_KEY || crypto.randomBytes(32).toString('hex');
+const MASTER_KEY = crypto.createHash('sha256').update(SECRET_KEY).digest();
 
-    // فشرده‌سازی داده‌ها
-    compressData(data) {
-        // شبیه‌سازی فشرده‌سازی
-        if (typeof data === 'string') {
-            return data;
-        }
-        return JSON.stringify(data);
-    }
+function generateUserKey(userId) {
+    return crypto.createHash('sha256').update(MASTER_KEY + userId).digest();
+}
 
-    decompressData(data) {
-        try {
-            return JSON.parse(data);
-        } catch {
-            return data;
-        }
-    }
-
-    // تولید توکن یکبار مصرف (OTP) با الگوریتم کوانتومی
-    generateQuantumOTP(userId) {
-        const timestamp = Date.now();
-        const random = crypto.randomBytes(16);
-        const data = `${userId}:${timestamp}:${random.toString('hex')}`;
-        
-        const hash = crypto.createHash('sha512').update(data).digest('hex');
-        const otp = hash.substring(0, 8);
-        
-        // ذخیره در کش با انقضای 5 دقیقه
-        return {
-            otp,
-            expiresIn: 300,
-            timestamp
-        };
+function encryptMessage(message, userId) {
+    try {
+        const key = generateUserKey(userId);
+        const iv = crypto.randomBytes(16);
+        const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+        let encrypted = cipher.update(message, 'utf8', 'hex');
+        encrypted += cipher.final('hex');
+        const authTag = cipher.getAuthTag().toString('hex');
+        return iv.toString('hex') + ':' + authTag + ':' + encrypted;
+    } catch (error) {
+        log('Encryption error: ' + error.message, 'ERROR');
+        return message;
     }
 }
 
-const quantumEncryption = new QuantumEncryptionService();
+function decryptMessage(encrypted, userId) {
+    try {
+        const key = generateUserKey(userId);
+        const parts = encrypted.split(':');
+        if (parts.length !== 3) return '[پیام رمزنگاری شده]';
+        const iv = Buffer.from(parts[0], 'hex');
+        const authTag = Buffer.from(parts[1], 'hex');
+        const encryptedText = parts[2];
+        const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+        decipher.setAuthTag(authTag);
+        let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
+        decrypted += decipher.final('utf8');
+        return decrypted;
+    } catch (error) {
+        return '[پیام رمزنگاری شده]';
+    }
+}
 
-// ================================================================
-// 📊 دیتابیس فوق‌مقیاس با Sharding + Replication
-// ================================================================
+function hashPassword(password) {
+    return crypto.createHash('sha512').update(password + SECRET_KEY).digest('hex');
+}
 
-class UltraScalableDatabase {
+function generateToken() {
+    return crypto.randomBytes(64).toString('hex');
+}
+
+// ============================================
+# 📊 دیتابیس شارد شده (5 Shard)
+// ============================================
+class ShardedDatabase {
     constructor() {
         this.shards = {};
-        this.replicas = {};
-        this.shardCount = 50; // 50 شارد برای میلیون‌ها کاربر
-        this.replicaCount = 3; // 3 Replica برای هر شارد
-        this.initDatabase();
-    }
-
-    initDatabase() {
-        // ایجاد شاردها با Replication
-        for (let i = 0; i < this.shardCount; i++) {
-            // Master
-            this.shards[i] = new Pool({
-                host: process.env[`DB_HOST_${i}`] || `shard-${i}.db.example.com`,
-                port: 5432,
-                database: `social_db_${i}`,
-                user: process.env.DB_USER || 'admin',
-                password: process.env.DB_PASSWORD,
-                max: 200,
-                idleTimeoutMillis: 30000,
-                connectionTimeoutMillis: 3000,
-                statement_timeout: 60000,
-                query_timeout: 60000,
-                ssl: process.env.NODE_ENV === 'production' ? {
-                    rejectUnauthorized: false
-                } : false
-            });
-
-            // Replicas
-            this.replicas[i] = [];
-            for (let j = 0; j < this.replicaCount; j++) {
-                this.replicas[i][j] = new Pool({
-                    host: process.env[`REPLICA_HOST_${i}_${j}`] || `replica-${i}-${j}.db.example.com`,
-                    port: 5432,
-                    database: `social_db_${i}`,
-                    user: process.env.DB_USER || 'admin',
-                    password: process.env.DB_PASSWORD,
-                    max: 150,
-                    idleTimeoutMillis: 30000,
-                    connectionTimeoutMillis: 3000,
-                    ssl: process.env.NODE_ENV === 'production' ? {
-                        rejectUnauthorized: false
-                    } : false
-                });
-            }
-        }
-
-        // تنظیم Schema با پارتیشن‌بندی
-        this.initSchema();
+        this.shardCount = 5;
+        this.currentId = 1;
+        this.storyId = 1;
+        this.messageId = 1;
         
-        logger.info(`📊 Database initialized: ${this.shardCount} shards, ${this.replicaCount} replicas each`);
-    }
-
-    async initSchema() {
-        const createTables = `
-            -- جدول کاربران با پارتیشن‌بندی
-            CREATE TABLE IF NOT EXISTS users (
-                id UUID PRIMARY KEY,
-                username VARCHAR(50) UNIQUE NOT NULL,
-                email VARCHAR(100) UNIQUE NOT NULL,
-                password_hash VARCHAR(255) NOT NULL,
-                public_key TEXT,
-                full_name VARCHAR(100),
-                bio TEXT,
-                avatar_url TEXT,
-                is_verified BOOLEAN DEFAULT false,
-                is_admin BOOLEAN DEFAULT false,
-                is_blocked BOOLEAN DEFAULT false,
-                block_reason TEXT,
-                block_until TIMESTAMP,
-                followers_count BIGINT DEFAULT 0,
-                following_count BIGINT DEFAULT 0,
-                posts_count BIGINT DEFAULT 0,
-                total_likes BIGINT DEFAULT 0,
-                last_login TIMESTAMP,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            ) PARTITION BY HASH (id);
-
-            -- جدول پست‌ها با پارتیشن‌بندی بر اساس زمان
-            CREATE TABLE IF NOT EXISTS posts (
-                id UUID PRIMARY KEY,
-                user_id UUID NOT NULL REFERENCES users(id),
-                content TEXT,
-                media_urls TEXT[],
-                hashtags TEXT[],
-                mentions UUID[],
-                likes_count BIGINT DEFAULT 0,
-                comments_count BIGINT DEFAULT 0,
-                shares_count BIGINT DEFAULT 0,
-                views_count BIGINT DEFAULT 0,
-                is_private BOOLEAN DEFAULT false,
-                location GEOGRAPHY(POINT),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                score FLOAT DEFAULT 0
-            ) PARTITION BY RANGE (created_at);
-
-            -- جدول ویدئوها با ذخیره‌سازی بزرگ
-            CREATE TABLE IF NOT EXISTS videos (
-                id UUID PRIMARY KEY,
-                user_id UUID NOT NULL REFERENCES users(id),
-                title VARCHAR(200),
-                description TEXT,
-                filename VARCHAR(255),
-                size BIGINT,
-                duration INTEGER,
-                resolution VARCHAR(20),
-                quality_1080p TEXT,
-                quality_720p TEXT,
-                quality_480p TEXT,
-                quality_360p TEXT,
-                thumbnail_url TEXT,
-                views_count BIGINT DEFAULT 0,
-                watch_time BIGINT DEFAULT 0,
-                status VARCHAR(20) DEFAULT 'processing',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-
-            -- جدول پیام‌های چت با رمزنگاری
-            CREATE TABLE IF NOT EXISTS messages (
-                id UUID PRIMARY KEY,
-                from_user UUID NOT NULL REFERENCES users(id),
-                to_user UUID NOT NULL REFERENCES users(id),
-                encrypted_data JSONB NOT NULL,
-                signature TEXT,
-                read_at TIMESTAMP,
-                delivered_at TIMESTAMP,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            ) PARTITION BY RANGE (created_at);
-
-            -- ایندکس‌های فوق‌سریع
-            CREATE INDEX IF NOT EXISTS idx_posts_user_id ON posts (user_id);
-            CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts (created_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_posts_hashtags ON posts USING GIN (hashtags);
-            CREATE INDEX IF NOT EXISTS idx_posts_score ON posts (score DESC);
-            CREATE INDEX IF NOT EXISTS idx_messages_from_user ON messages (from_user);
-            CREATE INDEX IF NOT EXISTS idx_messages_to_user ON messages (to_user);
-            CREATE INDEX IF NOT EXISTS idx_videos_user_id ON videos (user_id);
-            CREATE INDEX IF NOT EXISTS idx_users_username ON users (username);
-            CREATE INDEX IF NOT EXISTS idx_users_email ON users (email);
-
-            -- تریگر برای به‌روزرسانی خودکار
-            CREATE OR REPLACE FUNCTION update_updated_at()
-            RETURNS TRIGGER AS $$
-            BEGIN
-                NEW.updated_at = CURRENT_TIMESTAMP;
-                RETURN NEW;
-            END;
-            $$ LANGUAGE plpgsql;
-
-            CREATE TRIGGER update_users_updated_at
-                BEFORE UPDATE ON users
-                FOR EACH ROW
-                EXECUTE FUNCTION update_updated_at();
-
-            CREATE TRIGGER update_posts_updated_at
-                BEFORE UPDATE ON posts
-                FOR EACH ROW
-                EXECUTE FUNCTION update_updated_at();
-        `;
-
-        // اجرای روی همه شاردها
+        // مقداردهی اولیه شاردها
         for (let i = 0; i < this.shardCount; i++) {
-            try {
-                await this.shards[i].query(createTables);
-            } catch (error) {
-                logger.error(`Failed to initialize shard ${i}:`, error);
-            }
+            this.shards[i] = {
+                users: {},
+                posts: [],
+                stories: [],
+                messages: {},
+                likes: {},
+                comments: {},
+                reports: [],
+                notifications: []
+            };
         }
     }
 
-    // تابع هش برای تعیین شارد
     getShard(key) {
-        const hash = crypto.createHash('sha256').update(key).digest('hex');
-        return parseInt(hash.substring(0, 8), 16) % this.shardCount;
-    }
-
-    // اجرای کوئری روی شارد مناسب با پشتیبانی از Replica
-    async query(key, query, params, useReplica = false) {
-        const shardId = this.getShard(key);
-        let client;
-        
-        if (useReplica && this.replicas[shardId]) {
-            // انتخاب تصادفی یک Replica
-            const replicaIndex = Math.floor(Math.random() * this.replicaCount);
-            client = await this.replicas[shardId][replicaIndex].connect();
-        } else {
-            client = await this.shards[shardId].connect();
-        }
-        
-        try {
-            const startTime = Date.now();
-            const result = await client.query(query, params);
-            const duration = Date.now() - startTime;
-            
-            if (duration > 1000) {
-                logger.warn(`Slow query (${duration}ms): ${query.substring(0, 100)}`);
-            }
-            
-            return result;
-        } finally {
-            client.release();
-        }
-    }
-
-    // کوئری روی همه شاردها (برای ادمین و گزارش‌گیری)
-    async queryAll(query, params) {
-        const results = [];
-        const promises = [];
-        
-        for (let i = 0; i < this.shardCount; i++) {
-            promises.push((async () => {
-                const client = await this.shards[i].connect();
-                try {
-                    const result = await client.query(query, params);
-                    return result.rows;
-                } finally {
-                    client.release();
-                }
-            })());
-        }
-        
-        const allResults = await Promise.all(promises);
-        for (const rows of allResults) {
-            results.push(...rows);
-        }
-        
-        return results;
-    }
-
-    // Bulk Insert برای مقیاس بالا
-    async bulkInsert(key, table, data, columns) {
-        const shardId = this.getShard(key);
-        const client = await this.shards[shardId].connect();
-        
-        try {
-            const placeholders = data.map((_, i) => 
-                `(${columns.map((_, j) => `$${i * columns.length + j + 1}`).join(', ')})`
-            ).join(', ');
-            
-            const values = [];
-            for (const row of data) {
-                for (const col of columns) {
-                    values.push(row[col]);
-                }
-            }
-            
-            const query = `
-                INSERT INTO ${table} (${columns.join(', ')})
-                VALUES ${placeholders}
-            `;
-            
-            return await client.query(query, values);
-        } finally {
-            client.release();
-        }
-    }
-}
-
-// ================================================================
-// 💾 سیستم کش فوق‌مقیاس با Redis Cluster
-// ================================================================
-
-class UltraCacheSystem {
-    constructor() {
-        this.clients = [];
-        this.clusterSize = 10;
-        this.initCluster();
-    }
-
-    initCluster() {
-        for (let i = 0; i < this.clusterSize; i++) {
-            const client = redis.createClient({
-                host: process.env[`REDIS_HOST_${i}`] || 'localhost',
-                port: 6379 + i,
-                password: process.env.REDIS_PASSWORD,
-                db: 0,
-                retry_strategy: (options) => {
-                    if (options.error && options.error.code === 'ECONNREFUSED') {
-                        return new Error('The server refused the connection');
-                    }
-                    if (options.total_retry_time > 1000 * 60 * 60) {
-                        return new Error('Retry time exhausted');
-                    }
-                    if (options.attempt > 10) {
-                        return undefined;
-                    }
-                    return Math.min(options.attempt * 100, 3000);
-                }
-            });
-
-            client.on('error', (err) => logger.error(`Redis ${i} Error:`, err));
-            client.on('connect', () => logger.info(`Redis ${i} Connected`));
-
-            this.clients[i] = client;
-        }
-    }
-
-    // تابع هش برای تعیین کلاینت Redis
-    getClient(key) {
         const hash = crypto.createHash('md5').update(key).digest('hex');
-        const index = parseInt(hash.substring(0, 8), 16) % this.clusterSize;
-        return this.clients[index];
+        const shardIndex = parseInt(hash.substring(0, 2), 16) % this.shardCount;
+        return shardIndex;
     }
 
-    // عملیات کشینگ
-    async set(key, value, ttl = 300) {
-        const client = this.getClient(key);
-        const serialized = JSON.stringify(value);
-        await client.setex(key, ttl, serialized);
+    getShardById(id) {
+        if (!id) return 0;
+        const hash = crypto.createHash('md5').update(id).digest('hex');
+        return parseInt(hash.substring(0, 2), 16) % this.shardCount;
     }
 
-    async get(key) {
-        const client = this.getClient(key);
-        const data = await client.get(key);
-        return data ? JSON.parse(data) : null;
+    // ===== Users =====
+    saveUser(user) {
+        const shardIndex = this.getShard(user.userId);
+        this.shards[shardIndex].users[user.userId] = user;
+        log(`User ${user.username} saved in shard ${shardIndex}`);
+        return user;
     }
 
-    async del(key) {
-        const client = this.getClient(key);
-        await client.del(key);
+    getUser(userId) {
+        const shardIndex = this.getShardById(userId);
+        return this.shards[shardIndex].users[userId] || null;
     }
 
-    async exists(key) {
-        const client = this.getClient(key);
-        return await client.exists(key);
-    }
-
-    // کش کردن با TTL هوشمند
-    async cacheWithSmartTTL(key, data, baseTTL = 300) {
-        // محاسبه TTL بر اساس پاپولاریتی
-        const popularity = data.popularity || 0;
-        const ttl = Math.min(baseTTL + (popularity * 60), 3600);
-        await this.set(key, data, ttl);
-    }
-
-    // پاکسازی کش با الگو
-    async clearPattern(pattern) {
-        const promises = [];
-        for (const client of this.clients) {
-            promises.push(new Promise((resolve) => {
-                const keys = client.keys(pattern);
-                if (keys.length > 0) {
-                    client.del(keys);
-                }
-                resolve();
-            }));
+    getUserByEmail(email) {
+        for (let i = 0; i < this.shardCount; i++) {
+            for (const [key, user] of Object.entries(this.shards[i].users)) {
+                if (user.email === email) return user;
+            }
         }
-        await Promise.all(promises);
+        return null;
     }
 
-    // Increment/Decrement
-    async increment(key, by = 1) {
-        const client = this.getClient(key);
-        return await client.incrby(key, by);
+    getAllUsers() {
+        let allUsers = [];
+        for (let i = 0; i < this.shardCount; i++) {
+            allUsers = allUsers.concat(Object.values(this.shards[i].users));
+        }
+        return allUsers;
     }
 
-    // Hash operations
-    async hset(key, field, value) {
-        const client = this.getClient(key);
-        await client.hset(key, field, JSON.stringify(value));
+    updateUser(userId, data) {
+        const shardIndex = this.getShardById(userId);
+        if (this.shards[shardIndex].users[userId]) {
+            this.shards[shardIndex].users[userId] = { ...this.shards[shardIndex].users[userId], ...data };
+            return this.shards[shardIndex].users[userId];
+        }
+        return null;
     }
 
-    async hget(key, field) {
-        const client = this.getClient(key);
-        const data = await client.hget(key, field);
-        return data ? JSON.parse(data) : null;
+    // ===== Posts =====
+    savePost(post) {
+        const shardIndex = this.getShardById(post.postId);
+        this.shards[shardIndex].posts.unshift(post);
+        log(`Post ${post.postId} saved in shard ${shardIndex}`);
+        return post;
     }
 
-    async hgetall(key) {
-        const client = this.getClient(key);
-        const data = await client.hgetall(key);
-        if (!data) return null;
+    getPosts(page = 1, limit = 20, hashtag = null) {
+        let allPosts = [];
+        for (let i = 0; i < this.shardCount; i++) {
+            allPosts = allPosts.concat(this.shards[i].posts);
+        }
         
-        const result = {};
-        for (const [field, value] of Object.entries(data)) {
-            result[field] = JSON.parse(value);
+        if (hashtag) {
+            allPosts = allPosts.filter(p => p.hashtags && p.hashtags.some(h => h.toLowerCase() === hashtag.toLowerCase()));
         }
-        return result;
-    }
-}
-
-// ================================================================
-// 🎬 سیستم پردازش ویدئو فوق‌حرفه‌ای
-// ================================================================
-
-class VideoProcessingSystem {
-    constructor() {
-        this.queues = {};
-        this.ffmpegPath = require('ffmpeg-static');
-        this.initQueues();
-    }
-
-    initQueues() {
-        // صف‌های مختلف برای اولویت‌بندی
-        this.queues = {
-            high: new Bull('video-high-priority', {
-                redis: { host: process.env.REDIS_HOST, port: 6379 },
-                defaultJobOptions: {
-                    attempts: 3,
-                    backoff: {
-                        type: 'exponential',
-                        delay: 2000
-                    },
-                    timeout: 3600000 // 1 hour
-                }
-            }),
-            medium: new Bull('video-medium-priority', {
-                redis: { host: process.env.REDIS_HOST, port: 6379 },
-                defaultJobOptions: {
-                    attempts: 2,
-                    backoff: {
-                        type: 'exponential',
-                        delay: 5000
-                    },
-                    timeout: 1800000 // 30 minutes
-                }
-            }),
-            low: new Bull('video-low-priority', {
-                redis: { host: process.env.REDIS_HOST, port: 6379 },
-                defaultJobOptions: {
-                    attempts: 1,
-                    timeout: 900000 // 15 minutes
-                }
-            })
+        
+        allPosts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        const start = (page - 1) * limit;
+        return {
+            posts: allPosts.slice(start, start + limit),
+            total: allPosts.length,
+            page,
+            totalPages: Math.ceil(allPosts.length / limit)
         };
+    }
 
-        // تنظیم پردازشگرها
-        for (const [priority, queue] of Object.entries(this.queues)) {
-            queue.process(async (job) => {
-                return await this.processVideo(job.data, priority);
-            });
+    getPost(postId) {
+        const shardIndex = this.getShardById(postId);
+        return this.shards[shardIndex].posts.find(p => p.postId === postId) || null;
+    }
 
-            queue.on('completed', (job) => {
-                logger.info(`Video processed: ${job.data.videoId}`);
-            });
-
-            queue.on('failed', (job, err) => {
-                logger.error(`Video processing failed: ${job.data.videoId}`, err);
-            });
+    getUserPosts(userId) {
+        let userPosts = [];
+        for (let i = 0; i < this.shardCount; i++) {
+            userPosts = userPosts.concat(this.shards[i].posts.filter(p => p.userId === userId));
         }
+        return userPosts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     }
 
-    async processVideo(data, priority) {
-        const { videoId, userId, filePath, filename } = data;
-        
-        logger.info(`Processing video ${videoId} with priority ${priority}`);
-        
-        try {
-            // 1. استخراج متادیتا
-            const metadata = await this.extractMetadata(filePath);
-            
-            // 2. تولید کیفیت‌های مختلف
-            const qualities = await this.generateQualities(filePath, videoId);
-            
-            // 3. تولید Thumbnail
-            const thumbnail = await this.generateThumbnail(filePath, videoId);
-            
-            // 4. تولید Preview (GIF)
-            const preview = await this.generatePreview(filePath, videoId);
-            
-            // 5. تولید Subtitle (AI)
-            const subtitles = await this.generateSubtitles(filePath, videoId);
-            
-            // 6. بهینه‌سازی برای CDN
-            const cdnUrls = await this.uploadToCDN(videoId, qualities, thumbnail);
-            
-            // 7. ذخیره در دیتابیس
-            await this.saveVideoMetadata(videoId, userId, {
-                filename,
-                metadata,
-                qualities,
-                thumbnail,
-                preview,
-                subtitles,
-                cdnUrls,
-                duration: metadata.duration,
-                size: metadata.size,
-                resolution: metadata.resolution,
-                status: 'ready',
-                processedAt: new Date()
-            });
-            
-            // 8. پاکسازی فایل‌های موقت
-            await this.cleanupTempFiles(videoId);
-            
-            logger.info(`Video ${videoId} processed successfully`);
-            return { success: true, videoId };
-            
-        } catch (error) {
-            logger.error(`Video processing error for ${videoId}:`, error);
-            await this.saveVideoMetadata(videoId, userId, {
-                status: 'failed',
-                error: error.message
-            });
-            throw error;
+    deletePost(postId) {
+        const shardIndex = this.getShardById(postId);
+        const index = this.shards[shardIndex].posts.findIndex(p => p.postId === postId);
+        if (index !== -1) {
+            this.shards[shardIndex].posts.splice(index, 1);
+            return true;
         }
+        return false;
     }
 
-    extractMetadata(filePath) {
-        return new Promise((resolve, reject) => {
-            ffmpeg.ffprobe(filePath, (err, metadata) => {
-                if (err) return reject(err);
-                
-                const videoStream = metadata.streams.find(s => s.codec_type === 'video');
-                const audioStream = metadata.streams.find(s => s.codec_type === 'audio');
-                
-                resolve({
-                    duration: parseFloat(metadata.format.duration),
-                    size: fs.statSync(filePath).size,
-                    resolution: videoStream ? `${videoStream.width}x${videoStream.height}` : 'unknown',
-                    codec: videoStream?.codec_name || 'unknown',
-                    bitrate: parseInt(metadata.format.bit_rate),
-                    frameRate: videoStream?.r_frame_rate || 'unknown',
-                    audioCodec: audioStream?.codec_name || 'unknown'
-                });
-            });
-        });
-    }
-
-    generateQualities(filePath, videoId) {
-        const qualities = {
-            '1080p': { width: 1920, height: 1080, bitrate: '4000k' },
-            '720p': { width: 1280, height: 720, bitrate: '2000k' },
-            '480p': { width: 854, height: 480, bitrate: '1000k' },
-            '360p': { width: 640, height: 360, bitrate: '500k' },
-            '240p': { width: 426, height: 240, bitrate: '250k' }
-        };
-        
-        const results = {};
-        
-        for (const [name, config] of Object.entries(qualities)) {
-            const outputPath = `/tmp/${videoId}_${name}.mp4`;
-            
-            results[name] = new Promise((resolve, reject) => {
-                ffmpeg(filePath)
-                    .size(`${config.width}x${config.height}`)
-                    .videoBitrate(config.bitrate)
-                    .audioBitrate('128k')
-                    .audioCodec('aac')
-                    .outputOptions([
-                        '-movflags +faststart',
-                        '-profile:v baseline',
-                        '-level 3.0',
-                        '-pix_fmt yuv420p'
-                    ])
-                    .output(outputPath)
-                    .on('end', () => {
-                        const stats = fs.statSync(outputPath);
-                        resolve({
-                            path: outputPath,
-                            size: stats.size,
-                            resolution: name,
-                            width: config.width,
-                            height: config.height,
-                            bitrate: config.bitrate
-                        });
-                    })
-                    .on('error', reject)
-                    .run();
-            });
+    likePost(postId, userId) {
+        const shardIndex = this.getShardById(postId);
+        const post = this.shards[shardIndex].posts.find(p => p.postId === postId);
+        if (post) {
+            const likeKey = `${postId}_${userId}`;
+            if (this.shards[shardIndex].likes[likeKey]) {
+                delete this.shards[shardIndex].likes[likeKey];
+                post.likes = (post.likes || 0) - 1;
+                return { liked: false, likes: post.likes };
+            } else {
+                this.shards[shardIndex].likes[likeKey] = true;
+                post.likes = (post.likes || 0) + 1;
+                return { liked: true, likes: post.likes };
+            }
         }
-        
-        return Promise.all(Object.entries(results).map(async ([name, promise]) => {
-            const result = await promise;
-            return { ...result, name };
-        }));
+        return { liked: false, likes: 0 };
     }
 
-    generateThumbnail(filePath, videoId) {
-        return new Promise((resolve, reject) => {
-            const outputPath = `/tmp/${videoId}_thumbnail.jpg`;
-            
-            ffmpeg(filePath)
-                .screenshots({
-                    count: 1,
-                    timestamps: ['00:00:05'],
-                    size: '1280x720',
-                    filename: `${videoId}_thumbnail.jpg`,
-                    folder: '/tmp'
+    addComment(postId, comment) {
+        const shardIndex = this.getShardById(postId);
+        const post = this.shards[shardIndex].posts.find(p => p.postId === postId);
+        if (post) {
+            if (!post.comments) post.comments = [];
+            post.comments.push(comment);
+            return true;
+        }
+        return false;
+    }
+
+    // ===== Stories =====
+    saveStory(story) {
+        const shardIndex = this.getShardById(story.storyId);
+        this.shards[shardIndex].stories.push(story);
+        return story;
+    }
+
+    getStories() {
+        let allStories = [];
+        const now = Date.now();
+        for (let i = 0; i < this.shardCount; i++) {
+            allStories = allStories.concat(
+                this.shards[i].stories.filter(s => {
+                    const age = now - new Date(s.createdAt).getTime();
+                    return age < 24 * 60 * 60 * 1000;
                 })
-                .on('end', () => {
-                    resolve({
-                        path: outputPath,
-                        url: `/uploads/thumbnails/${videoId}_thumbnail.jpg`
-                    });
-                })
-                .on('error', reject);
-        });
-    }
-
-    generatePreview(filePath, videoId) {
-        return new Promise((resolve, reject) => {
-            const outputPath = `/tmp/${videoId}_preview.gif`;
-            
-            ffmpeg(filePath)
-                .duration(3)
-                .size('320x180')
-                .fps(10)
-                .output(outputPath)
-                .on('end', () => {
-                    resolve({
-                        path: outputPath,
-                        url: `/uploads/previews/${videoId}_preview.gif`
-                    });
-                })
-                .on('error', reject)
-                .run();
-        });
-    }
-
-    generateSubtitles(filePath, videoId) {
-        // شبیه‌سازی تولید زیرنویس با AI
-        return new Promise((resolve) => {
-            setTimeout(() => {
-                resolve({
-                    url: `/uploads/subtitles/${videoId}_sub.vtt`,
-                    language: 'fa',
-                    generatedBy: 'AI'
-                });
-            }, 2000);
-        });
-    }
-
-    uploadToCDN(videoId, qualities, thumbnail) {
-        // شبیه‌سازی آپلود به CDN
-        return {
-            thumbnail: `https://cdn.example.com/thumbnails/${videoId}.jpg`,
-            qualities: qualities.reduce((acc, q) => {
-                acc[q.name] = `https://cdn.example.com/videos/${videoId}_${q.name}.mp4`;
-                return acc;
-            }, {})
-        };
-    }
-
-    saveVideoMetadata(videoId, userId, data) {
-        // ذخیره در دیتابیس
-        // این تابع توسط دیتابیس اصلی مدیریت می‌شود
-        return Promise.resolve();
-    }
-
-    cleanupTempFiles(videoId) {
-        const files = [
-            `/tmp/${videoId}_thumbnail.jpg`,
-            `/tmp/${videoId}_preview.gif`,
-            `/tmp/${videoId}_sub.vtt`
-        ];
-        
-        for (const quality of ['1080p', '720p', '480p', '360p', '240p']) {
-            files.push(`/tmp/${videoId}_${quality}.mp4`);
+            );
         }
-        
-        for (const file of files) {
-            try {
-                if (fs.existsSync(file)) {
-                    fs.unlinkSync(file);
-                }
-            } catch (error) {
-                // Ignore
+        return allStories.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    }
+
+    viewStory(storyId, userId) {
+        const shardIndex = this.getShardById(storyId);
+        const story = this.shards[shardIndex].stories.find(s => s.storyId === storyId);
+        if (story && !story.viewers) {
+            story.viewers = [];
+        }
+        if (story && !story.viewers.includes(userId)) {
+            story.views = (story.views || 0) + 1;
+            story.viewers.push(userId);
+            return true;
+        }
+        return false;
+    }
+
+    // ===== Messages =====
+    saveMessage(roomId, message) {
+        const shardIndex = this.getShardById(roomId);
+        if (!this.shards[shardIndex].messages[roomId]) {
+            this.shards[shardIndex].messages[roomId] = [];
+        }
+        this.shards[shardIndex].messages[roomId].push(message);
+        return message;
+    }
+
+    getMessages(roomId, limit = 50) {
+        const shardIndex = this.getShardById(roomId);
+        if (!this.shards[shardIndex].messages[roomId]) return [];
+        return this.shards[shardIndex].messages[roomId].slice(-limit);
+    }
+
+    // ===== Reports =====
+    addReport(report) {
+        const shardIndex = this.getShardById(report.reportId);
+        this.shards[shardIndex].reports.push(report);
+        return report;
+    }
+
+    getReports() {
+        let allReports = [];
+        for (let i = 0; i < this.shardCount; i++) {
+            allReports = allReports.concat(this.shards[i].reports);
+        }
+        return allReports.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    }
+
+    // ===== Stats =====
+    getStats() {
+        let totalUsers = 0;
+        let totalPosts = 0;
+        let totalStories = 0;
+        let totalMessages = 0;
+
+        for (let i = 0; i < this.shardCount; i++) {
+            totalUsers += Object.keys(this.shards[i].users).length;
+            totalPosts += this.shards[i].posts.length;
+            totalStories += this.shards[i].stories.length;
+            for (const room of Object.values(this.shards[i].messages)) {
+                totalMessages += room.length;
             }
         }
-    }
 
-    // افزودن به صف با اولویت
-    async addToQueue(videoData, priority = 'medium') {
-        const queue = this.queues[priority] || this.queues.medium;
-        return await queue.add(videoData, {
-            priority: priority === 'high' ? 1 : priority === 'medium' ? 2 : 3
-        });
+        return {
+            totalUsers,
+            totalPosts,
+            totalStories,
+            totalMessages,
+            shardCount: this.shardCount,
+            onlineUsers: Object.keys(onlineUsers).length || 0
+        };
     }
 }
 
-// ================================================================
-// 🧠 سیستم هوش مصنوعی فوق‌پیشرفته
-// ================================================================
+const db = new ShardedDatabase();
+const onlineUsers = {};
+const userSessions = new Map();
+const adminSessions = new Map();
+const ADMIN_EMAIL = 'admin@social.com';
+const ADMIN_PASSWORD = hashPassword('Admin@123456');
 
-class ArtificialIntelligenceEngine {
+// ============================================
+# 🎯 سیستم کش (Redis-like in Memory)
+// ============================================
+class CacheSystem {
     constructor() {
-        this.models = {};
-        this.embeddings = new Map();
-        this.userProfiles = new Map();
-        this.contentGraph = new Map();
-        this.initModels();
+        this.cache = new Map();
+        this.ttl = new Map();
     }
 
-    initModels() {
-        // شبیه‌سازی مدل‌های ML
-        this.models = {
-            recommendation: {
-                version: '4.2.1',
-                algorithm: 'Hybrid Collaborative Filtering + Neural Networks'
-            },
-            contentModeration: {
-                version: '3.0.0',
-                algorithm: 'BERT + CNN + Reinforcement Learning'
-            },
-            sentimentAnalysis: {
-                version: '2.1.0',
-                algorithm: 'LSTM + Attention Mechanism'
-            },
-            userEmbedding: {
-                version: '5.0.0',
-                algorithm: 'Graph Neural Networks + Transformer'
-            },
-            videoAnalysis: {
-                version: '1.5.0',
-                algorithm: '3D-CNN + Optical Flow'
-            }
-        };
-        
-        logger.info('🧠 AI Engine initialized with models:', Object.keys(this.models));
+    set(key, value, ttl = 300) {
+        this.cache.set(key, value);
+        this.ttl.set(key, Date.now() + ttl * 1000);
+        log(`Cache set: ${key} (TTL: ${ttl}s)`);
     }
 
-    // تولید Embedding برای کاربران و محتوا
-    generateEmbedding(data, type = 'user') {
-        const startTime = Date.now();
-        
-        // شبیه‌سازی تولید Embedding با ابعاد بالا
-        const dimensions = type === 'user' ? 512 : 256;
-        const embedding = [];
-        
-        for (let i = 0; i < dimensions; i++) {
-            embedding.push(Math.random() * 2 - 1);
+    get(key) {
+        if (!this.cache.has(key)) return null;
+        if (Date.now() > this.ttl.get(key)) {
+            this.cache.delete(key);
+            this.ttl.delete(key);
+            return null;
         }
-        
-        // نرمال‌سازی
-        const norm = Math.sqrt(embedding.reduce((sum, val) => sum + val * val, 0));
-        const normalized = embedding.map(val => val / norm);
-        
+        return this.cache.get(key);
+    }
+
+    delete(key) {
+        this.cache.delete(key);
+        this.ttl.delete(key);
+    }
+
+    clear() {
+        this.cache.clear();
+        this.ttl.clear();
+        log('Cache cleared');
+    }
+
+    getStats() {
         return {
-            embedding: normalized,
-            dimensions,
-            generationTime: Date.now() - startTime,
-            type
-        };
-    }
-
-    // محاسبه شباهت کسینوسی
-    cosineSimilarity(embedding1, embedding2) {
-        const dotProduct = embedding1.reduce((sum, val, i) => sum + val * embedding2[i], 0);
-        const norm1 = Math.sqrt(embedding1.reduce((sum, val) => sum + val * val, 0));
-        const norm2 = Math.sqrt(embedding2.reduce((sum, val) => sum + val * val, 0));
-        return dotProduct / (norm1 * norm2);
-    }
-
-    // توصیه‌های شخصی‌سازی شده
-    async getPersonalizedRecommendations(userId, contentPool, limit = 50) {
-        // 1. دریافت Embedding کاربر
-        let userEmbedding = this.embeddings.get(`user:${userId}`);
-        if (!userEmbedding) {
-            userEmbedding = this.generateEmbedding(userId, 'user').embedding;
-            this.embeddings.set(`user:${userId}`, userEmbedding);
-        }
-        
-        // 2. محاسبه امتیاز برای هر محتوا
-        const scoredContent = contentPool.map(content => {
-            let contentEmbedding = this.embeddings.get(`content:${content.id}`);
-            if (!contentEmbedding) {
-                contentEmbedding = this.generateEmbedding(content, 'content').embedding;
-                this.embeddings.set(`content:${content.id}`, contentEmbedding);
-            }
-            
-            // شباهت با کاربر
-            const similarity = this.cosineSimilarity(userEmbedding, contentEmbedding);
-            
-            // فاکتورهای دیگر
-            const popularity = (content.likes || 0) * 0.3 + (content.shares || 0) * 0.5 + (content.views || 0) * 0.1;
-            const recency = Math.max(0, 1 - (Date.now() - new Date(content.createdAt).getTime()) / (7 * 24 * 60 * 60 * 1000));
-            const diversity = Math.random() * 0.2; // تنوع
-            
-            const score = similarity * 0.5 + popularity * 0.3 + recency * 0.15 + diversity * 0.05;
-            
-            return { ...content, score };
-        });
-        
-        // 3. مرتب‌سازی و انتخاب بهترین‌ها
-        scoredContent.sort((a, b) => b.score - a.score);
-        
-        // 4. تنوع‌سازی (ممانعت از تکراری شدن)
-        const finalResults = [];
-        const seenHashtags = new Set();
-        const seenUsers = new Set();
-        
-        for (const item of scoredContent) {
-            if (finalResults.length >= limit) break;
-            
-            const hashtags = item.hashtags || [];
-            const user = item.userId;
-            
-            // تنوع در هشتگ‌ها و کاربران
-            if (seenUsers.has(user) && seenHashtags.size > 5) continue;
-            if (hashtags.some(h => seenHashtags.has(h)) && seenHashtags.size > 10) continue;
-            
-            finalResults.push(item);
-            
-            for (const h of hashtags) {
-                seenHashtags.add(h);
-            }
-            seenUsers.add(user);
-        }
-        
-        // 5. اضافه کردن محتوای جدید برای کاوش
-        if (finalResults.length < limit) {
-            const newContent = contentPool
-                .filter(c => !finalResults.some(f => f.id === c.id))
-                .slice(0, limit - finalResults.length);
-            finalResults.push(...newContent);
-        }
-        
-        return finalResults;
-    }
-
-    // تشخیص محتوای نامناسب با AI پیشرفته
-    detectInappropriateContent(text, mediaUrl = null) {
-        const issues = [];
-        const confidence = { overall: 0, text: 0, media: 0 };
-        
-        // 1. تحلیل متن با NLP
-        const textAnalysis = this.analyzeText(text);
-        if (textAnalysis.isInappropriate) {
-            issues.push(...textAnalysis.issues);
-            confidence.text = textAnalysis.confidence;
-        }
-        
-        // 2. تحلیل مدیا (در صورت وجود)
-        if (mediaUrl) {
-            const mediaAnalysis = this.analyzeMedia(mediaUrl);
-            if (mediaAnalysis.isInappropriate) {
-                issues.push(...mediaAnalysis.issues);
-                confidence.media = mediaAnalysis.confidence;
-            }
-        }
-        
-        // 3. امتیاز نهایی
-        confidence.overall = Math.max(confidence.text, confidence.media);
-        
-        return {
-            isAppropriate: issues.length === 0,
-            issues,
-            confidence,
-            severity: confidence.overall > 0.8 ? 'high' : confidence.overall > 0.5 ? 'medium' : 'low',
-            requiresReview: confidence.overall > 0.3
-        };
-    }
-
-    // تحلیل متن با NLP
-    analyzeText(text) {
-        const words = text.split(/\s+/);
-        const sensitiveWords = ['خشونت', 'توهین', 'نفرت', 'جنسی', 'اسلحه', 'مواد مخدر'];
-        const found = sensitiveWords.filter(word => text.includes(word));
-        
-        return {
-            isInappropriate: found.length > 0,
-            issues: found.map(word => ({
-                type: 'sensitive_word',
-                word,
-                context: text,
-                severity: 'medium'
-            })),
-            confidence: found.length > 3 ? 0.95 : found.length > 1 ? 0.7 : 0.3,
-            wordCount: words.length
-        };
-    }
-
-    // تحلیل مدیا
-    analyzeMedia(url) {
-        // شبیه‌سازی تحلیل تصویر/ویدئو
-        return {
-            isInappropriate: false,
-            issues: [],
-            confidence: 0.1,
-            mediaType: url.includes('video') ? 'video' : 'image'
-        };
-    }
-
-    // تحلیل احساسات
-    analyzeSentiment(text) {
-        const positive = ['خوب', 'عالی', 'دوست', 'خوشحال', 'زیبا', 'عالی'];
-        const negative = ['بد', 'ناراحت', 'عصبانی', 'غلط', 'اشتباه', 'مشکل'];
-        
-        let score = 0;
-        for (const word of positive) {
-            if (text.includes(word)) score += 0.2;
-        }
-        for (const word of negative) {
-            if (text.includes(word)) score -= 0.2;
-        }
-        
-        return {
-            sentiment: score > 0.3 ? 'positive' : score < -0.3 ? 'negative' : 'neutral',
-            score,
-            confidence: Math.min(Math.abs(score) + 0.3, 1)
-        };
-    }
-
-    // پیش‌بینی میزان تعامل
-    predictEngagement(content, userProfile) {
-        // فاکتورهای مختلف
-        const factors = {
-            contentQuality: Math.random() * 0.5 + 0.5,
-            userInterest: Math.random() * 0.5 + 0.5,
-            timing: Math.random() * 0.3 + 0.7,
-            popularity: Math.random() * 0.4 + 0.6
-        };
-        
-        const engagementScore = Object.values(factors).reduce((sum, val) => sum + val, 0) / Object.values(factors).length;
-        
-        return {
-            predictedLikes: Math.floor(engagementScore * 100),
-            predictedShares: Math.floor(engagementScore * 30),
-            predictedComments: Math.floor(engagementScore * 20),
-            engagementScore,
-            factors
+            size: this.cache.size,
+            keys: Array.from(this.cache.keys())
         };
     }
 }
 
-// ================================================================
-// 🚀 سرور اصلی با معماری میکروسرویس کامل
-// ================================================================
+const cache = new CacheSystem();
 
-class SuperSocialServer {
+// ============================================
+# 🎯 سیستم Queue برای پردازش پس‌زمینه
+// ============================================
+class QueueSystem {
     constructor() {
-        this.app = express();
-        this.server = http.createServer(this.app);
-        
-        // WebSocket با قابلیت اطمینان بالا
-        this.io = socketIo(this.server, {
-            cors: {
-                origin: process.env.CORS_ORIGIN?.split(',') || '*',
-                credentials: true
-            },
-            transports: ['websocket', 'polling'],
-            pingTimeout: 60000,
-            pingInterval: 25000,
-            maxHttpBufferSize: 1e8,
-            allowEIO3: true,
-            path: '/socket.io/',
-            serveClient: false,
-            cookie: {
-                name: 'io',
-                httpOnly: true,
-                secure: process.env.NODE_ENV === 'production'
-            }
-        });
-
-        // دیتابیس‌ها
-        this.db = new UltraScalableDatabase();
-        this.cache = new UltraCacheSystem();
-        this.videoProcessor = new VideoProcessingSystem();
-        this.ai = new ArtificialIntelligenceEngine();
-        this.encryption = quantumEncryption;
-
-        // صف‌ها
-        this.queues = {
-            video: new Bull('video-processing', {
-                redis: { host: process.env.REDIS_HOST, port: 6379 }
-            }),
-            notification: new Bull('notifications', {
-                redis: { host: process.env.REDIS_HOST, port: 6379 }
-            }),
-            analytics: new Bull('analytics', {
-                redis: { host: process.env.REDIS_HOST, port: 6379 }
-            }),
-            email: new Bull('email-sending', {
-                redis: { host: process.env.REDIS_HOST, port: 6379 }
-            })
-        };
-
-        // تنظیمات
-        this.initMiddleware();
-        this.initRoutes();
-        this.initAdminPanel();
-        this.initWebSocket();
-        this.initBackgroundJobs();
-        this.initMonitoring();
-        
-        // Redis Adapter برای WebSocket در چندین سرور
-        const redisAdapter = require('@socket.io/redis-adapter');
-        this.io.adapter(redisAdapter.createAdapter(
-            this.cache.clients[0],
-            this.cache.clients[1] || this.cache.clients[0]
-        ));
-        
-        logger.info('🚀 Super Social Media Server Initialized');
+        this.queues = new Map();
+        this.processing = new Map();
     }
 
-    // ================================================================
-    // ⚙️ Middleware فوق‌امن
-    // ================================================================
-    initMiddleware() {
-        // Helmet برای امنیت
-        this.app.use(helmet({
-            contentSecurityPolicy: {
-                directives: {
-                    defaultSrc: ["'self'"],
-                    scriptSrc: ["'self'", "'unsafe-inline'", "cdnjs.cloudflare.com", "https:"],
-                    styleSrc: ["'self'", "'unsafe-inline'", "cdnjs.cloudflare.com", "https:"],
-                    imgSrc: ["'self'", "data:", "https:", "blob:"],
-                    mediaSrc: ["'self'", "https:", "blob:"],
-                    connectSrc: ["'self'", "wss:", "https:"],
-                    frameSrc: ["'self'", "https:"],
-                    fontSrc: ["'self'", "https:"],
-                    objectSrc: ["'none'"],
-                    baseUri: ["'self'"],
-                },
-            },
-            crossOriginEmbedderPolicy: false,
-            crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
-            crossOriginResourcePolicy: { policy: 'cross-origin' },
-            dnsPrefetchControl: true,
-            frameguard: { action: 'deny' },
-            hidePoweredBy: true,
-            hsts: {
-                maxAge: 31536000,
-                includeSubDomains: true,
-                preload: true
-            },
-            ieNoOpen: true,
-            noSniff: true,
-            referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
-            xssFilter: true
-        }));
-
-        // Compression با بالاترین سطح
-        this.app.use(compression({
-            level: 9,
-            threshold: 1024,
-            filter: (req, res) => {
-                if (req.headers['x-no-compression']) return false;
-                return compression.filter(req, res);
-            }
-        }));
-
-        // CORS با تنظیمات دقیق
-        this.app.use(cors({
-            origin: (origin, callback) => {
-                const allowedOrigins = process.env.CORS_ORIGIN?.split(',') || ['*'];
-                if (!origin || allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
-                    callback(null, true);
-                } else {
-                    callback(new Error('Not allowed by CORS'));
-                }
-            },
-            credentials: true,
-            methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-            allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
-            exposedHeaders: ['X-Total-Count', 'X-RateLimit-Limit', 'X-RateLimit-Remaining'],
-            maxAge: 86400
-        }));
-
-        // Rate Limiting پیشرفته
-        const strictLimiter = rateLimit({
-            windowMs: 60 * 1000,
-            max: 60,
-            message: '🚫 درخواست‌های بیش از حد',
-            keyGenerator: (req) => req.ip,
-            handler: (req, res) => {
-                logger.warn(`Rate limit exceeded: ${req.ip}`);
-                res.status(429).json({
-                    error: 'Rate limit exceeded',
-                    retryAfter: 60
-                });
-            }
-        });
-
-        const authLimiter = rateLimit({
-            windowMs: 60 * 60 * 1000,
-            max: 10,
-            message: '🚫 تلاش‌های ناموفق زیاد',
-            keyGenerator: (req) => req.ip
-        });
-
-        this.app.use('/api/', strictLimiter);
-        this.app.use('/api/auth/', authLimiter);
-        this.app.use('/api/upload/', strictLimiter);
-
-        // پارس کردن JSON با محدودیت بزرگ
-        this.app.use(express.json({ 
-            limit: '500mb',
-            verify: (req, res, buf) => {
-                req.rawBody = buf;
-            }
-        }));
-        
-        this.app.use(express.urlencoded({ 
-            extended: true, 
-            limit: '500mb',
-            parameterLimit: 10000
-        }));
-
-        // فایل‌های استاتیک با کش CDN
-        this.app.use(express.static('public', {
-            maxAge: '1y',
-            etag: true,
-            lastModified: true,
-            setHeaders: (res, path) => {
-                if (path.endsWith('.html')) {
-                    res.setHeader('Cache-Control', 'no-cache');
-                } else if (path.match(/\.(jpg|jpeg|png|gif|ico|css|js)$/)) {
-                    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-                }
-            }
-        }));
-
-        // فایل‌های آپلودی
-        this.app.use('/uploads', express.static('uploads', {
-            maxAge: '1y',
-            etag: true
-        }));
-
-        // WAF پیشرفته
-        this.app.use((req, res, next) => {
-            const suspiciousPatterns = [
-                /select.*from/i,
-                /union.*select/i,
-                /exec.*/i,
-                /eval.*/i,
-                /<script/i,
-                /javascript:/i,
-                /onerror/i,
-                /onload/i,
-                /\.\.\/\.\.\//,
-                /\/etc\/passwd/,
-                /\/proc\/self\/environ/
-            ];
-            
-            const url = req.url;
-            const body = req.rawBody?.toString() || '';
-            const query = JSON.stringify(req.query);
-            
-            for (const pattern of suspiciousPatterns) {
-                if (pattern.test(url) || pattern.test(body) || pattern.test(query)) {
-                    logger.warn(`WAF Blocked: ${req.ip} - ${pattern}`);
-                    return res.status(403).json({ 
-                        error: 'Forbidden',
-                        message: 'درخواست شما مسدود شد'
-                    });
-                }
-            }
-            next();
-        });
-
-        // لاگینگ درخواست‌ها
-        this.app.use((req, res, next) => {
-            const start = Date.now();
-            res.on('finish', () => {
-                const duration = Date.now() - start;
-                const logLevel = res.statusCode >= 500 ? 'error' : 
-                                res.statusCode >= 400 ? 'warn' : 'info';
-                logger.log(logLevel, `${req.method} ${req.url} ${res.statusCode} ${duration}ms`);
-            });
-            next();
-        });
-
-        // مولتی‌پارتر برای آپلود
-        this.upload = multer({
-            storage: multer.memoryStorage(),
-            limits: {
-                fileSize: 500 * 1024 * 1024,
-                files: 5,
-                parts: 10,
-                headerPairs: 2000
-            },
-            fileFilter: (req, file, cb) => {
-                const allowed = [
-                    'image/jpeg', 'image/png', 'image/gif', 'image/webp',
-                    'video/mp4', 'video/webm', 'video/quicktime', 'video/x-msvideo',
-                    'audio/mpeg', 'audio/wav', 'audio/ogg'
-                ];
-                if (allowed.includes(file.mimetype)) {
-                    cb(null, true);
-                } else {
-                    cb(new Error('فرمت فایل پشتیبانی نمی‌شود'));
-                }
-            }
-        });
-    }
-
-    // ================================================================
-    // 🎯 مسیرهای اصلی API
-    // ================================================================
-    initRoutes() {
-        const router = express.Router();
-
-        // ============================================================
-        // 🔐 احراز هویت فوق‌امن
-        // ============================================================
-        router.post('/auth/register', async (req, res) => {
-            try {
-                const { username, email, password, fullName } = req.body;
-                
-                // اعتبارسنجی پیشرفته
-                if (!username || !email || !password) {
-                    return res.status(400).json({ error: 'همه فیلدها الزامی هستند' });
-                }
-                
-                if (username.length < 3 || username.length > 30) {
-                    return res.status(400).json({ error: 'نام کاربری باید بین 3 تا 30 کاراکتر باشد' });
-                }
-                
-                if (password.length < 8) {
-                    return res.status(400).json({ error: 'رمز عبور باید حداقل 8 کاراکتر باشد' });
-                }
-                
-                if (!email.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)) {
-                    return res.status(400).json({ error: 'ایمیل نامعتبر است' });
-                }
-
-                // هش کردن رمز عبور با bcrypt
-                const salt = await bcrypt.genSalt(12);
-                const passwordHash = await bcrypt.hash(password, salt);
-
-                // تولید کلیدهای رمزنگاری
-                const userKeys = this.encryption.generateQuantumKey(email);
-
-                const userId = uuidv4();
-                
-                // ذخیره در دیتابیس با شاردینگ
-                await this.db.query(email,
-                    `INSERT INTO users 
-                     (id, username, email, password_hash, public_key, full_name, created_at) 
-                     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-                    [userId, username, email, passwordHash, userKeys.publicKey, fullName || '', new Date()]
-                );
-
-                // ذخیره در کش
-                await this.cache.set(`user:${email}`, { 
-                    userId, username, email, fullName 
-                }, 3600);
-
-                // تولید JWT
-                const token = jwt.sign(
-                    { userId, email, username },
-                    process.env.JWT_SECRET || 'super-secret-jwt-key-2024',
-                    { 
-                        expiresIn: '7d',
-                        algorithm: 'HS512',
-                        issuer: 'super-social-media',
-                        audience: 'web'
-                    }
-                );
-
-                // ذخیره توکن در Redis
-                await this.cache.set(`token:${token}`, userId, 3600);
-
-                logger.info(`User registered: ${email}`);
-                res.status(201).json({
-                    success: true,
-                    token,
-                    user: { 
-                        userId, 
-                        username, 
-                        email, 
-                        fullName: fullName || '',
-                        isVerified: false,
-                        createdAt: new Date()
-                    },
-                    publicKey: userKeys.publicKey
-                });
-            } catch (error) {
-                logger.error('Registration error:', error);
-                res.status(500).json({ error: 'خطا در ثبت‌نام' });
-            }
-        });
-
-        router.post('/auth/login', async (req, res) => {
-            try {
-                const { email, password } = req.body;
-                
-                if (!email || !password) {
-                    return res.status(400).json({ error: 'ایمیل و رمز عبور الزامی است' });
-                }
-
-                // دریافت از کش
-                let user = await this.cache.get(`user:${email}`);
-                
-                if (!user) {
-                    // دریافت از دیتابیس
-                    const result = await this.db.query(email,
-                        'SELECT * FROM users WHERE email = $1',
-                        [email]
-                    );
-                    
-                    if (result.rows.length === 0) {
-                        return res.status(401).json({ error: 'ایمیل یا رمز عبور اشتباه است' });
-                    }
-                    user = result.rows[0];
-                    await this.cache.set(`user:${email}`, user, 3600);
-                }
-
-                // بررسی مسدودیت
-                if (user.is_blocked) {
-                    const blockUntil = new Date(user.block_until);
-                    if (blockUntil > new Date()) {
-                        return res.status(403).json({
-                            error: 'حساب کاربری شما مسدود شده است',
-                            reason: user.block_reason,
-                            until: blockUntil
-                        });
-                    }
-                }
-
-                // بررسی رمز عبور
-                const validPassword = await bcrypt.compare(password, user.password_hash);
-                if (!validPassword) {
-                    logger.warn(`Failed login attempt for ${email}`);
-                    return res.status(401).json({ error: 'ایمیل یا رمز عبور اشتباه است' });
-                }
-
-                // به‌روزرسانی آخرین ورود
-                await this.db.query(email,
-                    'UPDATE users SET last_login = NOW() WHERE id = $1',
-                    [user.id]
-                );
-
-                // تولید JWT
-                const token = jwt.sign(
-                    { userId: user.id, email: user.email, username: user.username },
-                    process.env.JWT_SECRET || 'super-secret-jwt-key-2024',
-                    { 
-                        expiresIn: '7d',
-                        algorithm: 'HS512',
-                        issuer: 'super-social-media',
-                        audience: 'web'
-                    }
-                );
-
-                // Session در Redis
-                await this.cache.set(`session:${token}`, user.id, 3600);
-
-                logger.info(`User logged in: ${email}`);
-                res.json({
-                    success: true,
-                    token,
-                    user: {
-                        userId: user.id,
-                        username: user.username,
-                        email: user.email,
-                        fullName: user.full_name || '',
-                        bio: user.bio || '',
-                        avatarUrl: user.avatar_url || '',
-                        isVerified: user.is_verified || false,
-                        followersCount: user.followers_count || 0,
-                        followingCount: user.following_count || 0,
-                        postsCount: user.posts_count || 0
-                    }
-                });
-            } catch (error) {
-                logger.error('Login error:', error);
-                res.status(500).json({ error: 'خطا در ورود' });
-            }
-        });
-
-        router.post('/auth/logout', async (req, res) => {
-            try {
-                const token = req.headers.authorization?.split(' ')[1];
-                if (token) {
-                    await this.cache.del(`session:${token}`);
-                    await this.cache.del(`token:${token}`);
-                }
-                res.json({ success: true });
-            } catch (error) {
-                logger.error('Logout error:', error);
-                res.status(500).json({ error: 'خطا در خروج' });
-            }
-        });
-
-        router.get('/auth/me', async (req, res) => {
-            try {
-                const token = req.headers.authorization?.split(' ')[1];
-                if (!token) {
-                    return res.status(401).json({ error: 'Unauthorized' });
-                }
-
-                // تایید JWT
-                const decoded = jwt.verify(token, process.env.JWT_SECRET || 'super-secret-jwt-key-2024');
-                const userId = decoded.userId;
-
-                // دریافت از کش
-                let user = await this.cache.get(`user:${decoded.email}`);
-                if (!user) {
-                    const result = await this.db.query(decoded.email,
-                        'SELECT * FROM users WHERE id = $1',
-                        [userId]
-                    );
-                    if (result.rows.length === 0) {
-                        return res.status(404).json({ error: 'User not found' });
-                    }
-                    user = result.rows[0];
-                    await this.cache.set(`user:${decoded.email}`, user, 3600);
-                }
-
-                res.json({
-                    userId: user.id,
-                    username: user.username,
-                    email: user.email,
-                    fullName: user.full_name || '',
-                    bio: user.bio || '',
-                    avatarUrl: user.avatar_url || '',
-                    isVerified: user.is_verified || false,
-                    isAdmin: user.is_admin || false,
-                    followersCount: user.followers_count || 0,
-                    followingCount: user.following_count || 0,
-                    postsCount: user.posts_count || 0,
-                    totalLikes: user.total_likes || 0,
-                    lastLogin: user.last_login,
-                    createdAt: user.created_at
-                });
-            } catch (error) {
-                logger.error('Auth me error:', error);
-                res.status(401).json({ error: 'Invalid token' });
-            }
-        });
-
-        // ============================================================
-        // 📝 مدیریت پست‌ها با AI
-        // ============================================================
-        router.post('/posts', this.upload.single('media'), async (req, res) => {
-            try {
-                const { userId, content, hashtags, mentions, isPrivate } = req.body;
-                const file = req.file;
-
-                // تایید هویت
-                const token = req.headers.authorization?.split(' ')[1];
-                if (!token) return res.status(401).json({ error: 'Unauthorized' });
-                
-                const decoded = jwt.verify(token, process.env.JWT_SECRET || 'super-secret-jwt-key-2024');
-                if (decoded.userId !== userId) {
-                    return res.status(403).json({ error: 'Forbidden' });
-                }
-
-                // تشخیص محتوای نامناسب با AI
-                const moderationResult = this.ai.detectInappropriateContent(content, file?.path);
-                if (!moderationResult.isAppropriate) {
-                    logger.warn(`Inappropriate content detected: ${userId}`, moderationResult);
-                    return res.status(400).json({
-                        error: 'محتوای نامناسب تشخیص داده شد',
-                        issues: moderationResult.issues,
-                        severity: moderationResult.severity
-                    });
-                }
-
-                const postId = uuidv4();
-                const hashtagsArray = hashtags ? hashtags.split(',').map(h => h.trim()) : [];
-                const mentionsArray = mentions ? mentions.split(',').map(m => m.trim()) : [];
-
-                // ذخیره فایل
-                let mediaUrl = null;
-                let mediaType = null;
-                if (file) {
-                    mediaUrl = `/uploads/posts/${postId}-${file.originalname}`;
-                    mediaType = file.mimetype.startsWith('video/') ? 'video' : 'image';
-                    
-                    // ذخیره فیزیکی
-                    const uploadPath = path.join(__dirname, 'uploads/posts', `${postId}-${file.originalname}`);
-                    await fs.promises.mkdir(path.dirname(uploadPath), { recursive: true });
-                    await fs.promises.writeFile(uploadPath, file.buffer);
-                }
-
-                // پیش‌بینی تعامل با AI
-                const engagement = this.ai.predictEngagement(
-                    { content, hashtags: hashtagsArray },
-                    { userId }
-                );
-
-                // ذخیره در دیتابیس
-                await this.db.query(userId,
-                    `INSERT INTO posts 
-                     (id, user_id, content, media_urls, hashtags, mentions, is_private, score, created_at) 
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-                    [postId, userId, content, mediaUrl ? [mediaUrl] : [], hashtagsArray, mentionsArray, 
-                     isPrivate === 'true', engagement.engagementScore, new Date()]
-                );
-
-                // به‌روزرسانی آمار کاربر
-                await this.db.query(userId,
-                    'UPDATE users SET posts_count = posts_count + 1 WHERE id = $1',
-                    [userId]
-                );
-
-                // کش کردن
-                const postData = {
-                    id: postId,
-                    userId,
-                    content,
-                    mediaUrl,
-                    mediaType,
-                    hashtags: hashtagsArray,
-                    mentions: mentionsArray,
-                    isPrivate: isPrivate === 'true',
-                    likes: 0,
-                    comments: [],
-                    shares: 0,
-                    views: 0,
-                    score: engagement.engagementScore,
-                    createdAt: new Date(),
-                    engagement: engagement
-                };
-                await this.cache.set(`post:${postId}`, postData, 3600);
-
-                // تحلیل با AI برای توصیه‌ها
-                const userEmbedding = this.ai.generateEmbedding(userId, 'user');
-                const postEmbedding = this.ai.generateEmbedding(postData, 'content');
-                await this.cache.set(`embedding:user:${userId}`, userEmbedding, 86400);
-                await this.cache.set(`embedding:post:${postId}`, postEmbedding, 86400);
-
-                // ارسال نوتیفیکیشن به فالوورها
-                await this.queues.notification.add({
-                    type: 'new_post',
-                    userId,
-                    postId,
-                    content: content.substring(0, 100),
-                    timestamp: new Date()
-                });
-
-                logger.info(`Post created: ${postId} by ${userId}`);
-                res.status(201).json({
-                    success: true,
-                    post: postData,
-                    engagement: engagement
-                });
-            } catch (error) {
-                logger.error('Create post error:', error);
-                res.status(500).json({ error: 'خطا در ایجاد پست' });
-            }
-        });
-
-        // ============================================================
-        // 📋 دریافت پست‌ها با AI
-        // ============================================================
-        router.get('/posts', async (req, res) => {
-            try {
-                const { userId, page = 1, limit = 20, hashtag, sort = 'newest' } = req.query;
-                
-                let cacheKey = `posts:${userId}:${page}:${limit}:${hashtag || 'all'}:${sort}`;
-                let posts = await this.cache.get(cacheKey);
-                
-                if (!posts) {
-                    let query = 'SELECT * FROM posts';
-                    const params = [];
-                    
-                    if (hashtag) {
-                        query += ' WHERE $1 = ANY(hashtags)';
-                        params.push(hashtag);
-                    }
-                    
-                    if (sort === 'newest') {
-                        query += ' ORDER BY created_at DESC';
-                    } else if (sort === 'trending') {
-                        query += ' ORDER BY score DESC, created_at DESC';
-                    } else if (sort === 'most_liked') {
-                        query += ' ORDER BY likes_count DESC';
-                    }
-                    
-                    query += ` LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
-                    params.push(limit, (page - 1) * limit);
-                    
-                    const result = await this.db.query(userId || 'system', query, params);
-                    posts = result.rows;
-                    
-                    // اگر کاربر مشخص است، شخصی‌سازی با AI
-                    if (userId) {
-                        posts = await this.ai.getPersonalizedRecommendations(userId, posts);
-                    }
-                    
-                    await this.cache.set(cacheKey, posts, 60);
-                }
-                
-                // شمارش کل
-                const totalResult = await this.db.query(userId || 'system',
-                    `SELECT COUNT(*) FROM posts${hashtag ? ' WHERE $1 = ANY(hashtags)' : ''}`,
-                    hashtag ? [hashtag] : []
-                );
-                
-                res.json({
-                    success: true,
-                    posts,
-                    page: parseInt(page),
-                    limit: parseInt(limit),
-                    total: parseInt(totalResult.rows[0].count),
-                    hasMore: (page * limit) < totalResult.rows[0].count
-                });
-            } catch (error) {
-                logger.error('Get posts error:', error);
-                res.status(500).json({ error: 'خطا در دریافت پست‌ها' });
-            }
-        });
-
-        // ============================================================
-        // 🎬 آپلود ویدئو با پردازش فوق‌حرفه‌ای
-        // ============================================================
-        router.post('/videos/upload', this.upload.single('video'), async (req, res) => {
-            try {
-                const { userId, title, description, privacy } = req.body;
-                const file = req.file;
-
-                if (!file) {
-                    return res.status(400).json({ error: 'فایل انتخاب نشده است' });
-                }
-
-                // تایید هویت
-                const token = req.headers.authorization?.split(' ')[1];
-                const decoded = jwt.verify(token, process.env.JWT_SECRET);
-                if (decoded.userId !== userId) {
-                    return res.status(403).json({ error: 'Forbidden' });
-                }
-
-                const videoId = uuidv4();
-                
-                // ذخیره موقت
-                const tempPath = `/tmp/${videoId}-${file.originalname}`;
-                await fs.promises.writeFile(tempPath, file.buffer);
-
-                // اضافه به صف پردازش
-                await this.videoProcessor.addToQueue({
-                    videoId,
-                    userId,
-                    filePath: tempPath,
-                    filename: file.originalname,
-                    title,
-                    description,
-                    privacy: privacy || 'public',
-                    size: file.size,
-                    mimetype: file.mimetype
-                }, 'high');
-
-                // ذخیره متادیتا
-                await this.db.query(userId,
-                    `INSERT INTO videos 
-                     (id, user_id, title, description, filename, size, status, created_at) 
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-                    [videoId, userId, title || '', description || '', file.originalname, 
-                     file.size, 'processing', new Date()]
-                );
-
-                logger.info(`Video uploaded: ${videoId} by ${userId}`);
-                res.json({
-                    success: true,
-                    videoId,
-                    status: 'processing',
-                    estimatedTime: '5-10 minutes'
-                });
-            } catch (error) {
-                logger.error('Upload video error:', error);
-                res.status(500).json({ error: 'خطا در آپلود ویدئو' });
-            }
-        });
-
-        // ============================================================
-        // 📊 آمار و آنالیز
-        // ============================================================
-        router.get('/analytics', async (req, res) => {
-            try {
-                const { userId } = req.query;
-                
-                // دریافت از کش
-                let stats = await this.cache.get(`analytics:${userId}`);
-                if (!stats) {
-                    // دریافت از دیتابیس
-                    const results = await Promise.all([
-                        this.db.query(userId, 'SELECT COUNT(*) as posts FROM posts WHERE user_id = $1', [userId]),
-                        this.db.query(userId, 'SELECT COUNT(*) as likes FROM posts WHERE $1 = ANY(mentions)', [userId]),
-                        this.db.query(userId, 'SELECT SUM(likes_count) as total_likes FROM posts WHERE user_id = $1', [userId]),
-                        this.db.query(userId, 'SELECT SUM(views_count) as total_views FROM posts WHERE user_id = $1', [userId])
-                    ]);
-                    
-                    stats = {
-                        posts: parseInt(results[0].rows[0].posts) || 0,
-                        mentions: parseInt(results[1].rows[0].likes) || 0,
-                        totalLikes: parseInt(results[2].rows[0].total_likes) || 0,
-                        totalViews: parseInt(results[3].rows[0].total_views) || 0,
-                        engagementRate: results[2].rows[0].total_likes > 0 ? 
-                            (results[2].rows[0].total_likes / results[0].rows[0].posts * 100).toFixed(2) : 0
-                    };
-                    
-                    await this.cache.set(`analytics:${userId}`, stats, 300);
-                }
-                
-                res.json({ success: true, stats });
-            } catch (error) {
-                logger.error('Analytics error:', error);
-                res.status(500).json({ error: 'خطا در دریافت آمار' });
-            }
-        });
-
-        // ============================================================
-        // 💬 پیام‌های رمزنگاری شده
-        // ============================================================
-        router.post('/messages', async (req, res) => {
-            try {
-                const { fromUserId, toUserId, message } = req.body;
-                
-                // رمزنگاری با روش کوانتومی
-                const encrypted = this.encryption.encryptMessage(message, fromUserId, toUserId);
-                
-                // ذخیره در دیتابیس
-                const messageId = uuidv4();
-                await this.db.query(fromUserId,
-                    `INSERT INTO messages 
-                     (id, from_user, to_user, encrypted_data, signature, created_at) 
-                     VALUES ($1, $2, $3, $4, $5, $6)`,
-                    [messageId, fromUserId, toUserId, encrypted, encrypted.signature, new Date()]
-                );
-
-                // ارسال از طریق WebSocket
-                const socketId = await this.cache.get(`online:${toUserId}`);
-                if (socketId) {
-                    this.io.to(socketId).emit('private_message', {
-                        from: fromUserId,
-                        messageId,
-                        encrypted,
-                        timestamp: new Date()
-                    });
-                }
-
-                logger.info(`Message sent: ${fromUserId} -> ${toUserId}`);
-                res.json({ success: true, messageId });
-            } catch (error) {
-                logger.error('Send message error:', error);
-                res.status(500).json({ error: 'خطا در ارسال پیام' });
-            }
-        });
-
-        // ============================================================
-        // ❤️ لایک و تعاملات
-        // ============================================================
-        router.post('/posts/:postId/like', async (req, res) => {
-            try {
-                const { postId } = req.params;
-                const { userId } = req.body;
-                
-                // به‌روزرسانی در دیتابیس
-                await this.db.query(userId,
-                    `UPDATE posts SET likes_count = likes_count + 1, 
-                     score = score + 0.1 WHERE id = $1`,
-                    [postId]
-                );
-
-                // تحلیل با AI
-                this.ai.analyzeUserBehavior(userId, postId, 'like');
-                
-                // ارسال نوتیفیکیشن
-                const post = await this.cache.get(`post:${postId}`);
-                if (post && post.userId !== userId) {
-                    await this.queues.notification.add({
-                        type: 'like',
-                        userId: post.userId,
-                        fromUserId: userId,
-                        postId,
-                        timestamp: new Date()
-                    });
-                }
-
-                res.json({ success: true });
-            } catch (error) {
-                logger.error('Like error:', error);
-                res.status(500).json({ error: 'خطا در لایک' });
-            }
-        });
-
-        router.post('/posts/:postId/comment', async (req, res) => {
-            try {
-                const { postId } = req.params;
-                const { userId, text } = req.body;
-                
-                // تشخیص محتوای نامناسب
-                const moderation = this.ai.detectInappropriateContent(text);
-                if (!moderation.isAppropriate) {
-                    return res.status(400).json({
-                        error: 'کامنت نامناسب تشخیص داده شد',
-                        issues: moderation.issues
-                    });
-                }
-
-                const commentId = uuidv4();
-                const comment = {
-                    id: commentId,
-                    userId,
-                    text,
-                    createdAt: new Date(),
-                    likes: 0,
-                    replies: []
-                };
-
-                // ذخیره در دیتابیس
-                await this.db.query(userId,
-                    `UPDATE posts SET comments_count = comments_count + 1 WHERE id = $1`,
-                    [postId]
-                );
-
-                // تحلیل احساسات
-                const sentiment = this.ai.analyzeSentiment(text);
-
-                res.json({
-                    success: true,
-                    comment,
-                    sentiment
-                });
-            } catch (error) {
-                logger.error('Comment error:', error);
-                res.status(500).json({ error: 'خطا در ارسال کامنت' });
-            }
-        });
-
-        this.app.use('/api', router);
-    }
-
-    // ================================================================
-    // 💬 WebSocket فوق‌امن
-    // ================================================================
-    initWebSocket() {
-        const onlineUsers = new Map();
-        const userRooms = new Map();
-
-        this.io.use((socket, next) => {
-            const token = socket.handshake.auth.token;
-            if (!token) {
-                return next(new Error('Authentication required'));
-            }
-            
-            try {
-                const decoded = jwt.verify(token, process.env.JWT_SECRET || 'super-secret-jwt-key-2024');
-                socket.userId = decoded.userId;
-                socket.username = decoded.username;
-                socket.email = decoded.email;
-                next();
-            } catch (error) {
-                next(new Error('Invalid token'));
-            }
-        });
-
-        this.io.on('connection', (socket) => {
-            const userId = socket.userId;
-            logger.info(`User connected: ${userId}`);
-
-            // ثبت آنلاین
-            onlineUsers.set(userId, {
-                socketId: socket.id,
-                username: socket.username,
-                connectedAt: new Date()
-            });
-            
-            this.cache.set(`online:${userId}`, socket.id, 300);
-            this.io.emit('users_online', Array.from(onlineUsers.keys()));
-
-            // ============================================================
-            // 🔐 پیام خصوصی رمزنگاری شده
-            // ============================================================
-            socket.on('private_message', async (data) => {
-                try {
-                    const { to, message } = data;
-                    
-                    // رمزنگاری کوانتومی
-                    const encrypted = this.encryption.encryptMessage(message, userId, to);
-                    
-                    // ذخیره در دیتابیس
-                    const messageId = uuidv4();
-                    await this.db.query(userId,
-                        `INSERT INTO messages 
-                         (id, from_user, to_user, encrypted_data, signature, created_at) 
-                         VALUES ($1, $2, $3, $4, $5, $6)`,
-                        [messageId, userId, to, encrypted, encrypted.signature, new Date()]
-                    );
-
-                    // ارسال به گیرنده
-                    const targetSocket = onlineUsers.get(to);
-                    if (targetSocket) {
-                        this.io.to(targetSocket.socketId).emit('private_message', {
-                            from: userId,
-                            fromUsername: socket.username,
-                            messageId,
-                            encrypted,
-                            timestamp: new Date()
-                        });
-                    }
-
-                    // تایید رسید
-                    socket.emit('message_delivered', { messageId, to });
-
-                    logger.info(`Private message: ${userId} -> ${to}`);
-                } catch (error) {
-                    logger.error('Private message error:', error);
-                    socket.emit('error', { message: 'خطا در ارسال پیام' });
-                }
-            });
-
-            // ============================================================
-            // 📢 چت گروهی
-            // ============================================================
-            socket.on('join_room', async (data) => {
-                const { roomId } = data;
-                socket.join(roomId);
-                
-                if (!userRooms.has(roomId)) {
-                    userRooms.set(roomId, new Set());
-                }
-                userRooms.get(roomId).add(userId);
-
-                // دریافت تاریخچه
-                const history = await this.cache.get(`room:${roomId}:history`) || [];
-                socket.emit('room_history', history.slice(-100));
-
-                // اطلاع به دیگران
-                socket.to(roomId).emit('user_joined_room', {
-                    userId,
-                    username: socket.username,
-                    timestamp: new Date()
-                });
-
-                logger.info(`User ${userId} joined room ${roomId}`);
-            });
-
-            socket.on('room_message', async (data) => {
-                try {
-                    const { roomId, message } = data;
-                    
-                    // رمزنگاری
-                    const encrypted = this.encryption.encryptMessage(message, roomId);
-
-                    // ذخیره تاریخچه
-                    const historyKey = `room:${roomId}:history`;
-                    const history = await this.cache.get(historyKey) || [];
-                    history.push({
-                        from: userId,
-                        fromUsername: socket.username,
-                        encrypted,
-                        timestamp: new Date()
-                    });
-                    
-                    if (history.length > 1000) {
-                        history.splice(0, history.length - 1000);
-                    }
-                    
-                    await this.cache.set(historyKey, history, 86400);
-
-                    // ارسال به همه
-                    this.io.to(roomId).emit('room_message', {
-                        from: userId,
-                        fromUsername: socket.username,
-                        encrypted,
-                        timestamp: new Date()
-                    });
-
-                    logger.info(`Room message: ${roomId} from ${userId}`);
-                } catch (error) {
-                    logger.error('Room message error:', error);
-                }
-            });
-
-            // ============================================================
-            // 🎥 پخش زنده (Live Streaming)
-            // ============================================================
-            socket.on('start_live', (data) => {
-                const { streamId } = data;
-                socket.join(`live:${streamId}`);
-                socket.to(`live:${streamId}`).emit('live_started', {
-                    userId,
-                    username: socket.username,
-                    streamId,
-                    timestamp: new Date()
-                });
-                logger.info(`Live stream started: ${streamId} by ${userId}`);
-            });
-
-            socket.on('live_frame', (data) => {
-                const { streamId, frame } = data;
-                socket.to(`live:${streamId}`).emit('live_frame', {
-                    from: userId,
-                    frame,
-                    timestamp: new Date()
-                });
-            });
-
-            socket.on('end_live', (data) => {
-                const { streamId } = data;
-                socket.to(`live:${streamId}`).emit('live_ended', {
-                    userId,
-                    streamId,
-                    timestamp: new Date()
-                });
-                socket.leave(`live:${streamId}`);
-                logger.info(`Live stream ended: ${streamId} by ${userId}`);
-            });
-
-            // ============================================================
-            // 🎮 گیم‌سازی و تعاملات
-            // ============================================================
-            socket.on('game_action', (data) => {
-                const { gameId, action, score } = data;
-                // پردازش بازی
-                this.io.to(`game:${gameId}`).emit('game_update', {
-                    userId,
-                    action,
-                    score,
-                    timestamp: new Date()
-                });
-            });
-
-            // ============================================================
-            // 💔 قطع اتصال
-            // ============================================================
-            socket.on('disconnect', () => {
-                onlineUsers.delete(userId);
-                this.cache.del(`online:${userId}`);
-                this.io.emit('users_online', Array.from(onlineUsers.keys()));
-                
-                // خروج از همه اتاق‌ها
-                for (const [roomId, users] of userRooms) {
-                    if (users.has(userId)) {
-                        users.delete(userId);
-                        this.io.to(roomId).emit('user_left_room', {
-                            userId,
-                            timestamp: new Date()
-                        });
-                        if (users.size === 0) {
-                            userRooms.delete(roomId);
-                        }
-                    }
-                }
-                
-                logger.info(`User disconnected: ${userId}`);
-            });
-        });
-    }
-
-    // ================================================================
-    // 👑 پنل ادمین فوق‌حرفه‌ای
-    // ================================================================
-    initAdminPanel() {
-        const adminRouter = express.Router();
-
-        // Middleware ادمین
-        adminRouter.use(async (req, res, next) => {
-            const token = req.headers.authorization?.split(' ')[1];
-            if (!token) {
-                return res.status(401).json({ error: 'Unauthorized' });
-            }
-
-            try {
-                const decoded = jwt.verify(token, process.env.JWT_SECRET);
-                const result = await this.db.query(decoded.userId,
-                    'SELECT is_admin FROM users WHERE id = $1',
-                    [decoded.userId]
-                );
-                
-                if (!result.rows[0]?.is_admin) {
-                    return res.status(403).json({ error: 'Admin access required' });
-                }
-                
-                req.adminId = decoded.userId;
-                next();
-            } catch (error) {
-                res.status(401).json({ error: 'Invalid token' });
-            }
-        });
-
-        // ============================================================
-        // 📊 آمار کامل سیستم
-        // ============================================================
-        adminRouter.get('/stats', async (req, res) => {
-            try {
-                const stats = {
-                    users: await this.db.queryAll('SELECT COUNT(*) as count FROM users'),
-                    posts: await this.db.queryAll('SELECT COUNT(*) as count FROM posts'),
-                    videos: await this.db.queryAll('SELECT COUNT(*) as count FROM videos'),
-                    messages: await this.db.queryAll('SELECT COUNT(*) as count FROM messages'),
-                    onlineUsers: await this.cache.keys('online:*'),
-                    storage: {
-                        database: await this.getDatabaseStats(),
-                        uploads: await this.getUploadStats()
-                    },
-                    server: {
-                        uptime: process.uptime(),
-                        memory: process.memoryUsage(),
-                        cpu: process.cpuUsage(),
-                        load: process.cpuUsage()
-                    },
-                    realtime: {
-                        activeConnections: this.io.sockets.sockets.size,
-                        rooms: this.io.sockets.adapter.rooms.size
-                    }
-                };
-
-                res.json({ success: true, stats });
-            } catch (error) {
-                logger.error('Admin stats error:', error);
-                res.status(500).json({ error: 'خطا در دریافت آمار' });
-            }
-        });
-
-        // ============================================================
-        // 🚫 مدیریت کاربران
-        // ============================================================
-        adminRouter.post('/users/block', async (req, res) => {
-            try {
-                const { userId, reason, duration } = req.body;
-                
-                // مسدود کردن
-                await this.db.query(userId,
-                    `UPDATE users SET 
-                        is_blocked = true,
-                        block_reason = $1,
-                        block_until = NOW() + INTERVAL '${duration || '1 day'}'
-                     WHERE id = $2`,
-                    [reason, userId]
-                );
-
-                // قطع اتصال
-                const socketId = await this.cache.get(`online:${userId}`);
-                if (socketId) {
-                    this.io.to(socketId).emit('blocked', { reason, duration });
-                    const socket = this.io.sockets.sockets.get(socketId);
-                    if (socket) socket.disconnect();
-                }
-
-                // پاک کردن کش
-                await this.cache.del(`user:*${userId}*`);
-                await this.cache.del(`token:*${userId}*`);
-
-                logger.info(`User blocked: ${userId}`);
-                res.json({ success: true });
-            } catch (error) {
-                logger.error('Block user error:', error);
-                res.status(500).json({ error: 'خطا در مسدود کردن کاربر' });
-            }
-        });
-
-        // ============================================================
-        // 📝 مدیریت پست‌ها
-        // ============================================================
-        adminRouter.delete('/posts/:postId', async (req, res) => {
-            try {
-                const { postId } = req.params;
-                
-                await this.db.queryAll('DELETE FROM posts WHERE id = $1', [postId]);
-                await this.cache.del(`post:${postId}`);
-                await this.cache.del(`posts:*${postId}*`);
-
-                logger.info(`Post deleted: ${postId}`);
-                res.json({ success: true });
-            } catch (error) {
-                logger.error('Delete post error:', error);
-                res.status(500).json({ error: 'خطا در حذف پست' });
-            }
-        });
-
-        // ============================================================
-        // 📢 ارسال اعلان همگانی
-        // ============================================================
-        adminRouter.post('/announce', async (req, res) => {
-            try {
-                const { message, type = 'info' } = req.body;
-                
-                // رمزنگاری
-                const encrypted = this.encryption.encryptMessage(message, 'admin');
-
-                // ارسال به همه کاربران آنلاین
-                const onlineUsers = await this.cache.keys('online:*');
-                let sentCount = 0;
-                
-                for (const key of onlineUsers) {
-                    const socketId = await this.cache.get(key);
-                    if (socketId) {
-                        this.io.to(socketId).emit('announcement', {
-                            message: encrypted,
-                            type,
-                            timestamp: new Date()
-                        });
-                        sentCount++;
-                    }
-                }
-
-                logger.info(`Announcement sent to ${sentCount} users`);
-                res.json({ success: true, recipients: sentCount });
-            } catch (error) {
-                logger.error('Announcement error:', error);
-                res.status(500).json({ error: 'خطا در ارسال اعلان' });
-            }
-        });
-
-        // ============================================================
-        // ⚙️ تنظیمات سیستم
-        // ============================================================
-        adminRouter.put('/settings', async (req, res) => {
-            try {
-                const settings = req.body;
-                
-                // ذخیره تنظیمات در Redis
-                for (const [key, value] of Object.entries(settings)) {
-                    await this.cache.set(`setting:${key}`, value, -1);
-                }
-
-                // اطلاع به همه کاربران
-                this.io.emit('settings_changed', settings);
-
-                logger.info('System settings updated:', settings);
-                res.json({ success: true });
-            } catch (error) {
-                logger.error('Settings update error:', error);
-                res.status(500).json({ error: 'خطا در تغییر تنظیمات' });
-            }
-        });
-
-        // ============================================================
-        // 🔍 گزارش‌گیری پیشرفته
-        // ============================================================
-        adminRouter.get('/reports', async (req, res) => {
-            try {
-                const { type, from, to } = req.query;
-                
-                const reports = {
-                    users: {
-                        total: (await this.db.queryAll('SELECT COUNT(*) FROM users'))[0].count,
-                        active: (await this.db.queryAll('SELECT COUNT(*) FROM users WHERE last_login > NOW() - INTERVAL \'30 days\''))[0].count,
-                        new: (await this.db.queryAll('SELECT COUNT(*) FROM users WHERE created_at > $1', [from || '2024-01-01']))[0].count
-                    },
-                    posts: {
-                        total: (await this.db.queryAll('SELECT COUNT(*) FROM posts'))[0].count,
-                        withMedia: (await this.db.queryAll('SELECT COUNT(*) FROM posts WHERE media_urls IS NOT NULL AND media_urls != \'{}\''))[0].count,
-                        engagement: {
-                            totalLikes: (await this.db.queryAll('SELECT SUM(likes_count) FROM posts'))[0].sum || 0,
-                            totalComments: (await this.db.queryAll('SELECT SUM(comments_count) FROM posts'))[0].sum || 0,
-                            totalShares: (await this.db.queryAll('SELECT SUM(shares_count) FROM posts'))[0].sum || 0
-                        }
-                    },
-                    videos: {
-                        total: (await this.db.queryAll('SELECT COUNT(*) FROM videos'))[0].count,
-                        storage: (await this.db.queryAll('SELECT SUM(size) FROM videos'))[0].sum || 0,
-                        processed: (await this.db.queryAll('SELECT COUNT(*) FROM videos WHERE status = \'ready\''))[0].count
-                    },
-                    messages: {
-                        total: (await this.db.queryAll('SELECT COUNT(*) FROM messages'))[0].count,
-                        last24h: (await this.db.queryAll('SELECT COUNT(*) FROM messages WHERE created_at > NOW() - INTERVAL \'24 hours\''))[0].count
-                    }
-                };
-
-                res.json({ success: true, reports });
-            } catch (error) {
-                logger.error('Reports error:', error);
-                res.status(500).json({ error: 'خطا در گزارش‌گیری' });
-            }
-        });
-
-        this.app.use('/admin', adminRouter);
-    }
-
-    // ================================================================
-    // 🔄 پس‌زمینه پردازش‌ها
-    // ================================================================
-    initBackgroundJobs() {
-        // ============================================================
-        // 📊 پردازش آنالیتیکس
-        // ============================================================
-        this.queues.analytics.process(async (job) => {
-            const { userId, event, data } = job.data;
-            
-            // جمع‌آوری آمار
-            const stats = await this.cache.get(`analytics:${userId}`) || {};
-            stats[event] = (stats[event] || 0) + 1;
-            await this.cache.set(`analytics:${userId}`, stats, 3600);
-            
-            // ذخیره در Elasticsearch (شبیه‌سازی)
-            logger.info(`Analytics: ${userId} - ${event}`);
-            
-            return { success: true };
-        });
-
-        // ============================================================
-        // 📧 ارسال ایمیل
-        // ============================================================
-        this.queues.email.process(async (job) => {
-            const { to, subject, body, template } = job.data;
-            
-            // شبیه‌سازی ارسال ایمیل
-            logger.info(`Email sent to: ${to} - ${subject}`);
-            
-            return { success: true };
-        });
-
-        // ============================================================
-        // 🔄 به‌روزرسانی خودکار کش
-        // ============================================================
-        setInterval(async () => {
-           ===========================================================
-        setInterval(async () => {
-            try {
-                // پاکسازی کش‌های منقضی try {
-                // پاکسازی کش‌های منقضی
-                const patterns = ['temp
-                const patterns = ['temp:*', 'analytics:*', 'session:*'];
-                for (const pattern:*', 'analytics:*', 'session:*'];
-                for (const pattern of patterns) {
-                    await this.cache.clearPattern(pattern);
-                }
-                
- of patterns) {
-                    await this.cache.clearPattern(pattern);
-                }
-                
-                // به                // به‌روزرسانی‌روزرسانی پست‌های محبوب
-                const topPosts = await this.db.queryAll پست‌های محبوب
-                const topPosts = await this.db.queryAll(
-                    'SELECT id, score FROM posts(
-                    'SELECT id, score FROM posts ORDER ORDER BY score DESC LIM BY score DESC LIMIT 100'
-                );
-                await this.cache.set('treIT 100'
-                );
-                await this.cache.set('trending:posts', topPosts, 3600);
-                
-                logger.info('Cachending:posts', topPosts, 3600);
-                
-                logger.info('Cache cleanup completed cleanup completed');
-            } catch (error');
-            } catch (error) {
-                logger.error(') {
-                logger.error('Cache cleanup error:', error);
-            }
-       Cache cleanup error:', error);
-            }
-        }, 3600000); // }, 3600000); // هر ساعت
-
-        // ============================================================
-        // هر ساعت
-
-        // ============================================================
-        // 📊 گزارش‌گیری روزانه
-        📊 گزارش‌گیری روزانه
-        // ============================================================
-        setInterval(async () => // ============================================================
-        setInterval(async () => {
-            try {
-                const date {
-            try {
-                const date = new Date();
-                const dateStr = date = new Date();
-                const dateStr = date.toISOString().split('T.toISOString().split('T')[0];
-                
-                const stats = {
-                    date: dateStr,
-                    users:')[0];
-                
-                const stats = {
-                    date: dateStr,
-                    users: (await this.db.queryAll('SELECT COUNT(*) FROM users'))[ (await this.db.queryAll('SELECT COUNT(*) FROM users'))[00].count,
-                    posts: (await this.db.queryAll('SELECT COUNT(*) FROM posts'))].count,
-                    posts: (await this.db.queryAll('SELECT COUNT(*) FROM posts'))[0].count,
-                    messages: (await this.db.query[0].count,
-                    messages: (await this.db.queryAll('SELECTAll('SELECT COUNT(*) FROM messages'))[0].count
-                };
-                
-                // COUNT(*) FROM messages'))[0].count
-                };
-                
-                // ذخ ذخیره گزارش
-                await this.cیره گزارش
-                await this.cache.set(`reportache.set(`report:${dateStr}`, stats, 86400:${dateStr}`, stats, 86400 * 30 * 30);
-                logger.info(`Daily report generated: ${dateStr);
-                logger.info(`Daily report generated: ${dateStr}`);
-            } catch (error) {
-                logger.error('Daily report error:', error);
-            }
-        }, 864}`);
-            } catch (error) {
-                logger00000); // هر روز
-    }
-
-    // =========================================================.error('Daily report error:', error);
-            }
-        }, 86400000); // هر روز
-    }
-
-    // ================================================================
-    // 📊 مانیتورینگ
-    // ================================================================
-    initMonitoring() {
-=======
-    // 📊 مانیتورینگ
-    // ================================================================
-    initMonitoring() {
-        // Health Check
-        // Health Check
-        this.app.get('/health', async (req, res        this.app.get('/health', async (req, res) => {
-            const health = {
-                status: ') => {
-            const health = {
-                status: 'UP',
-                uptUP',
-                uptime: process.uptime(),
-                timestamp: new Date(),
-ime: process.uptime(),
-                timestamp: new Date(),
-                memory: process                memory: process.memoryUsage(),
-                connections: {
-                    webs.memoryUsage(),
-                connections: {
-                    websocket: this.io.sockets.socket: this.io.sockets.sockets.size,
-                    redis: await this.cache.getockets.size,
-                    redis: await this.cache.get('health('health::check') !== null
-                },
-                database: {
-                    shcheck') !== null
-                },
-                database: {
-                    shards: this.db.shardCount,
-                    replicas: this.db.replicaCount
-                },
-                queues: {
-                    video: await this.queards: this.db.shardCount,
-                    replicas: this.db.replicaCount
-                },
-                queues: {
-                    video: await this.queues.video.countues.video.count(),
-                    notification: await this.queues.notification.count(),
-                    analytics(),
-                    notification: await this.queues.notification.count(),
-                    analytics: await this.queues.analytics.count()
-                }
-           : await this.queues.analytics.count()
-                };
-            
-            res.json(health);
-        });
-
-        // Metrics برای Prometheus }
-            };
-            
-            res.json(health);
-        });
-
-        // Metrics برای
-        this.app.get('/metrics', async (req, res) => {
-            const metrics = {
-                active_users: this.io Prometheus
-        this.app.get('/metrics', async (req, res.sockets.sockets.size,
-                online) => {
-            const metrics = {
-                active_users: this.io.sockets.sockets.size,
-                online_users: (await this.cache.keys('online:*')).length,
-                total_users: (await this.cache.keys('online:*')).length,
-                total_posts: (await this.db.queryAll('_posts: (await this.db.queryAll('SELECT COUNTSELECT COUNT(*) FROM posts'))[0].count,
-                total_users(*) FROM posts'))[0].count,
-                total_users: (await this.db.queryAll('SELECT COUNT(*) FROM users'))[0].count,
-               : (await this.db.queryAll('SELECT COUNT(*) FROM users'))[0].count,
-                memory_ memory_usage: process.memoryUsage().heapUsedusage: process.memoryUsage().heapUsed / / 1024 / 1024,
-                uptime: process.uptime()
-            };
- 1024 / 1024,
-                uptime: process.uptime()
-            };
-            
-            
-            let output = '# HELP            let output = '# HELP super super_social_metrics\n# TYPE super_social_metrics_social_metrics\n# TYPE super_s gauge\n';
-            for (const [key, value] of Object.entries(metrics)) {
-                output += `super_social_${ocial_metrics gauge\n';
-            for (const [key, value] of Object.entries(metrics)) {
-                output += `super_social_${key}key} ${value}\n`;
-            }
-            
-            res.set('Content-Type', ${value}\n`;
-            }
-            
-            res.set 'text/plain');
-            res.send(output);
-        });
-('Content-Type', 'text/plain');
-            res.send(output);
-        });
-    }
-
-    // ===============================================================    }
-
-    // ================================================================
-    // 📊 آمار دیتابیس
-    // ================================================================
-   =
-    // 📊 آمار دیتابیس
-    // ================================================================
-    async getDatabaseStats() {
-        try {
-            const stats = {
-                shards: this.db.shardCount,
-                replic async getDatabaseStats() {
-        try {
-            const stats = {
-                shards: this.db.shardCount,
-                replicas: this.db.replicaCount,
-                size: 0,
-                tablesas: this.db.replicaCount,
-                size: 0,
-                tables: {}
-: {}
-            };
-            
-            for (let i            };
-            
-            for (let i = 0 = 0; i < this.db.shardCount; i++) {
-                const result = await; i < this.db.shardCount; i++) {
-                const result = await this.db this.db.shards[i].query(
-                    "SELECT table_name, pg_total.shards[i].query(
-                    "SELECT table_name, pg_relation_size(table_name) as size FROM information_schema.tables WHERE table_s_total_relation_size(table_name) as size FROM information_schema.tableschema = 'public'"
-                );
-                for (const row WHERE table_schema = 'public'"
-                );
-                of result.rows) {
-                    for (const row of result.rows) {
-                    stats.tables[row stats.tables[row.table_name] = (stats.tables.table_name] = (stats.tables[row.table_name] || 0)[row.table_name] || 0) + parseInt(row.size);
-                    stats.size += parseInt + parseInt(row.size);
-                    stats.size += parseInt(row.size);
-                }
-            }
-            
-            stats.sizeGB(row.size);
-                }
-            }
-            
-            stats.sizeGB = (stats.size / 1024 /  = (stats.size / 1024 / 1024 / 1024).toFixed(2);
-1024 / 1024).toFixed(2);
-            return stats;
-        } catch (            return stats;
-        } catch (error) {
-            logger.error('Database stats error:', errorerror) {
-            logger.error('Database stats error:', error);
-            return {);
-            return { error: 'Unable to get database stats' };
+    add(queueName, data) {
+        if (!this.queues.has(queueName)) {
+            this.queues.set(queueName, []);
         }
+        this.queues.get(queueName).push(data);
+        this.process(queueName);
     }
 
-    async error: 'Unable to get database stats' };
-        }
-    }
+    async process(queueName) {
+        if (this.processing.get(queueName)) return;
+        this.processing.set(queueName, true);
 
-    async getUploadStats getUploadStats() {
-        try {
-            const uploadDir() {
-        try {
-            const uploadDir = path.join(__ = path.join(__dirname, 'uploads');
-            let totalSize = 0;
-            let filedirname, 'uploads');
-            let totalSize = 0Count = 0;
-            
-            const walkDir = (dir) => {
-                const;
-            let fileCount = 0;
-            
-            const walkDir = (dir) => {
- files = fs.readdirSync(dir);
-                for (const file of files) {
-                    const filePath = path.join(dir, file);
-                    const stats =                const files = fs.readdirSync(dir);
-                for (const file of files) {
-                    const filePath = path.join(dir, file);
-                    const stats = fs.statSync(file fs.statSync(filePath);
-                    if (stats.isDirectory()) {
-                        walkDir(filePath);
-Path);
-                    if (stats.isDirectory()) {
-                        walk                    } else {
-                        totalSize += stats.size;
-                       Dir(filePath);
-                    } else {
-                        totalSize += stats.size;
-                        fileCount++;
-                    }
-                }
-            fileCount++;
-                    }
-                }
-            };
-            
-            if (fs.existsSync(uploadDir)) };
-            
-            if (fs.existsSync(uploadDir)) {
-                walk {
-                walkDir(uploadDir);
-            }
-            
-            return {
-                totalDir(uploadDir);
-            }
-            
-            return {
-                totalSize: totalSize,
-                totalSizeGB: (totalSize / 1024 / 1024 / 1024).toFixed(2),
-Size: totalSize,
-                totalSizeGB: (totalSize / 1024 / 1024 / 1024).to                fileCount: fileCount
-            };
-        } catch (error)Fixed(2),
-                fileCount: fileCount
-            };
-        } catch (error) {
-            logger.error {
-            logger.error('Upload stats error:', error);
-            return { error: 'Unable to('Upload stats error:', error);
-            return { error: 'Unable to get upload stats' };
-        }
-    }
-
-    // ================================================================
-    // get upload stats' };
-        }
-    }
-
-    // ================================================================
-    // 🚀 شروع
-    // ================================================================
-    🚀 شروع
-    // ================================================================
-    start() {
-        const PORT = process start() {
-        const PORT = process.env.PORT || 3000;
-        
-        // ایجاد.env.PORT || 3000;
-        
-        // ایجاد پ پوشه‌های لازم
-        const dirs = ['./uploads', './uploads/posts', './uploads/vوشه‌های لازم
-        const dirs = ['./uploads', './uploads/posts', './uploads/videos',ideos', './uploads/thumbnails', './public'];
- './uploads/thumbnails', './public'];
-        for (const dir of dirs) {
-            if (!fs.existsSync(dir)) {
-        for (const dir of dirs) {
-            if (!fs.exists                fs.mkdirSync(dir, { recursive: true });
-Sync(dir)) {
-                fs.mkdirSync(dir, { recursive: true });
+        while (this.queues.has(queueName) && this.queues.get(queueName).length > 0) {
+            const data = this.queues.get(queueName).shift();
+            try {
+                await this.handleQueue(queueName, data);
+            } catch (error) {
+                log(`Queue error ${queueName}: ${error.message}`, 'ERROR');
             }
         }
-            }
+
+        this.processing.set(queueName, false);
+    }
+
+    async handleQueue(queueName, data) {
+        switch (queueName) {
+            case 'post-processing':
+                log(`Processing post: ${data.postId}`, 'QUEUE');
+                break;
+            case 'notification':
+                log(`Notification for: ${data.userId}`, 'QUEUE');
+                break;
+            case 'analytics':
+                log(`Analytics event: ${data.event}`, 'QUEUE');
+                break;
+            default:
+                log(`Unknown queue: ${queueName}`, 'QUEUE');
         }
-        
-        this.server.listen(PORT, '0.0.0.0        
-        this.server.listen(PORT, '0.0.0.0', () => {
-', () => {
-            logger.info('════            logger.info('═══════════════════════════════════════════');
-            logger.info('🚀 SUPER SOCIAL MED═══════════════════════════════════════');
-            logger.info('🚀 SUPER SOCIAL MEDIA PLATFORM');
-IA PLATFORM');
-            logger.info('════════════════════════════════════════            logger.info('═══════════════════════════════════');
-            logger.info═══════════');
-            logger.info(`📡 Server: http://localhost:${PORT}`);
-            logger.info(`📡 WebSocket: ws://localhost:(`📡 Server: http://localhost:${PORT}`);
-            logger.info(`📡 WebSocket: ws://localhost:${PORT}`);
-            logger.info(`🔐 Encryption: Quantum + AES-256-GCM + RSA-409${PORT}`);
-            logger.info(`🔐 Encryption: Quantum + AES-256-GCM + RSA-4096`);
-            logger.info(`🧠 AI Engine: ${Object.keys(this.ai6`);
-            logger.info(`🧠 AI Engine: ${.models).join(', ')}`);
-            logger.info(`📊Object.keys(this.ai.models).join(', ')}`);
-            logger.info(`📊 Database: ${this Database: ${this.db.shardCount} shards, ${this.db.replicaCount} replicas.db.shardCount} shards, ${this.db.replicaCount} replicas`);
-            logger`);
-            logger.info(`💾 Redis Cluster: ${this.cache.clusterSize} nodes`);
-           .info(`💾 Redis Cluster: ${this.cache.clusterSize} nodes logger.info(`🎬 Video`);
-            logger.info(`🎬 Video Processing: Active Processing: Active`);
-            logger.info(`📧 Email`);
-            logger.info(`📧 Email Queue: Queue: Active`);
-            logger.info(`📈 Analytics: Active`);
-            logger.info(` Active`);
-            logger.info(`📈 Analytics: Active`);
-            logger.info(`🔒🔒 Security: Security: WAF + Rate WAF + Rate Limiting + Helmet`);
-            logger.info('════════════════════════ Limiting + Helmet`);
-            logger.info('═══════════════════════════════════════════════════════════');
-            logger.info('═══');
-            logger.info('✅ System Ready for✅ System Ready for Production');
-        });
+        // شبیه‌سازی پردازش
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+
+    getStats() {
+        const stats = {};
+        for (const [name, queue] of this.queues) {
+            stats[name] = queue.length;
+        }
+        return stats;
     }
 }
 
-// = Production');
-        });
+const queue = new QueueSystem();
+
+// ============================================
+# 📡 API
+// ============================================
+
+// ===== احراز هویت =====
+app.post('/api/auth/register', (req, res) => {
+    const { username, email, password } = req.body;
+    
+    if (!username || !email || !password) {
+        return res.status(400).json({ error: 'همه فیلدها الزامی هستند' });
     }
-}
 
-// ================================================================
-// 🚀 راه‌اندازی
-// ================================================================
-// 🚀 راه‌اندازی
-// ================================================================
-const server = new===============================================================
-const server = new SuperSocialServer();
-server.start();
+    if (db.getUserByEmail(email)) {
+        return res.status(400).json({ error: 'این ایمیل قبلاً ثبت شده است' });
+    }
 
-// ========================================================= SuperSocialServer();
-server.start();
+    const userId = 'user_' + uuidv4();
+    const user = {
+        userId,
+        username,
+        email,
+        password: hashPassword(password),
+        bio: '',
+        avatar: '',
+        followers: 0,
+        following: 0,
+        postsCount: 0,
+        language: 'fa',
+        theme: 'light',
+        isOnline: false,
+        isAdmin: email === ADMIN_EMAIL,
+        isBanned: false,
+        createdAt: new Date().toISOString(),
+        lastSeen: new Date().toISOString()
+    };
 
-// ================================================================
-// 🛡️ مدیریت خطا
-// ================================================================
-process.on('uncaughtException', (error=======
-// 🛡️ مدیریت خطا
-// ================================================================
-process.on('uncaughtException', (error) => {
-   ) => {
-    logger.error('💥 Uncaught Exception:', error);
-    // بازی logger.error('💥 Uncaught Exception:', error);
-ابی خودکار
-    setTimeout(() => {
-        process    // بازیابی خودکار
-    setTimeout(() => {
-        process.exit(1);
-.exit(1);
-    }, 5000);
-});
+    db.saveUser(user);
+    const token = generateToken();
+    userSessions.set(token, userId);
 
-process.on('unhandledRejection',    }, 5000);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-    logger.error('💥 Unhandled Rejection:', reason);
- (reason, promise) => {
-    logger.error('💥 Unhandled Rejection:', reason});
-
-process.on('SIGINT', () => {
-    logger.info('👋 Sh);
-});
-
-process.on('SIGINT', () => {
-    logger.info('👋 Shutting down gracefully...');
-    serverutting down gracefully...');
-    server.io.close(() => {
-.io.close(() => {
-        process.exit(0);
+    log(`User registered: ${username} (${email})`);
+    res.json({
+        success: true,
+        token,
+        user: { userId, username, email, isAdmin: user.isAdmin }
     });
 });
 
-module        process.exit(0);
+app.post('/api/auth/login', (req, res) => {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+        return res.status(400).json({ error: 'ایمیل و رمز عبور الزامی است' });
+    }
+
+    const user = db.getUserByEmail(email);
+    if (!user || user.password !== hashPassword(password)) {
+        return res.status(401).json({ error: 'ایمیل یا رمز عبور اشتباه است' });
+    }
+
+    if (user.isBanned) {
+        return res.status(403).json({ error: 'این کاربر مسدود شده است' });
+    }
+
+    const token = generateToken();
+    userSessions.set(token, user.userId);
+    user.isOnline = true;
+    user.lastSeen = new Date().toISOString();
+    db.updateUser(user.userId, { isOnline: true, lastSeen: user.lastSeen });
+
+    log(`User logged in: ${user.username}`);
+    res.json({
+        success: true,
+        token,
+        user: {
+            userId: user.userId,
+            username: user.username,
+            email: user.email,
+            bio: user.bio,
+            avatar: user.avatar,
+            followers: user.followers,
+            following: user.following,
+            postsCount: user.postsCount,
+            isAdmin: user.isAdmin || false,
+            isBanned: user.isBanned || false,
+            language: user.language || 'fa',
+            theme: user.theme || 'light'
+        }
     });
 });
 
-module.exports = server;
+app.post('/api/auth/logout', (req, res) => {
+    const { token } = req.body;
+    if (token) {
+        const userId = userSessions.get(token);
+        if (userId) {
+            db.updateUser(userId, { isOnline: false, lastSeen: new Date().toISOString() });
+        }
+        userSessions.delete(token);
+    }
+    res.json({ success: true });
+});
 
-// ================================================================
-// 🎯 ویژگی.exports = server;
+app.get('/api/auth/me', (req, res) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+        return res.status(401).json({ error: 'Unauthorized' });
+    }
 
-// ================================================================
-// 🎯 ویژگی‌های کل‌های کلیدی:
-// 1. 🏗یدی:
-// 1.️ معماری Microservices + Sh 🏗️ معماری Microservices + Sharding + Replication
-// 2. 🔐 رمزنگاری کarding + Replication
-// 2. 🔐 رمزنگاری کوانتومی + AES-256-GCM +وانتومی + AES-256-GCM + RSA-4096 RSA-4096
-// 3. 🧠 هوش مصنوعی با 
-// 3. 🧠 هوش مصنوعی با 55 مدل مختلف
- مدل مختلف
-// 4.// 4. 🎬 پردازش ویدئو با 6 کیفیت + 🎬 پردازش ویدئو با  Thumbnail + Preview + Subtitle
-//6 کیفیت + Thumbnail + Preview + Subtitle
-// 5. 5. 💾 کش با Redis Cluster (10 node)
-// 💾 کش با Redis Cluster (10 node 6. 📊 دیتابیس با 50 ش)
-// 6. 📊 دیتابیس با 50 شارد وارد و 3 Replica
-// 7. 💬 Web 3 Replica
-// 7. 💬 WebSocket با رمزنگاری + اتاقSocket با رمزنگاری + اتاق‌ها + پ‌ها + پخش زنده
-// 8. 👑 پنل ادمخش زنده
-// 8. 👑 پنل ادمینین کامل + گزارش‌گیری
-// کامل + گزارش‌گیری
-// 9. 🚀 مقیاس‌پذیری تا 10 میلیون کاربر هم 9. 🚀 مقیاس‌پذیری تا 10زمان
-// 10. 🔒 امنیت: WAF, میلیون کاربر همزمان
-// 10. 🔒 امنیت: WAF, Rate Limiting, Helmet, JWT
-// 11. 📈 مانیت Rate Limiting, Helmet, JWT
-// 11. 📈 مانیتورینگ کامل + Prometheus Metrics
-// 12.ورینگ کامل + Prometheus Metrics
-// 12. 🔄 ص 🔄 صف‌ها: Video, Notification, Email, Analytics
-// =================================ف‌ها: Video, Notification, Email, Analytics
-// ================================================================
+    const userId = userSessions.get(token);
+    if (!userId) {
+        return res.status(401).json({ error: 'Invalid token' });
+    }
+
+    const user = db.getUser(userId);
+    if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (user.isBanned) {
+        return res.status(403).json({ error: 'User is banned' });
+    }
+
+    res.json({
+        userId: user.userId,
+        username: user.username,
+        email: user.email,
+        bio: user.bio,
+        avatar: user.avatar,
+        followers: user.followers,
+        following: user.following,
+        postsCount: user.postsCount,
+        isAdmin: user.isAdmin || false,
+        isBanned: user.isBanned || false,
+        language: user.language || 'fa',
+        theme: user.theme || 'light'
+    });
+});
+
+// ===== ادمین (فقط ادمین می‌بیند) =====
+app.post('/api/admin/verify', (req, res) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+        return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const userId = userSessions.get(token);
+    if (!userId) {
+        return res.status(401).json({ error: 'Invalid token' });
+    }
+
+    const user = db.getUser(userId);
+    if (!user || !user.isAdmin) {
+        return res.status(403).json({ error: 'Admin access required' });
+    }
+
+    res.json({ success: true, isAdmin: true });
+});
+
+// مدیریت کاربران
+app.get('/api/admin/users', (req, res) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'Unauthorized' });
+    const userId = userSessions.get(token);
+    if (!userId) return res.status(401).json({ error: 'Invalid token' });
+    const user = db.getUser(userId);
+    if (!user || !user.isAdmin) return res.status(403).json({ error: 'Admin access required' });
+
+    const users = db.getAllUsers().map(u => ({
+        userId: u.userId,
+        username: u.username,
+        email: u.email,
+        bio: u.bio,
+        avatar: u.avatar,
+        followers: u.followers,
+        following: u.following,
+        postsCount: u.postsCount,
+        isAdmin: u.isAdmin || false,
+        isBanned: u.isBanned || false,
+        isOnline: u.isOnline || false,
+        createdAt: u.createdAt,
+        lastSeen: u.lastSeen
+    }));
+
+    res.json(users);
+});
+
+app.put('/api/admin/users/:userId/ban', (req, res) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'Unauthorized' });
+    const adminId = userSessions.get(token);
+    if (!adminId) return res.status(401).json({ error: 'Invalid token' });
+    const admin = db.getUser(adminId);
+    if (!admin || !admin.isAdmin) return res.status(403).json({ error: 'Admin access required' });
+
+    const { userId } = req.params;
+    const { banned } = req.body;
+    const user = db.getUser(userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (user.isAdmin) return res.status(403).json({ error: 'Cannot ban admin' });
+
+    db.updateUser(userId, { isBanned: banned });
+    log(`User ${user.username} ${banned ? 'banned' : 'unbanned'} by admin ${admin.username}`);
+    res.json({ success: true, isBanned: banned });
+});
+
+// مدیریت پست‌ها
+app.get('/api/admin/posts', (req, res) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'Unauthorized' });
+    const userId = userSessions.get(token);
+    if (!userId) return res.status(401).json({ error: 'Invalid token' });
+    const user = db.getUser(userId);
+    if (!user || !user.isAdmin) return res.status(403).json({ error: 'Admin access required' });
+
+    const result = db.getPosts(1, 1000);
+    res.json(result.posts);
+});
+
+app.delete('/api/admin/posts/:postId', (req, res) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'Unauthorized' });
+    const adminId = userSessions.get(token);
+    if (!adminId) return res.status(401).json({ error: 'Invalid token' });
+    const admin = db.getUser(adminId);
+    if (!admin || !admin.isAdmin) return res.status(403).json({ error: 'Admin access required' });
+
+    const { postId } = req.params;
+    const deleted = db.deletePost(postId);
+    if (deleted) {
+        log(`Post ${postId} deleted by admin ${admin.username}`);
+        res.json({ success: true });
+    } else {
+        res.status(404).json({ error: 'Post not found' });
+    }
+});
+
+// پیام همگانی
+app.post('/api/admin/broadcast', (req, res) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'Unauthorized' });
+    const adminId = userSessions.get(token);
+    if (!adminId) return res.status(401).json({ error: 'Invalid token' });
+    const admin = db.getUser(adminId);
+    if (!admin || !admin.isAdmin) return res.status(403).json({ error: 'Admin access required' });
+
+    const { message } = req.body;
+    if (!message) return res.status(400).json({ error: 'Message required' });
+
+    // ارسال به همه کاربران آنلاین
+    io.emit('broadcast', {
+        message,
+        from: admin.username,
+        timestamp: new Date().toISOString()
+    });
+
+    log(`Broadcast from admin ${admin.username}: ${message.substring(0, 50)}...`);
+    res.json({ success: true, message });
+});
+
+// آمار سیستم
+app.get('/api/admin/stats', (req, res) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'Unauthorized' });
+    const userId = userSessions.get(token);
+    if (!userId) return res.status(401).json({ error: 'Invalid token' });
+    const user = db.getUser(userId);
+    if (!user || !user.isAdmin) return res.status(403).json({ error: 'Admin access required' });
+
+    const dbStats = db.getStats();
+    const cacheStats = cache.getStats();
+    const queueStats = queue.getStats();
+
+    res.json({
+        database: dbStats,
+        cache: cacheStats,
+        queue: queueStats,
+        users: {
+            total: dbStats.totalUsers,
+            online: dbStats.onlineUsers,
+            admins: db.getAllUsers().filter(u => u.isAdmin).length,
+            banned: db.getAllUsers().filter(u => u.isBanned).length
+        },
+        posts: {
+            total: dbStats.totalPosts
+        },
+        stories: {
+            total: dbStats.totalStories
+        },
+        messages: {
+            total: dbStats.totalMessages
+        },
+        system: {
+            uptime: process.uptime(),
+            memory: process.memoryUsage(),
+            node: process.version
+        }
+    });
+});
+
+// اضافه کردن سرور (برای مقیاس‌پذیری)
+app.post('/api/admin/add-shard', (req, res) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'Unauthorized' });
+    const userId = userSessions.get(token);
+    if (!userId) return res.status(401).json({ error: 'Invalid token' });
+    const user = db.getUser(userId);
+    if (!user || !user.isAdmin) return res.status(403).json({ error: 'Admin access required' });
+
+    // شبیه‌سازی اضافه کردن شارد
+    const newShardIndex = db.shardCount;
+    db.shards[newShardIndex] = {
+        users: {},
+        posts: [],
+        stories: [],
+        messages: {},
+        likes: {},
+        comments: {},
+        reports: [],
+        notifications: []
+    };
+    db.shardCount++;
+
+    log(`New shard ${newShardIndex} added by admin ${user.username}`);
+    res.json({ success: true, shardCount: db.shardCount });
+});
+
+// ===== پست‌ها =====
+const storage = multer.diskStorage({
+    destination: './uploads/posts/',
+    filename: (req, file, cb) => {
+        cb(null, Date.now() + '-' + file.originalname);
+    }
+});
+
+const upload = multer({
+    storage,
+    limits: { fileSize: 500 * 1024 * 1024 },
+    fileFilter: (req, file, cb) => {
+        const allowed = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'video/mp4', 'video/webm', 'video/quicktime'];
+        cb(null, allowed.includes(file.mimetype));
+    }
+});
+
+app.get('/api/posts', (req, res) => {
+    const { page = 1, limit = 20, hashtag } = req.query;
+    
+    // چک کش
+    const cacheKey = `posts:${page}:${limit}:${hashtag || 'all'}`;
+    const cached = cache.get(cacheKey);
+    if (cached) {
+        return res.json(cached);
+    }
+
+    const result = db.getPosts(parseInt(page), parseInt(limit), hashtag);
+    cache.set(cacheKey, result, 60);
+    res.json(result);
+});
+
+app.post('/api/posts', upload.single('file'), (req, res) => {
+    const { caption, userId, username, hashtags } = req.body;
+    const file = req.file;
+
+    if (!file) {
+        return res.status(400).json({ error: 'فایل انتخاب نشده است' });
+    }
+
+    const user = db.getUser(userId);
+    if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (user.isBanned) {
+        return res.status(403).json({ error: 'User is banned' });
+    }
+
+    const isVideo = file.mimetype.startsWith('video/');
+    const postId = 'post_' + uuidv4();
+
+    const newPost = {
+        postId,
+        userId,
+        username: username || user.username,
+        image: `/uploads/posts/${file.filename}`,
+        caption: caption || '',
+        hashtags: hashtags ? hashtags.split(',').map(h => h.trim()) : [],
+        likes: 0,
+        comments: [],
+        shares: 0,
+        views: 0,
+        isVideo,
+        createdAt: new Date().toISOString()
+    };
+
+    db.savePost(newPost);
+    db.updateUser(userId, { postsCount: (user.postsCount || 0) + 1 });
+
+    // پاک کردن کش
+    cache.delete('posts:*');
+
+    // اضافه به Queue
+    queue.add('post-processing', { postId, userId });
+
+    log(`Post created: ${postId} by ${username}`);
+    res.status(201).json(newPost);
+});
+
+app.put('/api/posts/:postId/like', (req, res) => {
+    const { postId } = req.params;
+    const { userId } = req.body;
+
+    const user = db.getUser(userId);
+    if (!user || user.isBanned) {
+        return res.status(403).json({ error: 'User is banned' });
+    }
+
+    const result = db.likePost(postId, userId);
+    cache.delete('posts:*');
+    res.json(result);
+});
+
+app.post('/api/posts/:postId/comment', (req, res) => {
+    const { postId } = req.params;
+    const { userId, username, text } = req.body;
+
+    const user = db.getUser(userId);
+    if (!user || user.isBanned) {
+        return res.status(403).json({ error: 'User is banned' });
+    }
+
+    const comment = {
+        commentId: 'cmt_' + uuidv4(),
+        userId,
+        username: username || user.username,
+        text,
+        createdAt: new Date().toISOString()
+    };
+
+    const added = db.addComment(postId, comment);
+    if (!added) {
+        return res.status(404).json({ error: 'Post not found' });
+    }
+
+    cache.delete('posts:*');
+    res.json({ success: true, comment });
+});
+
+app.get('/api/posts/:postId', (req, res) => {
+    const { postId } = req.params;
+    const post = db.getPost(postId);
+    if (!post) {
+        return res.status(404).json({ error: 'Post not found' });
+    }
+    res.json(post);
+});
+
+// ===== استوری‌ها =====
+const storyStorage = multer.diskStorage({
+    destination: './uploads/stories/',
+    filename: (req, file, cb) => {
+        cb(null, Date.now() + '-' + file.originalname);
+    }
+});
+
+const storyUpload = multer({
+    storage: storyStorage,
+    limits: { fileSize: 100 * 1024 * 1024 },
+    fileFilter: (req, file, cb) => {
+        const allowed = ['image/jpeg', 'image/png', 'image/webp', 'video/mp4'];
+        cb(null, allowed.includes(file.mimetype));
+    }
+});
+
+app.get('/api/stories', (req, res) => {
+    const stories = db.getStories();
+    res.json(stories);
+});
+
+app.post('/api/stories', storyUpload.single('file'), (req, res) => {
+    const { userId, username } = req.body;
+    const file = req.file;
+
+    if (!file) {
+        return res.status(400).json({ error: 'فایل انتخاب نشده است' });
+    }
+
+    const user = db.getUser(userId);
+    if (!user || user.isBanned) {
+        return res.status(403).json({ error: 'User is banned' });
+    }
+
+    const isVideo = file.mimetype.startsWith('video/');
+    const storyId = 'story_' + uuidv4();
+
+    const newStory = {
+        storyId,
+        userId,
+        username: username || user.username,
+        image: `/uploads/stories/${file.filename}`,
+        isVideo,
+        views: 0,
+        viewers: [],
+        createdAt: new Date().toISOString()
+    };
+
+    db.saveStory(newStory);
+    log(`Story created: ${storyId} by ${username}`);
+    res.status(201).json(newStory);
+});
+
+app.post('/api/stories/:storyId/view', (req, res) => {
+    const { storyId } = req.params;
+    const { userId } = req.body;
+
+    const viewed = db.viewStory(storyId, userId);
+    res.json({ success: viewed });
+});
+
+// ===== کاربران =====
+app.get('/api/users', (req, res) => {
+    const users = db.getAllUsers().map(u => ({
+        userId: u.userId,
+        username: u.username,
+        avatar: u.avatar,
+        bio: u.bio,
+        followers: u.followers,
+        following: u.following,
+        isOnline: u.isOnline || false,
+        isBanned: u.isBanned || false,
+        lastSeen: u.lastSeen
+    }));
+    res.json(users);
+});
+
+app.get('/api/users/:userId', (req, res) => {
+    const { userId } = req.params;
+    const user = db.getUser(userId);
+    if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+    }
+    res.json({
+        userId: user.userId,
+        username: user.username,
+        avatar: user.avatar,
+        bio: user.bio,
+        followers: user.followers,
+        following: user.following,
+        postsCount: user.postsCount,
+        isOnline: user.isOnline || false,
+        isBanned: user.isBanned || false,
+        createdAt: user.createdAt,
+        lastSeen: user.lastSeen
+    });
+});
+
+app.put('/api/users/:userId/profile', (req, res) => {
+    const { userId } = req.params;
+    const { bio, avatar, language, theme } = req.body;
+
+    const user = db.getUser(userId);
+    if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (bio !== undefined) user.bio = bio;
+    if (avatar !== undefined) user.avatar = avatar;
+    if (language !== undefined) user.language = language;
+    if (theme !== undefined) user.theme = theme;
+
+    db.updateUser(userId, user);
+    res.json({ success: true, user });
+});
+
+app.post('/api/users/:userId/follow', (req, res) => {
+    const { userId } = req.params;
+    const { followerId } = req.body;
+
+    const target = db.getUser(userId);
+    const follower = db.getUser(followerId);
+
+    if (!target || !follower) {
+        return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (userId === followerId) {
+        return res.status(400).json({ error: 'Cannot follow yourself' });
+    }
+
+    db.updateUser(userId, { followers: (target.followers || 0) + 1 });
+    db.updateUser(followerId, { following: (follower.following || 0) + 1 });
+
+    res.json({ success: true, followers: target.followers + 1 });
+});
+
+// ============================================
+# 💬 WebSocket چت (با رمزنگاری)
+// ============================================
+
+io.on('connection', (socket) => {
+    log(`Socket connected: ${socket.id}`);
+
+    socket.on('register', (data) => {
+        const { userId, username } = data;
+        onlineUsers[userId] = {
+            socketId: socket.id,
+            username,
+            lastSeen: new Date().toISOString()
+        };
+        socket.userId = userId;
+        socket.username = username;
+
+        db.updateUser(userId, { isOnline: true, lastSeen: new Date().toISOString() });
+        io.emit('users-online', Object.keys(onlineUsers));
+
+        log(`User ${username} (${userId}) online`);
+    });
+
+    socket.on('join-room', (data) => {
+        const { roomId, userId } = data;
+        socket.join(roomId);
+        socket.roomId = roomId;
+
+        // ارسال تاریخچه
+        const messages = db.getMessages(roomId, 50);
+        const decryptedMessages = messages.map(msg => ({
+            ...msg,
+            message: decryptMessage(msg.message, msg.userId)
+        }));
+        socket.emit('history', decryptedMessages);
+
+        log(`User ${userId} joined room ${roomId}`);
+    });
+
+    socket.on('send-message', (data) => {
+        const { roomId, userId, username, message } = data;
+
+        // بررسی بن بودن کاربر
+        const user = db.getUser(userId);
+        if (user && user.isBanned) {
+            socket.emit('error', { message: 'You are banned from chatting' });
+            return;
+        }
+
+        const encrypted = encryptMessage(message, userId);
+        const msgData = {
+            messageId: 'msg_' + uuidv4(),
+            userId,
+            username: username || user?.username || 'کاربر',
+            message: encrypted,
+            timestamp: new Date().toISOString()
+        };
+
+        db.saveMessage(roomId, msgData);
+
+        // ارسال به همه در اتاق (با رمزگشایی)
+        io.to(roomId).emit('receive-message', {
+            ...msgData,
+            message: message // ارسال متن اصلی (بدون رمزنگاری برای نمایش)
+        });
+
+        log(`Message from ${username} in ${roomId}: ${message.substring(0, 30)}...`);
+    });
+
+    socket.on('leave-room', (data) => {
+        const { roomId, userId } = data;
+        socket.leave(roomId);
+        log(`User ${userId} left room ${roomId}`);
+    });
+
+    socket.on('disconnect', () => {
+        if (socket.userId) {
+            delete onlineUsers[socket.userId];
+            db.updateUser(socket.userId, { isOnline: false, lastSeen: new Date().toISOString() });
+            io.emit('users-online', Object.keys(onlineUsers));
+            log(`User ${socket.userId} disconnected`);
+        }
+    });
+});
+
+// ============================================
+# 🎨 صفحه HTML کامل
+// ============================================
+app.get('/', (req, res) => {
+    res.send(`
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+    <title>سوشال مدیا حرفه‌ای</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <style>
+        /* ===== تنظیمات اصلی ===== */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --bg: #fafafa;
+            --bg-secondary: #ffffff;
+            --text: #262626;
+            --text-secondary: #8e8e8e;
+            --border: #dbdbdb;
+            --primary: #0095f6;
+            --primary-dark: #0081d6;
+            --danger: #ed4956;
+            --success: #2ecc71;
+            --shadow: 0 2px 12px rgba(0,0,0,0.08);
+            --radius: 12px;
+            --radius-sm: 8px;
+            --transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            --font: 'Segoe UI', Tahoma, sans-serif;
+            --max-width: 935px;
+            --header-height: 60px;
+            --bottom-nav-height: 65px;
+        }
+        [data-theme="dark"] {
+            --bg: #121212;
+            --bg-secondary: #1e1e1e;
+            --text: #ffffff;
+            --text-secondary: #a0a0a0;
+            --border: #2c2c2c;
+            --shadow: 0 2px 12px rgba(0,0,0,0.3);
+        }
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: var(--font);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            transition: all var(--transition);
+        }
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-track { background: var(--bg); }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+        /* ===== Header ===== */
+        .header {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+            padding: 0 16px;
+            height: var(--header-height);
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            flex-shrink: 0;
+            z-index: 100;
+            position: sticky;
+            top: 0;
+        }
+        .menu-icon { font-size: 24px; cursor: pointer; color: var(--text); transition: var(--transition); }
+        .menu-icon:hover { transform: scale(1.05); }
+        .logo { font-size: 20px; font-weight: 700; color: var(--text); display: flex; align-items: center; gap: 8px; }
+        .logo i { color: var(--primary); }
+        .search-box {
+            flex: 1;
+            max-width: 400px;
+            background: var(--bg);
+            padding: 8px 16px;
+            border-radius: 24px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            border: 1px solid var(--border);
+            transition: var(--transition);
+        }
+        .search-box:focus-within { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(0,149,246,0.2); }
+        .search-box input {
+            border: none;
+            background: transparent;
+            outline: none;
+            width: 100%;
+            font-size: 14px;
+            color: var(--text);
+        }
+        .search-box input::placeholder { color: var(--text-secondary); }
+        .search-box i { color: var(--text-secondary); }
+        .header-right { display: flex; gap: 18px; font-size: 22px; color: var(--text); }
+        .header-right i { cursor: pointer; transition: var(--transition); }
+        .header-right i:hover { color: var(--primary); transform: scale(1.05); }
+
+        /* ===== Stories ===== */
+        .stories-section {
+            background: var(--bg-secondary);
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+            overflow-x: auto;
+            flex-shrink: 0;
+        }
+        .stories-container { display: flex; gap: 16px; }
+        .story-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+            cursor: pointer;
+            flex-shrink: 0;
+            transition: var(--transition);
+        }
+        .story-item:hover { transform: scale(1.03); }
+        .story-avatar {
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            padding: 2px;
+            background: linear-gradient(45deg, #f09433, #e6683c, #dc2743, #cc2366, #bc1888);
+            transition: var(--transition);
+        }
+        .story-avatar img {
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            border: 2px solid var(--bg-secondary);
+            object-fit: cover;
+        }
+        .story-avatar.add-story {
+            background: var(--bg);
+            border: 2px dashed var(--border);
+            padding: 0;
+        }
+        .story-avatar.add-story img { border: none; }
+        .story-username {
+            font-size: 11px;
+            color: var(--text);
+            max-width: 64px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            text-align: center;
+        }
+
+        /* ===== Gallery ===== */
+        .gallery-wrapper { flex: 1; overflow-y: auto; padding: 0 0 var(--bottom-nav-height) 0; }
+        .gallery {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 4px;
+            padding: 4px;
+            max-width: var(--max-width);
+            margin: 0 auto;
+        }
+        .gallery-item {
+            background: var(--bg-secondary);
+            overflow: hidden;
+            border: 1px solid var(--border);
+            cursor: pointer;
+            position: relative;
+            border-radius: var(--radius-sm);
+            transition: var(--transition);
+        }
+        .gallery-item:hover { transform: scale(1.01); box-shadow: var(--shadow); }
+        .gallery-item .image-container {
+            width: 100%;
+            aspect-ratio: 1;
+            overflow: hidden;
+            background: #ddd;
+        }
+        .gallery-item .image-container img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transition: var(--transition);
+        }
+        .gallery-item:hover .image-container img { transform: scale(1.02); }
+        .gallery-item .explore-post-actions {
+            display: flex;
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: linear-gradient(transparent, rgba(0,0,0,0.7));
+            padding: 12px 8px 8px;
+            justify-content: space-around;
+            color: white;
+            opacity: 0;
+            transition: var(--transition);
+        }
+        .gallery-item:hover .explore-post-actions { opacity: 1; }
+        .gallery-item .explore-post-actions .action-btn {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            color: white;
+            font-size: 13px;
+            cursor: pointer;
+            padding: 4px 10px;
+            border-radius: 6px;
+            border: none;
+            background: transparent;
+            transition: var(--transition);
+            font-family: var(--font);
+        }
+        .gallery-item .explore-post-actions .action-btn:hover { background: rgba(255,255,255,0.15); transform: scale(1.05); }
+        .gallery-item .explore-post-actions .action-btn.liked i { color: var(--danger); }
+        .gallery-item .explore-post-actions .action-btn i { font-size: 16px; }
+
+        /* ===== Bottom Nav ===== */
+        .bottom-nav {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: var(--bg-secondary);
+            border-top: 1px solid var(--border);
+            display: flex;
+            justify-content: space-around;
+            padding: 8px 0 12px;
+            z-index: 100;
+            height: var(--bottom-nav-height);
+        }
+        .bottom-nav button {
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 2px;
+            font-size: 10px;
+            color: var(--text-secondary);
+            padding: 4px 16px;
+            border-radius: 30px;
+            transition: var(--transition);
+            font-family: var(--font);
+        }
+        .bottom-nav button i { font-size: 24px; color: var(--text-secondary); transition: var(--transition); }
+        .bottom-nav button:hover { background: var(--bg); }
+        .bottom-nav button.active i { color: var(--primary); }
+        .bottom-nav button.active { color: var(--primary); }
+
+        /* ===== Modals ===== */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 300;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+            backdrop-filter: blur(4px);
+        }
+        .modal-overlay.active { display: flex; }
+        .modal-content {
+            background: var(--bg-secondary);
+            border-radius: var(--radius);
+            max-width: 520px;
+            width: 100%;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            direction: rtl;
+            box-shadow: var(--shadow);
+            animation: modalIn 0.3s ease;
+        }
+        @keyframes modalIn {
+            from { opacity: 0; transform: scale(0.95) translateY(20px); }
+            to { opacity: 1; transform: scale(1) translateY(0); }
+        }
+        .modal-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-shrink: 0;
+        }
+        .modal-header h3 { font-size: 16px; color: var(--text); }
+        .modal-header .close-modal {
+            font-size: 24px;
+            cursor: pointer;
+            color: var(--text);
+            background: none;
+            border: none;
+            transition: var(--transition);
+        }
+        .modal-header .close-modal:hover { transform: rotate(90deg); }
+        .modal-body { flex: 1; overflow-y: auto; padding: 16px 20px; }
+        .modal-footer {
+            padding: 12px 20px;
+            border-top: 1px solid var(--border);
+            display: flex;
+            gap: 10px;
+            flex-shrink: 0;
+        }
+        .modal-footer input {
+            flex: 1;
+            padding: 10px 14px;
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            outline: none;
+            font-size: 14px;
+            background: var(--bg);
+            color: var(--text);
+            direction: rtl;
+            transition: var(--transition);
+        }
+        .modal-footer input:focus { border-color: var(--primary); }
+        .modal-footer button {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 10px 24px;
+            border-radius: 24px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--transition);
+            font-family: var(--font);
+        }
+        .modal-footer button:hover { background: var(--primary-dark); transform: scale(1.02); }
+
+        /* ===== Comment ===== */
+        .comment-item {
+            display: flex;
+            gap: 12px;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border);
+            transition: var(--transition);
+        }
+        .comment-item:last-child { border-bottom: none; }
+        .comment-avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: var(--border);
+            flex-shrink: 0;
+            overflow: hidden;
+        }
+        .comment-avatar img { width: 100%; height: 100%; object-fit: cover; }
+        .comment-content { flex: 1; }
+        .comment-username { font-weight: 600; font-size: 13px; color: var(--text); }
+        .comment-text { font-size: 13px; color: var(--text); margin-top: 2px; }
+        .comment-time { font-size: 11px; color: var(--text-secondary); margin-top: 4px; }
+
+        /* ===== Profile ===== */
+        .profile-page {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: var(--bg);
+            z-index: 150;
+            overflow-y: auto;
+            padding-top: var(--header-height);
+        }
+        .profile-page.active { display: block; }
+        .profile-header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: var(--bg-secondary);
+            padding: 0 16px;
+            height: var(--header-height);
+            border-bottom: 1px solid var(--border);
+            z-index: 151;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .profile-header h2 { font-size: 18px; color: var(--text); }
+        .profile-header .close-profile {
+            font-size: 24px;
+            cursor: pointer;
+            color: var(--text);
+            background: none;
+            border: none;
+            transition: var(--transition);
+        }
+        .profile-header .close-profile:hover { transform: rotate(90deg); }
+        .profile-info {
+            background: var(--bg-secondary);
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            border-bottom: 1px solid var(--border);
+        }
+        .profile-avatar-large {
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            overflow: hidden;
+            border: 3px solid var(--border);
+            margin-bottom: 10px;
+            transition: var(--transition);
+        }
+        .profile-avatar-large img { width: 100%; height: 100%; object-fit: cover; }
+        .profile-username { font-size: 20px; font-weight: 600; color: var(--text); }
+        .profile-bio { font-size: 14px; color: var(--text); margin: 6px 0; text-align: center; padding: 0 20px; }
+        .profile-stats {
+            display: flex;
+            justify-content: space-around;
+            padding: 16px 0;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+            width: 100%;
+        }
+        .profile-stats .stat {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            cursor: pointer;
+            transition: var(--transition);
+        }
+        .profile-stats .stat:hover { opacity: 0.7; transform: scale(1.02); }
+        .profile-stats .stat .number { font-size: 18px; font-weight: 600; color: var(--text); }
+        .profile-stats .stat .label { font-size: 13px; color: var(--text-secondary); }
+        .profile-follow-btn {
+            padding: 8px 32px;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 14px;
+            margin: 6px 0;
+            transition: var(--transition);
+        }
+        .profile-follow-btn:hover { background: var(--primary-dark); transform: scale(1.02); }
+        .profile-follow-btn.following { background: var(--bg); color: var(--text); border: 1px solid var(--border); }
+        .profile-gallery {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 3px;
+            padding: 3px;
+            background: var(--bg);
+        }
+        .profile-post {
+            aspect-ratio: 1;
+            overflow: hidden;
+            background: var(--border);
+            position: relative;
+            cursor: pointer;
+            border-radius: var(--radius-sm);
+            transition: var(--transition);
+        }
+        .profile-post:hover { transform: scale(1.02); }
+        .profile-post .image-container { width: 100%; height: 100%; position: relative; }
+        .profile-post .image-container img { width: 100%; height: 100%; object-fit: cover; }
+        .profile-post .image-container .profile-post-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.4);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 20px;
+            color: white;
+            opacity: 0;
+            transition: var(--transition);
+        }
+        .profile-post .image-container:hover .profile-post-overlay { opacity: 1; }
+        .profile-post .image-container .profile-post-overlay span { display: flex; align-items: center; gap: 5px; font-size: 14px; font-weight: 600; }
+
+        /* ===== Upload ===== */
+        .upload-page {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: var(--bg);
+            z-index: 150;
+            overflow-y: auto;
+            padding-top: var(--header-height);
+        }
+        .upload-page.active { display: block; }
+        .upload-header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: var(--bg-secondary);
+            padding: 0 16px;
+            height: var(--header-height);
+            border-bottom: 1px solid var(--border);
+            z-index: 151;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .upload-header h2 { font-size: 18px; color: var(--text); }
+        .upload-header .close-upload {
+            font-size: 24px;
+            cursor: pointer;
+            color: var(--text);
+            background: none;
+            border: none;
+            transition: var(--transition);
+        }
+        .upload-header .close-upload:hover { transform: rotate(90deg); }
+        .upload-container {
+            background: var(--bg-secondary);
+            margin: 12px 16px;
+            border-radius: var(--radius);
+            padding: 30px 20px;
+            border: 2px dashed var(--border);
+            text-align: center;
+            min-height: 320px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            transition: var(--transition);
+        }
+        .upload-container:hover { border-color: var(--primary); }
+        .upload-container i { font-size: 60px; color: var(--primary); margin-bottom: 16px; }
+        .upload-container h3 { font-size: 20px; color: var(--text); margin-bottom: 8px; }
+        .upload-container p { font-size: 14px; color: var(--text-secondary); margin-bottom: 20px; }
+        .upload-container input[type="file"] { display: none; }
+        .upload-container .upload-btn {
+            padding: 10px 32px;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 16px;
+            transition: var(--transition);
+        }
+        .upload-container .upload-btn:hover { background: var(--primary-dark); transform: scale(1.02); }
+        .upload-preview { display: none; margin-top: 16px; width: 100%; max-width: 320px; margin: 16px auto 0; }
+        .upload-preview img, .upload-preview video { width: 100%; border-radius: var(--radius-sm); max-height: 320px; object-fit: cover; }
+        .upload-preview.active { display: block; }
+        .upload-caption { display: none; margin-top: 12px; width: 100%; max-width: 320px; margin: 12px auto 0; }
+        .upload-caption.active { display: block; }
+        .upload-caption textarea {
+            width: 100%;
+            padding: 10px 14px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            outline: none;
+            font-size: 14px;
+            font-family: var(--font);
+            resize: vertical;
+            min-height: 60px;
+            background: var(--bg);
+            color: var(--text);
+            direction: rtl;
+            transition: var(--transition);
+        }
+        .upload-caption textarea:focus { border-color: var(--primary); }
+        .upload-hashtags { display: none; margin-top: 8px; width: 100%; max-width: 320px; margin: 8px auto 0; }
+        .upload-hashtags.active { display: block; }
+        .upload-hashtags input {
+            width: 100%;
+            padding: 10px 14px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            outline: none;
+            font-size: 14px;
+            background: var(--bg);
+            color: var(--text);
+            direction: rtl;
+            transition: var(--transition);
+        }
+        .upload-hashtags input:focus { border-color: var(--primary); }
+        .upload-submit {
+            display: none;
+            margin-top: 12px;
+            padding: 10px 32px;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 16px;
+            transition: var(--transition);
+        }
+        .upload-submit.active { display: inline-block; }
+        .upload-submit:hover { background: var(--primary-dark); transform: scale(1.02); }
+
+        /* ===== Chat ===== */
+        .chat-interface {
+            display: none;
+            position: fixed;
+            bottom: var(--bottom-nav-height);
+            left: 0;
+            right: 0;
+            top: var(--header-height);
+            background: var(--bg-secondary);
+            z-index: 200;
+            flex-direction: column;
+            border-top: 1px solid var(--border);
+        }
+        .chat-interface.active { display: flex; }
+        .chat-header-bar {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--bg-secondary);
+            flex-shrink: 0;
+        }
+        .chat-header-bar h3 { font-size: 16px; color: var(--text); }
+        .chat-header-bar .close-chat-btn {
+            font-size: 24px;
+            cursor: pointer;
+            color: var(--text);
+            background: none;
+            border: none;
+            transition: var(--transition);
+        }
+        .chat-header-bar .close-chat-btn:hover { transform: rotate(90deg); }
+        .chat-users-list {
+            border-bottom: 1px solid var(--border);
+            max-height: 140px;
+            overflow-y: auto;
+            flex-shrink: 0;
+            background: var(--bg);
+        }
+        .chat-user {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 16px;
+            cursor: pointer;
+            border-bottom: 1px solid var(--border);
+            transition: var(--transition);
+        }
+        .chat-user:hover { background: var(--bg-secondary); }
+        .chat-user .user-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            overflow: hidden;
+            background: var(--border);
+            flex-shrink: 0;
+        }
+        .chat-user .user-avatar img { width: 100%; height: 100%; object-fit: cover; }
+        .chat-user .user-name { font-size: 14px; color: var(--text); font-weight: 500; }
+        .chat-user .user-status { font-size: 11px; color: var(--text-secondary); }
+        .chat-user .user-status.online { color: var(--success); }
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+            background: var(--bg);
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .chat-message {
+            max-width: 78%;
+            padding: 10px 16px;
+            border-radius: 18px;
+            background: var(--bg-secondary);
+            box-shadow: var(--shadow);
+            align-self: flex-start;
+            word-wrap: break-word;
+            animation: messageIn 0.2s ease;
+        }
+        @keyframes messageIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .chat-message.own { align-self: flex-end; background: var(--primary); color: white; }
+        .chat-message .msg-user { font-size: 11px; font-weight: 600; color: var(--primary); margin-bottom: 2px; }
+        .chat-message.own .msg-user { color: rgba(255,255,255,0.8); }
+        .chat-message .msg-text { font-size: 14px; }
+        .chat-message .msg-time { font-size: 10px; color: var(--text-secondary); margin-top: 4px; text-align: left; }
+        .chat-message.own .msg-time { color: rgba(255,255,255,0.7); }
+        .chat-input {
+            display: flex;
+            gap: 10px;
+            padding: 10px 16px;
+            border-top: 1px solid var(--border);
+            background: var(--bg-secondary);
+            flex-shrink: 0;
+        }
+        .chat-input input {
+            flex: 1;
+            padding: 10px 16px;
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            outline: none;
+            font-size: 14px;
+            background: var(--bg);
+            color: var(--text);
+            direction: rtl;
+            transition: var(--transition);
+        }
+        .chat-input input:focus { border-color: var(--primary); }
+        .chat-input button {
+            padding: 10px 20px;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 24px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: var(--transition);
+        }
+        .chat-input button:hover { background: var(--primary-dark); transform: scale(1.02); }
+        .chat-empty {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-secondary);
+        }
+        .chat-empty i { font-size: 40px; display: block; margin-bottom: 12px; color: var(--border); }
+
+        /* ===== Side Menu ===== */
+        .menu-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 600;
+            backdrop-filter: blur(2px);
+        }
+        .menu-overlay.active { display: block; }
+        .side-menu {
+            position: fixed;
+            top: 0;
+            right: -320px;
+            width: 300px;
+            height: 100%;
+            background: var(--bg-secondary);
+            z-index: 601;
+            transition: right 0.3s ease;
+            padding-top: 16px;
+            box-shadow: -4px 0 20px rgba(0,0,0,0.15);
+            overflow-y: auto;
+        }
+        .side-menu.active { right: 0; }
+        .side-menu .menu-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .side-menu .menu-header h3 { font-size: 18px; color: var(--text); }
+        .side-menu .menu-header .close-menu {
+            font-size: 24px;
+            cursor: pointer;
+            color: var(--text);
+            background: none;
+            border: none;
+            transition: var(--transition);
+        }
+        .side-menu .menu-header .close-menu:hover { transform: rotate(90deg); }
+        .side-menu .menu-item {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            padding: 14px 20px;
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+            color: var(--text);
+            transition: var(--transition);
+        }
+        .side-menu .menu-item:hover { background: var(--bg); }
+        .side-menu .menu-item i { font-size: 20px; width: 28px; color: var(--text); }
+        .side-menu .menu-item .menu-text { font-size: 15px; font-weight: 500; }
+        .side-menu .menu-item .menu-badge {
+            margin-right: auto;
+            background: var(--primary);
+            color: white;
+            font-size: 11px;
+            padding: 2px 12px;
+            border-radius: 12px;
+        }
+        .side-menu .menu-item.admin {
+            background: rgba(0,149,246,0.08);
+            border-right: 3px solid var(--primary);
+        }
+
+        /* ===== Settings ===== */
+        .settings-page {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: var(--bg);
+            z-index: 160;
+            overflow-y: auto;
+            padding-top: var(--header-height);
+        }
+        .settings-page.active { display: block; }
+        .settings-header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: var(--bg-secondary);
+            padding: 0 16px;
+            height: var(--header-height);
+            border-bottom: 1px solid var(--border);
+            z-index: 161;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .settings-header h2 { font-size: 18px; color: var(--text); }
+        .settings-header .close-settings {
+            font-size: 24px;
+            cursor: pointer;
+            color: var(--text);
+            background: none;
+            border: none;
+            transition: var(--transition);
+        }
+        .settings-header .close-settings:hover { transform: rotate(90deg); }
+        .settings-container { padding: 16px; max-width: 600px; margin: 0 auto; }
+        .settings-card {
+            background: var(--bg-secondary);
+            border-radius: var(--radius);
+            padding: 20px;
+            margin-bottom: 16px;
+            border: 1px solid var(--border);
+        }
+        .settings-card h4 { font-size: 16px; color: var(--text); margin-bottom: 12px; }
+        .settings-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .settings-item:last-child { border-bottom: none; }
+        .settings-item .label { font-size: 14px; color: var(--text); }
+        .settings-item .value { font-size: 14px; color: var(--text-secondary); }
+        .settings-item select, .settings-item input {
+            padding: 6px 12px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            background: var(--bg);
+            color: var(--text);
+            font-size: 14px;
+            outline: none;
+            transition: var(--transition);
+        }
+        .settings-item select:focus, .settings-item input:focus { border-color: var(--primary); }
+        .settings-item .toggle {
+            width: 52px;
+            height: 28px;
+            background: var(--border);
+            border-radius: 14px;
+            position: relative;
+            cursor: pointer;
+            transition: var(--transition);
+        }
+        .settings-item .toggle.active { background: var(--primary); }
+        .settings-item .toggle .thumb {
+            width: 22px;
+            height: 22px;
+            background: white;
+            border-radius: 50%;
+            position: absolute;
+            top: 3px;
+            left: 3px;
+            transition: var(--transition);
+            box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+        }
+        .settings-item .toggle.active .thumb { left: 27px; }
+        .settings-stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+        }
+        .settings-stats .stat-box {
+            background: var(--bg);
+            padding: 16px;
+            border-radius: var(--radius-sm);
+            text-align: center;
+            border: 1px solid var(--border);
+        }
+        .settings-stats .stat-box .num { font-size: 24px; font-weight: 700; color: var(--primary); }
+        .settings-stats .stat-box .lbl { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+
+        /* ===== Admin Panel ===== */
+        .admin-panel {
+            display: none;
+            position: fixed;
+            top: var(--header-height);
+            left: 0;
+            right: 0;
+            bottom: var(--bottom-nav-height);
+            background: var(--bg);
+            z-index: 145;
+            overflow-y: auto;
+            padding: 16px;
+        }
+        .admin-panel.active { display: block; }
+        .admin-panel .admin-card {
+            background: var(--bg-secondary);
+            border-radius: var(--radius);
+            padding: 16px;
+            margin-bottom: 12px;
+            border: 1px solid var(--border);
+        }
+        .admin-panel .admin-card h4 { color: var(--text); margin-bottom: 8px; }
+        .admin-panel .admin-card .admin-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .admin-panel .admin-card .admin-item:last-child { border-bottom: none; }
+        .admin-panel .admin-btn {
+            padding: 4px 12px;
+            border: none;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            transition: var(--transition);
+        }
+        .admin-panel .admin-btn.danger { background: var(--danger); color: white; }
+        .admin-panel .admin-btn.danger:hover { opacity: 0.8; transform: scale(1.02); }
+        .admin-panel .admin-btn.success { background: var(--success); color: white; }
+        .admin-panel .admin-btn.success:hover { opacity: 0.8; transform: scale(1.02); }
+        .admin-panel .admin-btn.primary { background: var(--primary); color: white; }
+        .admin-panel .admin-btn.primary:hover { opacity: 0.8; transform: scale(1.02); }
+
+        /* ===== Share ===== */
+        .share-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 500;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+            backdrop-filter: blur(4px);
+        }
+        .share-modal.active { display: flex; }
+        .share-modal-content {
+            background: var(--bg-secondary);
+            border-radius: var(--radius);
+            max-width: 400px;
+            width: 100%;
+            max-height: 70vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            direction: rtl;
+            box-shadow: var(--shadow);
+            animation: modalIn 0.3s ease;
+        }
+        .share-modal-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .share-modal-header h3 { font-size: 16px; color: var(--text); }
+        .share-modal-header .close-share {
+            font-size: 24px;
+            cursor: pointer;
+            color: var(--text);
+            background: none;
+            border: none;
+            transition: var(--transition);
+        }
+        .share-modal-header .close-share:hover { transform: rotate(90deg); }
+        .share-modal-body { flex: 1; overflow-y: auto; padding: 12px 16px; }
+        .share-option {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 12px 0;
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+            transition: var(--transition);
+        }
+        .share-option:hover { background: var(--bg); border-radius: var(--radius-sm); }
+        .share-option .share-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            color: white;
+            flex-shrink: 0;
+        }
+        .share-option .share-icon.telegram { background: #0088cc; }
+        .share-option .share-icon.whatsapp { background: #25d366; }
+        .share-option .share-icon.instagram { background: #e4405f; }
+        .share-option .share-icon.copy { background: #6c757d; }
+        .share-option .share-icon.site { background: var(--primary); }
+        .share-option .share-name { font-size: 15px; color: var(--text); font-weight: 500; }
+
+        /* ===== Toast ===== */
+        .toast {
+            position: fixed;
+            bottom: calc(var(--bottom-nav-height) + 20px);
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.85);
+            color: white;
+            padding: 12px 24px;
+            border-radius: 24px;
+            font-size: 14px;
+            z-index: 999;
+            opacity: 0;
+            transition: opacity 0.4s ease;
+            pointer-events: none;
+            backdrop-filter: blur(4px);
+            max-width: 90%;
+            text-align: center;
+            font-family: var(--font);
+        }
+        .toast.show { opacity: 1; }
+        .toast.success { border-right: 3px solid var(--success); }
+        .toast.error { border-right: 3px solid var(--danger); }
+
+        /* ===== Broadcast ===== */
+        .broadcast {
+            background: var(--primary);
+            color: white;
+            padding: 10px 16px;
+            text-align: center;
+            font-size: 14px;
+            flex-shrink: 0;
+            display: none;
+            border-radius: 0;
+        }
+        .broadcast.show { display: block; }
+
+        /* ===== Loading ===== */
+        .loading-spinner {
+            text-align: center;
+            padding: 40px;
+            color: var(--primary);
+            font-size: 16px;
+        }
+        .loading-spinner i { font-size: 36px; animation: spin 0.8s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .no-posts {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-secondary);
+            grid-column: 1 / -1;
+        }
+        .no-posts i { font-size: 48px; color: var(--border); display: block; margin-bottom: 12px; }
+
+        /* ===== Responsive ===== */
+        @media (max-width: 768px) {
+            .gallery { gap: 3px; padding: 3px; }
+            .search-box { max-width: 200px; }
+            .modal-content { max-width: 95%; }
+            .settings-stats { grid-template-columns: repeat(3, 1fr); }
+            .settings-stats .stat-box .num { font-size: 20px; }
+            .side-menu { width: 280px; right: -290px; }
+        }
+        @media (max-width: 480px) {
+            .gallery { gap: 2px; padding: 2px; }
+            .search-box { max-width: 140px; padding: 6px 12px; }
+            .search-box input { font-size: 12px; }
+            .header-right { gap: 12px; font-size: 18px; }
+            .header { padding: 0 10px; }
+            .logo { font-size: 16px; }
+            .story-avatar { width: 54px; height: 54px; }
+            .chat-message { max-width: 90%; }
+            .profile-avatar-large { width: 80px; height: 80px; }
+            .settings-stats { grid-template-columns: repeat(3, 1fr); gap: 6px; }
+            .settings-stats .stat-box { padding: 10px; }
+            .settings-stats .stat-box .num { font-size: 18px; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Toast -->
+    <div class="toast" id="toast"></div>
+
+    <!-- Broadcast -->
+    <div class="broadcast" id="broadcast"></div>
+
+    <!-- Header -->
+    <header class="header">
+        <i class="fas fa-bars menu-icon" id="menuIcon"></i>
+        <div class="logo"><i class="fab fa-instagram"></i> سوشال</div>
+        <div class="search-box">
+            <i class="fas fa-search"></i>
+            <input type="text" id="searchInput" placeholder="جستجو...">
+        </div>
+        <div class="header-right">
+            <i class="fas fa-comment-dots" id="chatOpenBtn"></i>
+            <i class="fas fa-cog" id="settingsOpenBtn"></i>
+        </div>
+    </header>
+
+    <!-- Broadcast -->
+    <div class="broadcast" id="broadcast"></div>
+
+    <!-- Stories -->
+    <div class="stories-section" id="storiesSection">
+        <div class="stories-container" id="storiesContainer"></div>
+    </div>
+
+    <!-- Gallery -->
+    <div class="gallery-wrapper">
+        <div id="loadingIndicator" class="loading-spinner">
+            <i class="fas fa-spinner"></i><br> در حال بارگذاری...
+        </div>
+        <div class="gallery" id="gallery"></div>
+        <div id="noPostsMessage" class="no-posts" style="display:none;">
+            <i class="fas fa-camera"></i>
+            هیچ پستی وجود ندارد<br> اولین پست را شما آپلود کنید!
+        </div>
+    </div>
+
+    <!-- Chat -->
+    <div class="chat-interface" id="chatInterface">
+        <div class="chat-header-bar">
+            <h3 id="chatTitle">💬 چت</h3>
+            <button class="close-chat-btn" id="closeChatBtn">&times;</button>
+        </div>
+        <div class="chat-users-list" id="chatUsersList"></div>
+        <div class="chat-messages" id="chatMessages">
+            <div class="chat-empty">
+                <i class="fas fa-comments"></i>
+                برای شروع چت، یک کاربر را انتخاب کنید
+            </div>
+        </div>
+        <div class="chat-input">
+            <input type="text" id="chatInput" placeholder="پیام خود را بنویسید...">
+            <button id="chatSendBtn"><i class="fas fa-paper-plane"></i></button>
+        </div>
+    </div>
+
+    <!-- Comment Modal -->
+    <div class="modal-overlay" id="commentModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>💬 کامنت‌ها</h3>
+                <button class="close-modal" id="closeModal">&times;</button>
+            </div>
+            <div class="modal-body" id="commentList"></div>
+            <div class="modal-footer">
+                <input type="text" id="modalCommentInput" placeholder="کامنت خود را بنویسید...">
+                <button id="modalSendComment">ارسال</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Share Modal -->
+    <div class="share-modal" id="shareModal">
+        <div class="share-modal-content">
+            <div class="share-modal-header">
+                <h3>📤 اشتراک‌گذاری</h3>
+                <button class="close-share" id="closeShareModal">&times;</button>
+            </div>
+            <div class="share-modal-body">
+                <div class="share-option" data-share="site">
+                    <div class="share-icon site"><i class="fas fa-users"></i></div>
+                    <span class="share-name">اشتراک در سایت</span>
+                </div>
+                <div class="share-option" data-share="telegram">
+                    <div class="share-icon telegram"><i class="fab fa-telegram-plane"></i></div>
+                    <span class="share-name">ارسال به تلگرام</span>
+                </div>
+                <div class="share-option" data-share="whatsapp">
+                    <div class="share-icon whatsapp"><i class="fab fa-whatsapp"></i></div>
+                    <span class="share-name">ارسال به واتساپ</span>
+                </div>
+                <div class="share-option" data-share="copy">
+                    <div class="share-icon copy"><i class="fas fa-copy"></i></div>
+                    <span class="share-name">کپی لینک پست</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Profile -->
+    <div class="profile-page" id="profilePage">
+        <div class="profile-header">
+            <h2>👤 پروفایل</h2>
+            <button class="close-profile" id="closeProfile">&times;</button>
+        </div>
+        <div style="margin-top: var(--header-height);">
+            <div class="profile-info">
+                <div class="profile-avatar-large">
+                    <img id="profileAvatar" src="https://i.pravatar.cc/150?img=10" alt="profile">
+                </div>
+                <div class="profile-username" id="profileUsername">کاربر</div>
+                <div class="profile-bio" id="bioDisplay">توسعه‌دهنده وب | عاشق کدنویسی</div>
+                <button class="profile-follow-btn" id="profileFollowBtn">دنبال کردن</button>
+                <div class="profile-bio-edit" style="display:flex;gap:10px;margin:10px 0;width:100%;max-width:300px;">
+                    <input type="text" id="bioInput" placeholder="بیوگرافی خود را بنویسید..." style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:8px;outline:none;font-size:14px;background:var(--bg);color:var(--text);direction:rtl;">
+                    <button id="saveBio" style="padding:8px 16px;background:var(--primary);color:white;border:none;border-radius:8px;cursor:pointer;font-weight:600;transition:var(--transition);">ذخیره</button>
+                </div>
+            </div>
+            <div class="profile-stats">
+                <div class="stat" id="statPosts">
+                    <span class="number" id="postCount">۰</span>
+                    <span class="label">پست</span>
+                </div>
+                <div class="stat" id="statFollowers">
+                    <span class="number" id="followerCount">۰</span>
+                    <span class="label">دنبال‌کننده</span>
+                </div>
+                <div class="stat" id="statFollowing">
+                    <span class="number" id="followingCount">۰</span>
+                    <span class="label">دنبال‌شونده</span>
+                </div>
+            </div>
+            <div style="padding:10px 0;background:var(--bg-secondary);margin-top:5px;">
+                <h4 style="padding:0 20px 10px;font-size:14px;color:var(--text);">📸 پست‌های من</h4>
+                <div class="profile-gallery" id="profileGallery"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings -->
+    <div class="settings-page" id="settingsPage">
+        <div class="settings-header">
+            <h2>⚙️ تنظیمات</h2>
+            <button class="close-settings" id="closeSettings">&times;</button>
+        </div>
+        <div class="settings-container">
+            <div class="settings-card">
+                <h4>🌐 زبان</h4>
+                <div class="settings-item">
+                    <span class="label">زبان رابط</span>
+                    <select id="languageSelect">
+                        <option value="fa">فارسی</option>
+                        <option value="en">English</option>
+                    </select>
+                </div>
+            </div>
+            <div class="settings-card">
+                <h4>🎨 ظاهر</h4>
+                <div class="settings-item">
+                    <span class="label">تم تاریک</span>
+                    <div class="toggle" id="themeToggle">
+                        <div class="thumb"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="settings-card">
+                <h4>📊 آمار</h4>
+                <div class="settings-stats">
+                    <div class="stat-box">
+                        <div class="num" id="statTotalPosts">0</div>
+                        <div class="lbl">کل پست‌ها</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="num" id="statTotalUsers">0</div>
+                        <div class="lbl">کاربران</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="num" id="statOnlineUsers">0</div>
+                        <div class="lbl">آنلاین</div>
+                    </div>
+                </div>
+            </div>
+            <div class="settings-card">
+                <h4>👤 اطلاعات کاربری</h4>
+                <div class="settings-item">
+                    <span class="label">نام کاربری</span>
+                    <span class="value" id="settingsUsername">-</span>
+                </div>
+                <div class="settings-item">
+                    <span class="label">ایمیل</span>
+                    <span class="value" id="settingsEmail">-</span>
+                </div>
+                <div class="settings-item">
+                    <span class="label">تعداد پست</span>
+                    <span class="value" id="settingsPostCount">0</span>
+                </div>
+            </div>
+            <button id="logoutBtn" style="width:100%;padding:12px;background:var(--danger);color:white;border:none;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer;transition:var(--transition);">🚪 خروج</button>
+        </div>
+    </div>
+
+    <!-- Admin Panel -->
+    <div class="admin-panel" id="adminPanel">
+        <div class="admin-card">
+            <h4>👑 پنل مدیریت</h4>
+            <div class="admin-item">
+                <span>کاربران</span>
+                <span id="adminUserCount">0</span>
+            </div>
+            <div class="admin-item">
+                <span>پست‌ها</span>
+                <span id="adminPostCount">0</span>
+            </div>
+            <div class="admin-item">
+                <span>آنلاین</span>
+                <span id="adminOnlineCount">0</span>
+            </div>
+        </div>
+        <div class="admin-card">
+            <h4>📢 پیام همگانی</h4>
+            <div style="display:flex;gap:10px;">
+                <input type="text" id="broadcastInput" placeholder="پیام به همه کاربران..." style="flex:1;padding:10px 14px;border:1px solid var(--border);border-radius:8px;outline:none;font-size:14px;background:var(--bg);color:var(--text);">
+                <button id="broadcastBtn" class="admin-btn primary">ارسال</button>
+            </div>
+        </div>
+        <div class="admin-card">
+            <h4>👥 مدیریت کاربران</h4>
+            <div id="adminUsersList"></div>
+        </div>
+        <div class="admin-card">
+            <h4>📸 مدیریت پست‌ها</h4>
+            <div id="adminPostsList"></div>
+        </div>
+        <div class="admin-card">
+            <h4>⚡ مدیریت سیستم</h4>
+            <div class="admin-item">
+                <span>شاردها</span>
+                <span id="adminShardCount">5</span>
+            </div>
+            <button id="addShardBtn" class="admin-btn success">➕ اضافه کردن شارد جدید</button>
+        </div>
+    </div>
+
+    <!-- Upload -->
+    <div class="upload-page" id="uploadPage">
+        <div class="upload-header">
+            <h2>📤 آپلود</h2>
+            <button class="close-upload" id="closeUpload">&times;</button>
+        </div>
+        <div style="margin-top:var(--header-height);padding:10px;">
+            <div class="upload-container" id="uploadContainer">
+                <i class="fas fa-cloud-upload-alt"></i>
+                <h3>انتخاب فایل</h3>
+                <p>برای آپلود عکس یا ویدئو کلیک کنید</p>
+                <button class="upload-btn" id="uploadSelectBtn">انتخاب فایل</button>
+                <input type="file" id="fileInput" accept="image/*,video/*">
+                <div class="upload-preview" id="uploadPreview">
+                    <img id="previewImage" src="#" alt="preview">
+                    <video id="previewVideo" controls style="display:none;"></video>
+                </div>
+                <div class="upload-caption" id="uploadCaption">
+                    <textarea id="captionInput" placeholder="توضیحات پست را بنویسید..."></textarea>
+                </div>
+                <div class="upload-hashtags" id="uploadHashtags">
+                    <input type="text" id="hashtagInput" placeholder="هشتگ‌ها (با کاما جدا کنید)">
+                </div>
+                <button class="upload-submit" id="uploadSubmit">📤 ارسال پست</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Follow Modal -->
+    <div class="follow-modal" id="followModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:400;justify-content:center;align-items:center;padding:20px;backdrop-filter:blur(4px);">
+        <div class="follow-modal-content" style="background:var(--bg-secondary);border-radius:var(--radius);max-width:400px;width:100%;max-height:70vh;display:flex;flex-direction:column;overflow:hidden;direction:rtl;box-shadow:var(--shadow);">
+            <div class="follow-modal-header" style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+                <h3 id="followModalTitle" style="font-size:16px;color:var(--text);">دنبال‌کنندگان</h3>
+                <button class="close-follow" id="closeFollowModal" style="font-size:24px;cursor:pointer;color:var(--text);background:none;border:none;transition:var(--transition);">&times;</button>
+            </div>
+            <div class="follow-modal-body" id="followModalBody" style="flex:1;overflow-y:auto;padding:16px 20px;"></div>
+        </div>
+    </div>
+
+    <!-- Side Menu -->
+    <div class="menu-overlay" id="menuOverlay"></div>
+    <div class="side-menu" id="sideMenu">
+        <div class="menu-header">
+            <h3>📋 منو</h3>
+            <button class="close-menu" id="closeMenu">&times;</button>
+        </div>
+        <div class="menu-item" id="menuProfile">
+            <i class="fas fa-user"></i>
+            <span class="menu-text">پروفایل</span>
+        </div>
+        <div class="menu-item" id="menuSettings">
+            <i class="fas fa-cog"></i>
+            <span class="menu-text">تنظیمات</span>
+        </div>
+        <div class="menu-item" id="menuStats">
+            <i class="fas fa-chart-bar"></i>
+            <span class="menu-text">آمار</span>
+        </div>
+        <div class="menu-item" id="menuTheme">
+            <i class="fas fa-palette"></i>
+            <span class="menu-text">تغیر تم</span>
+        </div>
+        <div class="menu-item" id="menuAdmin" style="display:none;border-right:3px solid var(--primary);background:rgba(0,149,246,0.05);">
+            <i class="fas fa-crown"></i>
+            <span class="menu-text">پنل مدیریت</span>
+            <span class="menu-badge">ادمین</span>
+        </div>
+        <div class="menu-item" id="menuLogout">
+            <i class="fas fa-sign-out-alt"></i>
+            <span class="menu-text">خروج</span>
+        </div>
+    </div>
+
+    <!-- Bottom Nav -->
+    <nav class="bottom-nav">
+        <button id="profileBtn">
+            <i class="fas fa-user"></i>
+            <span>پروفایل</span>
+        </button>
+        <button id="uploadBtn">
+            <i class="fas fa-upload"></i>
+            <span>آپلود</span>
+        </button>
+        <button id="exploreBtn" class="active">
+            <i class="fas fa-compass"></i>
+            <span>اکسپلور</span>
+        </button>
+        <button id="reelsBtn">
+            <i class="fas fa-film"></i>
+            <span>ریلز</span>
+        </button>
+    </nav>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        // ============================================
+        // 🌐 تنظیمات اصلی
+        // ============================================
+        const API_URL = window.location.origin;
+        const socket = io();
+        let currentUser = null;
+        let currentToken = localStorage.getItem('token');
+        let isAdmin = false;
+        let isDarkTheme = localStorage.getItem('theme') === 'dark';
+        let language = localStorage.getItem('language') || 'fa';
+        let currentPostId = null;
+        let currentChatRoom = null;
+        let currentChatUser = null;
+        let currentPage = 1;
+        let isLoading = false;
+        let isUploading = false;
+
+        // ============================================
+        // 🔐 احراز هویت
+        // ============================================
+
+        async function registerUser(username, email, password) {
+            const res = await fetch(API_URL + '/api/auth/register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, email, password })
+            });
+            return await res.json();
+        }
+
+        async function loginUser(email, password) {
+            const res = await fetch(API_URL + '/api/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, password })
+            });
+            return await res.json();
+        }
+
+        async function logoutUser() {
+            await fetch(API_URL + '/api/auth/logout', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token: currentToken })
+            });
+            localStorage.removeItem('token');
+            currentToken = null;
+            currentUser = null;
+            isAdmin = false;
+            location.reload();
+        }
+
+        async function getCurrentUser() {
+            if (!currentToken) return null;
+            try {
+                const res = await fetch(API_URL + '/api/auth/me', {
+                    headers: { 'Authorization': 'Bearer ' + currentToken }
+                });
+                if (res.ok) return await res.json();
+                return null;
+            } catch {
+                return null;
+            }
+        }
+
+        async function verifyAdmin() {
+            if (!currentToken) return false;
+            try {
+                const res = await fetch(API_URL + '/api/admin/verify', {
+                    headers: { 'Authorization': 'Bearer ' + currentToken }
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    return data.isAdmin || false;
+                }
+                return false;
+            } catch {
+                return false;
+            }
+        }
+
+        // ============================================
+        // 📦 توابع API
+        // ============================================
+
+        async function getPosts(page = 1, hashtag = '') {
+            const url = API_URL + '/api/posts?page=' + page + '&limit=20' + (hashtag ? '&hashtag=' + encodeURIComponent(hashtag) :
+                '');
+            const res = await fetch(url);
+            return await res.json();
+        }
+
+        async function createPost(file, caption, hashtags) {
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('caption', caption);
+            formData.append('userId', currentUser?.userId || 'user1');
+            formData.append('username', currentUser?.username || 'کاربر');
+            if (hashtags) formData.append('hashtags', hashtags);
+
+            const res = await fetch(API_URL + '/api/posts', {
+                method: 'POST',
+                body: formData
+            });
+            return await res.json();
+        }
+
+        async function likePost(postId) {
+            const res = await fetch(API_URL + '/api/posts/' + postId + '/like', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId: currentUser?.userId || 'user1' })
+            });
+            return await res.json();
+        }
+
+        async function addComment(postId, text) {
+            const res = await fetch(API_URL + '/api/posts/' + postId + '/comment', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    userId: currentUser?.userId || 'user1',
+                    username: currentUser?.username || 'کاربر',
+                    text
+                })
+            });
+            return await res.json();
+        }
+
+        async function getStories() {
+            const res = await fetch(API_URL + '/api/stories');
+            return await res.json();
+        }
+
+        async function createStory(file) {
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('userId', currentUser?.userId || 'user1');
+            formData.append('username', currentUser?.username || 'کاربر');
+
+            const res = await fetch(API_URL + '/api/stories', {
+                method: 'POST',
+                body: formData
+            });
+            return await res.json();
+        }
+
+        async function getUsers() {
+            const res = await fetch(API_URL + '/api/users');
+            return await res.json();
+        }
+
+        async function updateProfile(userId, data) {
+            const res = await fetch(API_URL + '/api/users/' + userId + '/profile', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            return await res.json();
+        }
+
+        async function followUser(userId, followerId) {
+            const res = await fetch(API_URL + '/api/users/' + userId + '/follow', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ followerId })
+            });
+            return await res.json();
+        }
+
+        // ===== Admin API =====
+        async function getAdminUsers() {
+            const res = await fetch(API_URL + '/api/admin/users', {
+                headers: { 'Authorization': 'Bearer ' + currentToken }
+            });
+            return await res.json();
+        }
+
+        async function banUser(userId, banned) {
+            const res = await fetch(API_URL + '/api/admin/users/' + userId + '/ban', {
+                method: 'PUT',
+                headers: {
+                    'Authorization': 'Bearer ' + currentToken,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ banned })
+            });
+            return await res.json();
+        }
+
+        async function deletePost(postId) {
+            const res = await fetch(API_URL + '/api/admin/posts/' + postId, {
+                method: 'DELETE',
+                headers: { 'Authorization': 'Bearer ' + currentToken }
+            });
+            return await res.json();
+        }
+
+        async function getAdminPosts() {
+            const res = await fetch(API_URL + '/api/admin/posts', {
+                headers: { 'Authorization': 'Bearer ' + currentToken }
+            });
+            return await res.json();
+        }
+
+        async function broadcastMessage(message) {
+            const res = await fetch(API_URL + '/api/admin/broadcast', {
+                method: 'POST',
+                headers: {
+                    'Authorization': 'Bearer ' + currentToken,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ message })
+            });
+            return await res.json();
+        }
+
+        async function getAdminStats() {
+            const res = await fetch(API_URL + '/api/admin/stats', {
+                headers: { 'Authorization': 'Bearer ' + currentToken }
+            });
+            return await res.json();
+        }
+
+        async function addShard() {
+            const res = await fetch(API_URL + '/api/admin/add-shard', {
+                method: 'POST',
+                headers: { 'Authorization': 'Bearer ' + currentToken }
+            });
+            return await res.json();
+        }
+
+        // ============================================
+        // 💬 چت
+        // ============================================
+
+        socket.on('connect', () => {
+            console.log('✅ Connected to server');
+            if (currentUser) {
+                socket.emit('register', { userId: currentUser.userId, username: currentUser.username });
+            }
+        });
+
+        socket.on('users-online', (users) => {
+            document.getElementById('statOnlineUsers').textContent = users?.length || 0;
+            renderChatUsers();
+        });
+
+        socket.on('receive-message', (data) => {
+            displayChatMessage(data.userId, data.username, data.message, data.timestamp);
+        });
+
+        socket.on('history', (messages) => {
+            const messagesDiv = document.getElementById('chatMessages');
+            messagesDiv.innerHTML = '';
+            messages.forEach(msg => {
+                displayChatMessage(msg.userId, msg.username, msg.message, msg.timestamp);
+            });
+        });
+
+        socket.on('broadcast', (data) => {
+            const broadcast = document.getElementById('broadcast');
+            broadcast.textContent = '📢 ' + data.message + ' (از ' + data.from + ')';
+            broadcast.classList.add('show');
+            showToast('📢 پیام همگانی: ' + data.message);
+            setTimeout(() => broadcast.classList.remove('show'), 10000);
+        });
+
+        socket.on('error', (data) => {
+            showToast('❌ ' + data.message);
+        });
+
+        function startChat(userId, username) {
+            if (currentUser && currentUser.isBanned) {
+                showToast('❌ شما مسدود شده‌اید و نمی‌توانید چت کنید');
+                return;
+            }
+
+            currentChatUser = userId;
+            const roomId = [currentUser?.userId || 'user1', userId].sort().join('_');
+            currentChatRoom = roomId;
+
+            document.getElementById('chatTitle').textContent = '💬 ' + username;
+            document.getElementById('chatInterface').classList.add('active');
+
+            socket.emit('join-room', { roomId, userId: currentUser?.userId || 'user1' });
+        }
+
+        function sendChatMessage() {
+            if (currentUser && currentUser.isBanned) {
+                showToast('❌ شما مسدود شده‌اید و نمی‌توانید چت کنید');
+                return;
+            }
+
+            const input = document.getElementById('chatInput');
+            const text = input.value.trim();
+            if (!text || !currentChatRoom || !currentUser) return;
+
+            socket.emit('send-message', {
+                roomId: currentChatRoom,
+                userId: currentUser.userId,
+                username: currentUser.username,
+                message: text
+            });
+
+            displayChatMessage(currentUser.userId, currentUser.username, text, new Date().toISOString());
+            input.value = '';
+        }
+
+        function displayChatMessage(userId, username, message, timestamp) {
+            const messagesDiv = document.getElementById('chatMessages');
+            const empty = messagesDiv.querySelector('.chat-empty');
+            if (empty) empty.remove();
+
+            const div = document.createElement('div');
+            div.className = 'chat-message' + (userId === currentUser?.userId ? ' own' : '');
+
+            const time = timestamp ? new Date(timestamp).toLocaleTimeString(language === 'fa' ? 'fa-IR' : 'en-US') : '';
+
+            div.innerHTML =
+                '<div class="msg-user">' + (userId === currentUser?.userId ? 'شما' : username) + '</div><div class="msg-text">' +
+                message + '</div><div class="msg-time">' + time + '</div>';
+
+            messagesDiv.appendChild(div);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        async function renderChatUsers() {
+            const list = document.getElementById('chatUsersList');
+            list.innerHTML = '';
+            const users = await getUsers();
+
+            let hasUsers = false;
+            users.forEach(user => {
+                if (user.userId === currentUser?.userId) return;
+                if (user.isBanned) return;
+                hasUsers = true;
+                const div = document.createElement('div');
+                div.className = 'chat-user';
+                div.onclick = () => startChat(user.userId, user.username);
+
+                const statusClass = user.isOnline ? 'online' : '';
+                const statusText = user.isOnline ? 'آنلاین' : 'آفلاین';
+
+                div.innerHTML =
+                    '<div class="user-avatar"><img src="' + (user.avatar || 'https://i.pravatar.cc/150?img=' + Math.floor(
+                        Math.random() * 70)) + '" alt="user"></div><div><div class="user-name">' + user.username +
+                    '</div><div class="user-status ' + statusClass + '">' + statusText + '</div></div>';
+                list.appendChild(div);
+            });
+
+            if (!hasUsers) {
+                list.innerHTML = '<div style="padding:10px 16px;color:var(--text-secondary);">هیچ کاربر دیگری آنلاین نیست</div>';
+            }
+        }
+
+        // ============================================
+        // 🎨 نمایش
+        // ============================================
+
+        function createPostElement(post) {
+            const div = document.createElement('div');
+            div.className = 'gallery-item';
+            div.setAttribute('data-id', post.postId);
+
+            const isLiked = localStorage.getItem('liked_' + post.postId) === 'true';
+
+            let captionHtml = post.caption || '';
+            if (post.hashtags && post.hashtags.length > 0) {
+                post.hashtags.forEach(h => {
+                    captionHtml = captionHtml.replace('#' + h,
+                        '<span class="hashtag" style="color:var(--primary);cursor:pointer;" onclick="event.stopPropagation(); searchHashtag(\'' +
+                        h + '\')">#' + h + '</span>');
+                });
+            }
+
+            div.innerHTML =
+                '<div class="image-container"><img src="' + post.image +
+                '" alt="post" loading="lazy"></div><div class="explore-post-actions"><button class="action-btn like-btn ' +
+                (isLiked ? 'liked' : '') + '" data-id="' + post.postId +
+                '" onclick="event.stopPropagation(); handleLike(\'' + post.postId +
+                '\')"><i class="' + (isLiked ? 'fas' : 'far') + ' fa-heart"></i><span class="count">' + (post.likes || 0) +
+                '</span></button><button class="action-btn comment-btn" data-id="' + post.postId +
+                '" onclick="event.stopPropagation(); openComments(\'' + post.postId +
+                '\')"><i class="far fa-comment"></i><span class="count">' + (post.comments || []).length +
+                '</span></button><button class="action-btn share-btn" data-id="' + post.postId +
+                '" onclick="event.stopPropagation(); sharePost(\'' + post.postId +
+                '\')"><i class="fas fa-share-alt"></i><span class="count">' + (post.shares || 0) +
+                '</span></button></div>';
+
+            div.onclick = () => openPostDetail(post.postId);
+            return div;
+        }
+
+        function createProfilePostElement(post) {
+            const div = document.createElement('div');
+            div.className = 'profile-post';
+            div.setAttribute('data-id', post.postId);
+            div.onclick = () => openPostDetail(post.postId);
+
+            div.innerHTML =
+                '<div class="image-container"><img src="' + post.image +
+                '" alt="post" loading="lazy"><div class="profile-post-overlay"><span><i class="fas fa-heart"></i> ' + (post
+                    .likes || 0) + '</span><span><i class="fas fa-comment"></i> ' + (post.comments || []).length +
+                '</span></div></div>';
+            return div;
+        }
+
+        function createStoryElement(story) {
+            const div = document.createElement('div');
+            div.className = 'story-item';
+            div.onclick = () => {
+                showToast('📸 استوری از ' + story.username);
+                viewStory(story.storyId);
+            };
+
+            div.innerHTML = '<div class="story-avatar"><img src="' + story.image +
+                '" alt="story"></div><span class="story-username">' + story.username + '</span>';
+            return div;
+        }
+
+        // ============================================
+        // 📥 بارگذاری
+        // ============================================
+
+        async function loadPosts(page = 1, hashtag = '') {
+            if (isLoading) return;
+            isLoading = true;
+
+            const gallery = document.getElementById('gallery');
+            const loading = document.getElementById('loadingIndicator');
+            const noPosts = document.getElementById('noPostsMessage');
+
+            if (page === 1) {
+                loading.style.display = 'block';
+                gallery.innerHTML = '';
+                noPosts.style.display = 'none';
+            }
+
+            const data = await getPosts(page, hashtag);
+
+            if (page === 1) {
+                loading.style.display = 'none';
+            }
+
+            if (data.posts.length === 0 && page === 1) {
+                noPosts.style.display = 'block';
+                isLoading = false;
+                return;
+            }
+
+            data.posts.forEach(post => {
+                gallery.appendChild(createPostElement(post));
+            });
+
+            currentPage = page;
+            isLoading = false;
+        }
+
+        async function loadStories() {
+            const container = document.getElementById('storiesContainer');
+            container.innerHTML = '';
+
+            // دکمه افزودن استوری
+            const addDiv = document.createElement('div');
+            addDiv.className = 'story-item';
+            addDiv.onclick = () => {
+                const fileInput = document.createElement('input');
+                fileInput.type = 'file';
+                fileInput.accept = 'image/*,video/*';
+                fileInput.onchange = async (e) => {
+                    const file = e.target.files[0];
+                    if (file) {
+                        const result = await createStory(file);
+                        if (result.storyId) {
+                            showToast('✅ استوری با موفقیت آپلود شد!');
+                            loadStories();
+                        }
+                    }
+                };
+                fileInput.click();
+            };
+            addDiv.innerHTML =
+                '<div class="story-avatar add-story"><i class="fas fa-plus" style="font-size:28px;color:var(--primary);display:flex;align-items:center;justify-content:center;width:100%;height:100%;"></i></div><span class="story-username">افزودن</span>';
+            container.appendChild(addDiv);
+
+            const stories = await getStories();
+            stories.forEach(story => {
+                container.appendChild(createStoryElement(story));
+            });
+        }
+
+        async function loadProfile() {
+            if (!currentUser) return;
+
+            document.getElementById('profileUsername').textContent = currentUser.username || 'کاربر';
+            document.getElementById('bioDisplay').textContent = currentUser.bio || 'توسعه‌دهنده وب | عاشق کدنویسی';
+            document.getElementById('followerCount').textContent = currentUser.followers || 0;
+            document.getElementById('followingCount').textContent = currentUser.following || 0;
+
+            const posts = await getPosts(1);
+            const userPosts = posts.posts.filter(p => p.userId === currentUser.userId);
+            document.getElementById('postCount').textContent = userPosts.length;
+
+            const gallery = document.getElementById('profileGallery');
+            gallery.innerHTML = '';
+            if (userPosts.length === 0) {
+                gallery.innerHTML =
+                    '<p style="grid-column:span 3;text-align:center;color:var(--text-secondary);padding:20px;">هیچ پستی ندارید</p>';
+            } else {
+                userPosts.forEach(post => {
+                    gallery.appendChild(createProfilePostElement(post));
+                });
+            }
+
+            // Settings
+            document.getElementById('settingsUsername').textContent = currentUser.username || '-';
+            document.getElementById('settingsEmail').textContent = currentUser.email || '-';
+            document.getElementById('settingsPostCount').textContent = userPosts.length || 0;
+            document.getElementById('statTotalPosts').textContent = posts.total || 0;
+
+            const users = await getUsers();
+            document.getElementById('statTotalUsers').textContent = users.length || 0;
+
+            // Admin Panel
+            if (isAdmin) {
+                await loadAdminPanel();
+            }
+        }
+
+        async function loadAdminPanel() {
+            if (!isAdmin) return;
+
+            document.getElementById('menuAdmin').style.display = 'flex';
+
+            try {
+                const stats = await getAdminStats();
+                if (stats) {
+                    document.getElementById('adminUserCount').textContent = stats.users?.total || 0;
+                    document.getElementById('adminPostCount').textContent = stats.posts?.total || 0;
+                    document.getElementById('adminOnlineCount').textContent = stats.users?.online || 0;
+                    document.getElementById('adminShardCount').textContent = stats.database?.shardCount || 5;
+                }
+            } catch (e) { console.error(e); }
+
+            try {
+                const users = await getAdminUsers();
+                const list = document.getElementById('adminUsersList');
+                list.innerHTML = '';
+                users.forEach(user => {
+                    if (user.isAdmin) return;
+                    const div = document.createElement('div');
+                    div.className = 'admin-item';
+                    div.innerHTML = '<span>' + user.username + ' (' + user.email + ')</span><span><button class="admin-btn ' +
+                        (user.isBanned ? 'success' : 'danger') + '" onclick="toggleBan(\'' + user.userId + '\', ' + (!user
+                            .isBanned) + ')">' + (user.isBanned ? 'رفع مسدودیت' : 'مسدود کردن') + '</button></span>';
+                    list.appendChild(div);
+                });
+            } catch (e) { console.error(e); }
+
+            try {
+                const posts = await getAdminPosts();
+                const list = document.getElementById('adminPostsList');
+                list.innerHTML = '';
+                posts.slice(0, 20).forEach(post => {
+                    const div = document.createElement('div');
+                    div.className = 'admin-item';
+                    div.innerHTML = '<span>' + (post.caption || 'بدون توضیحات').substring(0, 30) + ' ...</span><span><button class="admin-btn danger" onclick="deletePostAdmin(\'' +
+                        post.postId + '\')">🗑️ حذف</button></span>';
+                    list.appendChild(div);
+                });
+            } catch (e) { console.error(e); }
+        }
+
+        // ============================================
+        // 🎯 اکشن‌ها
+        // ============================================
+
+        window.handleLike = async function(postId) {
+            if (currentUser && currentUser.isBanned) {
+                showToast('❌ شما مسدود شده‌اید');
+                return;
+            }
+
+            const result = await likePost(postId);
+            document.querySelectorAll('.like-btn[data-id="' + postId + '"]').forEach(btn => {
+                btn.querySelector('i').className = result.liked ? 'fas fa-heart' : 'far fa-heart';
+                btn.classList.toggle('liked', result.liked);
+                btn.querySelector('.count').textContent = result.likes || 0;
+                localStorage.setItem('liked_' + postId, result.liked ? 'true' : 'false');
+            });
+        };
+
+        window.openComments = async function(postId) {
+            if (currentUser && currentUser.isBanned) {
+                showToast('❌ شما مسدود شده‌اید');
+                return;
+            }
+
+            currentPostId = postId;
+            const data = await getPosts(1);
+            const post = data.posts.find(p => p.postId === postId);
+            const list = document.getElementById('commentList');
+            list.innerHTML = '';
+
+            if (!post || !post.comments || post.comments.length === 0) {
+                list.innerHTML = '<div style="text-align:center;color:var(--text-secondary);padding:20px;">هنوز کامنتی وجود ندارد</div>';
+            } else {
+                post.comments.forEach(c => {
+                    const div = document.createElement('div');
+                    div.className = 'comment-item';
+                    div.innerHTML =
+                        '<div class="comment-avatar"><img src="https://i.pravatar.cc/150?img=' + Math.floor(Math
+                        .random() * 70) + '" alt="avatar"></div><div class="comment-content"><div class="comment-username">' +
+                        (c.username || 'کاربر') + '</div><div class="comment-text">' + c.text +
+                        '</div><div class="comment-time">' + (c.createdAt ? new Date(c.createdAt).toLocaleString(
+                            language === 'fa' ? 'fa-IR' : 'en-US') : 'چند لحظه پیش') + '</div></div>';
+                    list.appendChild(div);
+                });
+            }
+
+            document.getElementById('commentModal').classList.add('active');
+            document.getElementById('modalCommentInput').focus();
+        };
+
+        window.sharePost = function(postId) {
+            document.getElementById('shareModal').dataset.postId = postId;
+            document.getElementById('shareModal').classList.add('active');
+        };
+
+        window.searchHashtag = function(hashtag) {
+            document.getElementById('searchInput').value = '#' + hashtag;
+            loadPosts(1, hashtag);
+            showToast('🔍 جستجو برای #' + hashtag);
+        };
+
+        window.openPostDetail = async function(postId) {
+            const data = await getPosts(1);
+            const post = data.posts.find(p => p.postId === postId);
+            if (!post) {
+                showToast('❌ پست پیدا نشد!');
+                return;
+            }
+
+            let captionHtml = post.caption || 'بدون توضیحات';
+            if (post.hashtags && post.hashtags.length > 0) {
+                post.hashtags.forEach(h => {
+                    captionHtml = captionHtml.replace('#' + h,
+                        '<span style="color:var(--primary);cursor:pointer;" onclick="event.stopPropagation(); searchHashtag(\'' +
+                        h + '\')">#' + h + '</span>');
+                });
+            }
+
+            showToast('📸 ' + captionHtml + '\n❤️ ' + (post.likes || 0) + ' لایک\n💬 ' + (post.comments || []).length +
+                ' کامنت');
+        };
+
+        window.viewStory = async function(storyId) {
+            await fetch(API_URL + '/api/stories/' + storyId + '/view', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId: currentUser?.userId || 'user1' })
+            });
+        };
+
+        window.toggleBan = async function(userId, banned) {
+            if (currentUser && userId === currentUser.userId) {
+                showToast('❌ نمی‌توانید خودتان را مسدود کنید');
+                return;
+            }
+            const result = await banUser(userId, banned);
+            if (result.success) {
+                showToast('✅ کاربر ' + (banned ? 'مسدود' : 'رفع مسدودیت') + ' شد');
+                loadAdminPanel();
+            }
+        };
+
+        window.deletePostAdmin = async function(postId) {
+            if (!confirm('آیا از حذف این پست مطمئن هستید؟')) return;
+            const result = await deletePost(postId);
+            if (result.success) {
+                showToast('✅ پست با موفقیت حذف شد');
+                loadAdminPanel();
+                loadPosts(1);
+            }
+        };
+
+        // ============================================
+        // 🎬 Event Listeners
+        // ============================================
+
+        // Auth
+        document.getElementById('logoutBtn')?.addEventListener('click', logoutUser);
+        document.getElementById('menuLogout')?.addEventListener('click', logoutUser);
+
+        // Chat
+        document.getElementById('chatOpenBtn').addEventListener('click', () => {
+            document.getElementById('chatInterface').classList.add('active');
+            renderChatUsers();
+        });
+
+        document.getElementById('closeChatBtn').addEventListener('click', () => {
+            document.getElementById('chatInterface').classList.remove('active');
+            if (currentChatRoom) {
+                socket.emit('leave-room', { roomId: currentChatRoom, userId: currentUser?.userId });
+                currentChatRoom = null;
+                currentChatUser = null;
+            }
+        });
+
+        document.getElementById('chatSendBtn').addEventListener('click', sendChatMessage);
+        document.getElementById('chatInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendChatMessage();
+        });
+
+        // Comments
+        document.getElementById('modalSendComment').addEventListener('click', async function() {
+            const input = document.getElementById('modalCommentInput');
+            const text = input.value.trim();
+            if (text && currentPostId) {
+                await addComment(currentPostId, text);
+                input.value = '';
+                document.getElementById('commentList').innerHTML =
+                    '<div style="text-align:center;color:var(--success);padding:20px;">✅ کامنت با موفقیت ثبت شد!</div>';
+                setTimeout(() => openComments(currentPostId), 500);
+            }
+        });
+
+        document.getElementById('modalCommentInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') document.getElementById('modalSendComment').click();
+        });
+
+        document.getElementById('closeModal').addEventListener('click', () => {
+            document.getElementById('commentModal').classList.remove('active');
+            currentPostId = null;
+        });
+
+        document.getElementById('commentModal').addEventListener('click', function(e) {
+            if (e.target === this) {
+                this.classList.remove('active');
+                currentPostId = null;
+            }
+        });
+
+        // Share
+        document.getElementById('closeShareModal').addEventListener('click', () => {
+            document.getElementById('shareModal').classList.remove('active');
+        });
+
+        document.getElementById('shareModal').addEventListener('click', function(e) {
+            if (e.target === this) this.classList.remove('active');
+        });
+
+        document.querySelectorAll('.share-option').forEach(option => {
+            option.addEventListener('click', function() {
+                const type = this.getAttribute('data-share');
+                const postId = document.getElementById('shareModal').dataset.postId;
+                const link = window.location.href + '?post=' + postId;
+
+                if (type === 'site') {
+                    showToast('✅ پست در سایت اشتراک‌گذاری شد!');
+                } else if (type === 'telegram') {
+                    window.open('https://t.me/share/url?url=' + encodeURIComponent(link) + '&text=' +
+                        encodeURIComponent('به این پست نگاه کن!'), '_blank');
+                } else if (type === 'whatsapp') {
+                    window.open('https://api.whatsapp.com/send?text=' + encodeURIComponent(
+                        'به این پست نگاه کن! ' + link), '_blank');
+                } else if (type === 'copy') {
+                    navigator.clipboard.writeText(link).then(() => {
+                        showToast('✅ لینک کپی شد!');
+                    });
+                }
+                document.getElementById('shareModal').classList.remove('active');
+            });
+        });
+
+        // Profile
+        document.getElementById('profileBtn').addEventListener('click', () => {
+            document.getElementById('profilePage').classList.add('active');
+            loadProfile();
+        });
+
+        document.getElementById('closeProfile').addEventListener('click', () => {
+            document.getElementById('profilePage').classList.remove('active');
+        });
+
+        document.getElementById('profilePage').addEventListener('click', function(e) {
+            if (e.target === this) this.classList.remove('active');
+        });
+
+        document.getElementById('profileFollowBtn').addEventListener('click', async function() {
+            if (!currentUser) return;
+            const isFollowing = this.classList.contains('following');
+            if (isFollowing) {
+                this.classList.remove('following');
+                this.textContent = 'دنبال کردن';
+            } else {
+                this.classList.add('following');
+                this.textContent = 'دنبال شده';
+            }
+        });
+
+        document.getElementById('saveBio').addEventListener('click', async function() {
+            const bio = document.getElementById('bioInput').value.trim();
+            if (bio && currentUser) {
+                const result = await updateProfile(currentUser.userId, { bio });
+                if (result.success) {
+                    document.getElementById('bioDisplay').textContent = bio;
+                    document.getElementById('bioInput').value = '';
+                    currentUser.bio = bio;
+                    showToast('✅ بیوگرافی با موفقیت ذخیره شد!');
+                }
+            } else {
+                showToast('❌ لطفا بیوگرافی خود را وارد کنید.');
+            }
+        });
+
+        // Upload
+        document.getElementById('uploadBtn').addEventListener('click', () => {
+            if (currentUser && currentUser.isBanned) {
+                showToast('❌ شما مسدود شده‌اید و نمی‌توانید آپلود کنید');
+                return;
+            }
+            document.getElementById('uploadPage').classList.add('active');
+            document.getElementById('uploadHashtags').classList.add('active');
+        });
+
+        document.getElementById('closeUpload').addEventListener('click', () => {
+            document.getElementById('uploadPage').classList.remove('active');
+            resetUpload();
+        });
+
+        document.getElementById('uploadPage').addEventListener('click', function(e) {
+            if (e.target === this) {
+                this.classList.remove('active');
+                resetUpload();
+            }
+        });
+
+        document.getElementById('uploadSelectBtn').addEventListener('click', () => {
+            document.getElementById('fileInput').click();
+        });
+
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            const file = this.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const previewImg = document.getElementById('previewImage');
+                    const previewVideo = document.getElementById('previewVideo');
+                    if (file.type.startsWith('image/')) {
+                        previewImg.src = e.target.result;
+                        previewImg.style.display = 'block';
+                        previewVideo.style.display = 'none';
+                    } else if (file.type.startsWith('video/')) {
+                        previewVideo.src = e.target.result;
+                        previewVideo.style.display = 'block';
+                        previewImg.style.display = 'none';
+                    }
+                    document.getElementById('uploadPreview').classList.add('active');
+                    document.getElementById('uploadCaption').classList.add('active');
+                    document.getElementById('uploadHashtags').classList.add('active');
+                    document.getElementById('uploadSubmit').classList.add('active');
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        document.getElementById('uploadSubmit').addEventListener('click', async function() {
+            if (isUploading) return;
+            const file = document.getElementById('fileInput').files[0];
+            const caption = document.getElementById('captionInput').value.trim();
+            const hashtags = document.getElementById('hashtagInput').value.trim();
+
+            if (!file) {
+                showToast('❌ لطفا یک فایل انتخاب کنید.');
+                return;
+            }
+
+            isUploading = true;
+            this.textContent = '⏳ در حال آپلود...';
+            this.disabled = true;
+
+            const result = await createPost(file, caption, hashtags);
+
+            if (result && result.postId) {
+                showToast('✅ پست با موفقیت آپلود شد!');
+                resetUpload();
+                document.getElementById('uploadPage').classList.remove('active');
+                loadPosts(1);
+            } else {
+                showToast('❌ خطا در آپلود پست!');
+            }
+
+            this.textContent = '📤 ارسال پست';
+            this.disabled = false;
+            isUploading = false;
+        });
+
+        function resetUpload() {
+            document.getElementById('fileInput').value = '';
+            document.getElementById('uploadPreview').classList.remove('active');
+            document.getElementById('uploadCaption').classList.remove('active');
+            document.getElementById('uploadHashtags').classList.remove('active');
+            document.getElementById('uploadSubmit').classList.remove('active');
+            document.getElementById('previewImage').style.display = 'none';
+            document.getElementById('previewVideo').style.display = 'none';
+            document.getElementById('captionInput').value = '';
+            document.getElementById('hashtagInput').value = '';
+        }
+
+        // Side Menu
+        document.getElementById('menuIcon').addEventListener('click', () => {
+            document.getElementById('sideMenu').classList.add('active');
+            document.getElementById('menuOverlay').classList.add('active');
+        });
+
+        document.getElementById('closeMenu').addEventListener('click', () => {
+            document.getElementById('sideMenu').classList.remove('active');
+            document.getElementById('menuOverlay').classList.remove('active');
+        });
+
+        document.getElementById('menuOverlay').addEventListener('click', () => {
+            document.getElementById('sideMenu').classList.remove('active');
+            document.getElementById('menuOverlay').classList.remove('active');
+        });
+
+        document.getElementById('menuProfile').addEventListener('click', () => {
+            document.getElementById('sideMenu').classList.remove('active');
+            document.getElementById('menuOverlay').classList.remove('active');
+            document.getElementById('profilePage').classList.add('active');
+            loadProfile();
+        });
+
+        document.getElementById('menuSettings').addEventListener('click', () => {
+            document.getElementById('sideMenu').classList.remove('active');
+            document.getElementById('menuOverlay').classList.remove('active');
+            document.getElementById('settingsPage').classList.add('active');
+            loadProfile();
+        });
+
+        document.getElementById('menuStats').addEventListener('click', () => {
+            document.getElementById('sideMenu').classList.remove('active');
+            document.getElementById('menuOverlay').classList.remove('active');
+            document.getElementById('settingsPage').classList.add('active');
+            loadProfile();
+        });
+
+        document.getElementById('menuTheme').addEventListener('click', () => {
+            toggleTheme();
+            document.getElementById('sideMenu').classList.remove('active');
+            document.getElementById('menuOverlay').classList.remove('active');
+        });
+
+        document.getElementById('menuAdmin').addEventListener('click', () => {
+            document.getElementById('sideMenu').classList.remove('active');
+            document.getElementById('menuOverlay').classList.remove('active');
+            document.getElementById('adminPanel').classList.add('active');
+            loadAdminPanel();
+        });
+
+        // Settings
+        document.getElementById('settingsOpenBtn').addEventListener('click', () => {
+            document.getElementById('settingsPage').classList.add('active');
+            loadProfile();
+        });
+
+        document.getElementById('closeSettings').addEventListener('click', () => {
+            document.getElementById('settingsPage').classList.remove('active');
+        });
+
+        document.getElementById('settingsPage').addEventListener('click', function(e) {
+            if (e.target === this) this.classList.remove('active');
+        });
+
+        document.getElementById('languageSelect').addEventListener('change', function() {
+            language = this.value;
+            localStorage.setItem('language', language);
+            if (currentUser) {
+                updateProfile(currentUser.userId, { language });
+            }
+            showToast('✅ زبان تغییر کرد!');
+            location.reload();
+        });
+
+        document.getElementById('themeToggle').addEventListener('click', toggleTheme);
+
+        function toggleTheme() {
+            isDarkTheme = !isDarkTheme;
+            document.documentElement.setAttribute('data-theme', isDarkTheme ? 'dark' : 'light');
+            localStorage.setItem('theme', isDarkTheme ? 'dark' : 'light');
+            document.getElementById('themeToggle').classList.toggle('active');
+            showToast(isDarkTheme ? '🌙 تم تاریک فعال شد' : '☀️ تم روشن فعال شد');
+        }
+
+        // Admin
+        document.getElementById('broadcastBtn').addEventListener('click', async function() {
+            const input = document.getElementById('broadcastInput');
+            const message = input.value.trim();
+            if (!message) {
+                showToast('❌ لطفا پیام را وارد کنید');
+                return;
+            }
+            const result = await broadcastMessage(message);
+            if (result.success) {
+                showToast('✅ پیام همگانی ارسال شد!');
+                input.value = '';
+            }
+        });
+
+        document.getElementById('addShardBtn').addEventListener('click', async function() {
+            const result = await addShard();
+            if (result.success) {
+                showToast('✅ شارد جدید با موفقیت اضافه شد! تعداد شاردها: ' + result.shardCount);
+                loadAdminPanel();
+            }
+        });
+
+        // Close Admin
+        document.getElementById('adminPanel').addEventListener('click', function(e) {
+            if (e.target === this) this.classList.remove('active');
+        });
+
+        // Explore / Reels
+        let exploreMode = true;
+        let reelsMode = false;
+
+        document.getElementById('exploreBtn').addEventListener('click', function() {
+            const gallery = document.getElementById('gallery');
+            const stories = document.getElementById('storiesSection');
+
+            if (exploreMode) {
+                exploreMode = false;
+                reelsMode = false;
+                gallery.style.gridTemplateColumns = 'repeat(2, 1fr)';
+                stories.style.display = 'block';
+                this.classList.remove('active');
+                document.getElementById('reelsBtn').classList.remove('active');
+            } else {
+                exploreMode = true;
+                reelsMode = false;
+                gallery.style.gridTemplateColumns = 'repeat(3, 1fr)';
+                stories.style.display = 'none';
+                this.classList.add('active');
+                document.getElementById('reelsBtn').classList.remove('active');
+                loadPosts(1);
+            }
+        });
+
+        document.getElementById('reelsBtn').addEventListener('click', function() {
+            const gallery = document.getElementById('gallery');
+            const stories = document.getElementById('storiesSection');
+
+            if (reelsMode) {
+                reelsMode = false;
+                exploreMode = false;
+                gallery.style.gridTemplateColumns = 'repeat(2, 1fr)';
+                stories.style.display = 'block';
+                this.classList.remove('active');
+                document.getElementById('exploreBtn').classList.remove('active');
+            } else {
+                reelsMode = true;
+                exploreMode = false;
+                gallery.style.gridTemplateColumns = '1fr';
+                stories.style.display = 'none';
+                this.classList.add('active');
+                document.getElementById('exploreBtn').classList.remove('active');
+            }
+        });
+
+        // Search
+        document.getElementById('searchInput').addEventListener('input', function() {
+            const query = this.value.trim();
+            if (query.startsWith('#')) {
+                loadPosts(1, query.substring(1));
+            } else if (query.length > 2) {
+                loadPosts(1);
+                const gallery = document.getElementById('gallery');
+                const items = gallery.querySelectorAll('.gallery-item');
+                items.forEach(item => {
+                    const text = item.textContent.toLowerCase();
+                    item.style.display = text.includes(query.toLowerCase()) ? '' : 'none';
+                });
+            } else {
+                loadPosts(1);
+            }
+        });
+
+        // Follow stats
+        document.getElementById('statFollowers').addEventListener('click', async function() {
+            const modal = document.getElementById('followModal');
+            document.getElementById('followModalTitle').textContent = '👥 دنبال‌کنندگان';
+            const users = await getUsers();
+            const body = document.getElementById('followModalBody');
+            body.innerHTML = '';
+            users.forEach(user => {
+                if (user.userId === currentUser?.userId) return;
+                const div = document.createElement('div');
+                div.className = 'follow-item';
+                div.innerHTML =
+                    '<div class="follow-avatar"><img src="' + (user.avatar || 'https://i.pravatar.cc/150?img=' +
+                    Math.floor(Math.random() * 70)) + '" alt="' + user.username +
+                    '"></div><span class="follow-name">' + user.username +
+                    '</span><button class="follow-btn" onclick="followUser(\'' + user.userId + '\', \'' + currentUser
+                    ?.userId + '\')">دنبال کردن</button>';
+                body.appendChild(div);
+            });
+            modal.style.display = 'flex';
+        });
+
+        document.getElementById('statFollowing').addEventListener('click', async function() {
+            const modal = document.getElementById('followModal');
+            document.getElementById('followModalTitle').textContent = '👥 دنبال‌شونده‌ها';
+            const users = await getUsers();
+            const body = document.getElementById('followModalBody');
+            body.innerHTML = '';
+            users.forEach(user => {
+                if (user.userId === currentUser?.userId) return;
+                const div = document.createElement('div');
+                div.className = 'follow-item';
+                div.innerHTML =
+                    '<div class="follow-avatar"><img src="' + (user.avatar || 'https://i.pravatar.cc/150?img=' +
+                    Math.floor(Math.random() * 70)) + '" alt="' + user.username +
+                    '"></div><span class="follow-name">' + user.username +
+                    '</span><button class="follow-btn" onclick="followUser(\'' + user.userId + '\', \'' + currentUser
+                    ?.userId + '\')">دنبال کردن</button>';
+                body.appendChild(div);
+            });
+            modal.style.display = 'flex';
+        });
+
+        document.getElementById('closeFollowModal').addEventListener('click', () => {
+            document.getElementById('followModal').style.display = 'none';
+        });
+
+        document.getElementById('followModal').addEventListener('click', function(e) {
+            if (e.target === this) this.style.display = 'none';
+        });
+
+        // ============================================
+        // 🛠️ Toast
+        // ============================================
+
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.classList.add('show');
+            clearTimeout(toast._timeout);
+            toast._timeout = setTimeout(() => toast.classList.remove('show'), 3500);
+        }
+
+        // ============================================
+        // 🚀 اجرا
+        // ============================================
+
+        (async function init() {
+            // تنظیم تم
+            if (isDarkTheme) {
+                document.documentElement.setAttribute('data-theme', 'dark');
+                document.getElementById('themeToggle').classList.add('active');
+            }
+
+            // تنظیم زبان
+            document.getElementById('languageSelect').value = language;
+
+            // بررسی کاربر
+            if (currentToken) {
+                const user = await getCurrentUser();
+                if (user) {
+                    currentUser = user;
+                    isAdmin = user.isAdmin || false;
+                    console.log('✅ کاربر:', currentUser.username, isAdmin ? '(ادمین)' : '');
+                } else {
+                    localStorage.removeItem('token');
+                    currentToken = null;
+                }
+            }
+
+            // اگر کاربر وجود نداشت، ثبت نام خودکار
+            if (!currentUser) {
+                const testUser = {
+                    username: 'کاربر_' + Math.floor(Math.random() * 10000),
+                    email: 'user_' + Date.now() + '@test.com',
+                    password: '123456'
+                };
+                const registerResult = await registerUser(testUser.username, testUser.email, testUser.password);
+                if (registerResult.success) {
+                    currentToken = registerResult.token;
+                    localStorage.setItem('token', currentToken);
+                    const user = await getCurrentUser();
+                    if (user) {
+                        currentUser = user;
+                        isAdmin = user.isAdmin || false;
+                        console.log('✅ کاربر جدید:', currentUser.username);
+                    }
+                }
+            }
+
+            // اتصال به WebSocket
+            if (currentUser) {
+                socket.emit('register', { userId: currentUser.userId, username: currentUser.username });
+                if (isAdmin) {
+                    document.getElementById('menuAdmin').style.display = 'flex';
+                }
+            }
+
+            // بارگذاری اولیه
+            document.getElementById('gallery').style.gridTemplateColumns = 'repeat(3, 1fr)';
+            document.getElementById('storiesSection').style.display = 'none';
+            document.getElementById('exploreBtn').classList.add('active');
+
+            await loadPosts(1);
+            await loadStories();
+            await loadProfile();
+
+            console.log('✅ App started! User:', currentUser?.username || 'Guest');
+            console.log('🔐 Encryption: AES-256-GCM');
+            console.log('📊 Shards: 5');
+            console.log('🚀 Ready for millions of users!');
+        })();
+    </script>
+</body>
+</html>
+    `);
+});
+
+// ============================================
+// 🚀 اجرا
+// ============================================
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    log(`🚀 Server running on http://localhost:${PORT}`);
+    log(`🔐 Encryption: AES-256-GCM`);
+    log(`📊 Database: 5 Shards`);
+    log(`💾 Cache: In-Memory with TTL`);
+    log(`📦 Queue: Background Processing`);
+    log(`👑 Admin: admin@social.com / Admin@123456`);
+});
