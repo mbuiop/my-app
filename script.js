@@ -13,6 +13,7 @@ const socket = io({
 let currentUser = null;
 let currentChatUser = null;
 let viewingProfileId = null;
+let profileGridPostIds = [];
 let viewingProfileFollowing = false;
 let pendingMediaUrl = null;
 let pendingMediaType = null;
@@ -169,21 +170,20 @@ function showAuthModal(mode) {
             <input type="text" id="regUsernameInput" class="name-input" placeholder="نام کاربری (فقط انگلیسی)" maxlength="30" autocapitalize="off">
             <input type="email" id="regEmailInput" class="name-input" placeholder="ایمیل" maxlength="80">
             <input type="password" id="regPasswordInput" class="name-input" placeholder="رمز عبور (حداقل ۸ کاراکتر)" maxlength="100">
-            <button class="btn-primary" style="width:100%;padding:12px;font-size:14px;" onclick="registerUser()">
-                <i class="fas fa-rocket"></i> ساخت حساب و ورود
-            </button>
             ` : `
             <input type="text" id="loginIdentifierInput" class="name-input" placeholder="نام کاربری یا ایمیل" maxlength="80">
             <input type="password" id="loginPasswordInput" class="name-input" placeholder="رمز عبور" maxlength="100">
-            <button class="btn-primary" style="width:100%;padding:12px;font-size:14px;" onclick="loginUser()">
-                <i class="fas fa-right-to-bracket"></i> ورود
-            </button>
             `}
+            <div class="captcha-container" id="captchaContainer"></div>
+            <button class="btn-primary" style="width:100%;padding:12px;font-size:14px;" onclick="${isLogin ? 'loginUser()' : 'registerUser()'}">
+                <i class="fas fa-${isLogin ? 'right-to-bracket' : 'rocket'}"></i> ${isLogin ? 'ورود' : 'ساخت حساب و ورود'}
+            </button>
             <p style="font-size:10px;color:var(--text-3);margin-top:8px;">
                 با ادامه دادن، قوانین و حریم خصوصی را می‌پذیرید
             </p>
         </div>`;
     document.body.appendChild(modal);
+    initCaptcha(document.getElementById('captchaContainer'));
 
     if (!isLogin) {
         document.getElementById('regAvatarInput').addEventListener('change', function (e) {
@@ -203,10 +203,14 @@ async function registerUser() {
 
     if (!name || !username || !email || !password) { showNotification('همه فیلدها را پر کن'); return; }
 
+    const captchaBox = document.getElementById('captchaContainer');
+    if (captchaBox?.dataset.solved !== 'true') { showNotification('اول پازل امنیتی رو حل کن'); return; }
+    const captchaPassToken = captchaBox.dataset.passToken;
+
     try {
         const res = await fetch('/api/auth/register', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, username, email, password })
+            body: JSON.stringify({ name, username, email, password, captchaPassToken })
         });
         const data = await res.json();
         if (data.success) {
@@ -234,6 +238,7 @@ async function registerUser() {
             showNotification('✨ خوش آمدی ' + currentUser.name);
         } else {
             showNotification('خطا: ' + data.error);
+            initCaptcha(document.getElementById('captchaContainer'));
         }
     } catch (e) { showNotification('خطا در ارتباط با سرور'); }
 }
@@ -243,10 +248,14 @@ async function loginUser() {
     const password = document.getElementById('loginPasswordInput').value;
     if (!identifier || !password) { showNotification('نام کاربری/ایمیل و رمز عبور را وارد کن'); return; }
 
+    const captchaBox = document.getElementById('captchaContainer');
+    if (captchaBox?.dataset.solved !== 'true') { showNotification('اول پازل امنیتی رو حل کن'); return; }
+    const captchaPassToken = captchaBox.dataset.passToken;
+
     try {
         const res = await fetch('/api/auth/login', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ identifier, password })
+            body: JSON.stringify({ identifier, password, captchaPassToken })
         });
         const data = await res.json();
         if (data.success) {
@@ -262,6 +271,7 @@ async function loginUser() {
             showNotification('✨ خوش آمدی ' + currentUser.name);
         } else {
             showNotification('خطا: ' + data.error);
+            initCaptcha(document.getElementById('captchaContainer'));
         }
     } catch (e) { showNotification('خطا در ارتباط با سرور'); }
 }
@@ -270,6 +280,105 @@ function logoutUser() {
     localStorage.removeItem('yareman_user_id');
     localStorage.removeItem('yareman_token');
     location.reload();
+}
+
+// ============================================
+// ویجت کپچای پازل اسلایدری
+// ============================================
+async function initCaptcha(containerEl) {
+    if (!containerEl) return;
+    containerEl.dataset.solved = 'false';
+    delete containerEl.dataset.passToken;
+    containerEl.innerHTML = `<div class="captcha-loading"><i class="fas fa-spinner fa-spin"></i> در حال آماده‌سازی...</div>`;
+
+    let challenge;
+    try {
+        const res = await fetch('/api/captcha/challenge');
+        challenge = await res.json();
+    } catch (e) {
+        containerEl.innerHTML = `<p style="color:var(--danger);font-size:12px;">خطا در بارگذاری پازل امنیتی</p>`;
+        return;
+    }
+
+    containerEl.dataset.token = challenge.token;
+    containerEl.innerHTML = `
+        <canvas id="captchaCanvas" width="${challenge.canvasWidth}" height="${challenge.canvasHeight}"></canvas>
+        <input type="range" id="captchaSlider" class="captcha-slider" min="0" max="${challenge.canvasWidth - 40}" value="0">
+        <p class="captcha-hint" id="captchaHint">قطعه رو بکش تا دقیقاً تو جای خالی بشینه</p>
+    `;
+
+    const canvas = document.getElementById('captchaCanvas');
+    const ctx = canvas.getContext('2d');
+    drawCaptchaScene(ctx, challenge, 0);
+
+    const slider = document.getElementById('captchaSlider');
+    slider.addEventListener('input', () => drawCaptchaScene(ctx, challenge, parseInt(slider.value)));
+
+    slider.addEventListener('change', async () => {
+        if (containerEl.dataset.solved === 'true') return;
+        const position = parseInt(slider.value) + 20; // مرکز قطعه (شعاع ۲۰)
+        const hint = document.getElementById('captchaHint');
+        try {
+            const vres = await fetch('/api/captcha/verify', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token: challenge.token, position })
+            });
+            const vdata = await vres.json();
+            if (vdata.success) {
+                containerEl.dataset.solved = 'true';
+                containerEl.dataset.passToken = vdata.passToken;
+                hint.textContent = '✅ تایید شد';
+                hint.style.color = '#2ecc71';
+                slider.disabled = true;
+            } else {
+                hint.textContent = '❌ درست نبود، دوباره بکش';
+                hint.style.color = 'var(--danger)';
+                slider.value = 0;
+                drawCaptchaScene(ctx, challenge, 0);
+            }
+        } catch (e) {
+            hint.textContent = '❌ خطا در تایید پازل';
+        }
+    });
+}
+
+function drawCaptchaScene(ctx, challenge, sliderVal) {
+    const w = challenge.canvasWidth, h = challenge.canvasHeight;
+    const grad = ctx.createLinearGradient(0, 0, w, h);
+    grad.addColorStop(0, '#6c5ce7');
+    grad.addColorStop(1, '#a29bfe');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+
+    ctx.fillStyle = 'rgba(255,255,255,.15)';
+    for (let i = 0; i < 6; i++) {
+        ctx.beginPath();
+        ctx.arc((i * 53 + 20) % w, (i * 41 + 30) % h, 18, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // جای خالی هدف
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.beginPath();
+    ctx.arc(challenge.target, challenge.pieceY, 20, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    ctx.strokeStyle = 'rgba(255,255,255,.9)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(challenge.target, challenge.pieceY, 20, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // قطعه‌ی متحرک
+    const pieceX = 20 + (sliderVal || 0);
+    ctx.fillStyle = '#feca57';
+    ctx.beginPath();
+    ctx.arc(pieceX, challenge.pieceY, 18, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#e17055';
+    ctx.lineWidth = 2;
+    ctx.stroke();
 }
 
 // ============================================
@@ -1245,12 +1354,12 @@ function pfSetActiveSlide(slideEl) {
     }
 }
 
-function openPostFullscreen(postId) {
+function openPostFullscreen(postId, customList) {
     const entry = explorePostIndex[postId];
     if (!entry) return;
 
-    // فید از همون ترتیب اکسپلور ساخته می‌شه و از پستی که کاربر لمس کرده شروع می‌شه
-    const allIds = Object.keys(explorePostIndex);
+    // فهرست فید رو از همون ترتیبی که تو اکسپلور (یا گرید پروفایل) چیده شده می‌سازیم، و از پستی که کاربر لمس کرده شروع می‌شه
+    const allIds = customList && customList.length ? customList : Object.keys(explorePostIndex);
     const startIdx = allIds.indexOf(postId);
     pfFeedList = allIds.slice(startIdx).concat(allIds.slice(0, startIdx));
     pfNextIndex = 0;
@@ -1723,12 +1832,28 @@ async function openProfile(userId) {
 
         const container = document.getElementById('viewPostsContainer');
         if (container) {
-            container.innerHTML = data.posts.length ?
-                data.posts.map(p => renderPostCard(p, data.user)).join('') :
-                `<div class="empty-state">
+            if (data.posts.length) {
+                profileGridPostIds = data.posts.map(p => p.id);
+                data.posts.forEach(p => { explorePostIndex[p.id] = { post: p, user: data.user }; });
+                container.innerHTML = `<div class="explore-grid profile-grid">${data.posts.map(p => `
+                    <div class="explore-tile${p.media_url ? '' : ' no-media'}" onclick="openPostFullscreen('${p.id}', profileGridPostIds)">
+                        ${p.media_url
+                            ? (p.media_type === 'video'
+                                ? `<video src="${p.media_url}" muted preload="metadata"></video><i class="fas fa-play tile-video-badge"></i>`
+                                : `<img src="${p.media_url}" loading="lazy">`)
+                            : `<p>${escapeHtml((p.content || '').substring(0, 140))}</p>`}
+                        <div class="tile-overlay">
+                            <span><i class="fas fa-eye"></i>${formatNumber(p.views || 0)}</span>
+                            <span><i class="fas fa-heart"></i>${formatNumber(p.likes || 0)}</span>
+                        </div>
+                    </div>
+                `).join('')}</div>`;
+            } else {
+                container.innerHTML = `<div class="empty-state">
                     <i class="fas fa-pen-fancy"></i>
                     این کاربر هنوز پستی منتشر نکرده.
                 </div>`;
+            }
         }
 
         document.getElementById('viewAssistantChat').innerHTML = '';

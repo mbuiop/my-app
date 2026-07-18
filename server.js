@@ -238,6 +238,90 @@ app.post('/api/user/register', async (req, res) => {
 });
 
 // محدودیت نرخ جداگانه برای لاگین/ثبت‌نام - جلوی حدس زدن رمز رو می‌گیره
+// ============================================
+// کپچای پازل اسلایدری (خودمیزبان، بدون سرویس بیرونی/کلید API)
+// منطق: سرور یه موقعیت هدف مخفی می‌سازه، امضاش می‌کنه؛ کاربر قطعه رو تا اونجا می‌کشه؛
+// سرور موقعیت رسیده رو با تلورانس کم با هدف امضاشده مقایسه می‌کنه. اگه درست بود، یه
+// «پاس‌توکن» کوتاه‌مدت و یک‌بارمصرف می‌ده که باید تو ثبت‌نام/ورود همراهش بفرسته.
+// این جلوی اسکریپت‌های ساده‌ی پرکردن فرم رو می‌گیره؛ در برابر ربات‌های پیشرفته‌ی
+// تحلیل‌گر تصویر محافظت کامل نیست، ولی برای این مقیاس کفایت می‌کنه.
+// ============================================
+const usedCaptchaPassTokens = new Set();
+const CAPTCHA_TOLERANCE_PX = 6;
+const CAPTCHA_MIN_SOLVE_MS = 350; // انسان حداقل این‌قدر طول می‌ده تا بکشدش؛ سریع‌تر از این مشکوکه
+
+function signCaptchaChallenge(target, pieceY) {
+    const issuedAt = Date.now();
+    const expires = issuedAt + 2 * 60 * 1000;
+    const payload = `${target}.${pieceY}.${issuedAt}.${expires}`;
+    const sig = crypto.createHmac('sha256', SESSION_SECRET).update('captcha:' + payload).digest('hex');
+    return Buffer.from(`${payload}.${sig}`).toString('base64url');
+}
+
+function verifyCaptchaChallenge(token, submittedPosition) {
+    try {
+        const decoded = Buffer.from(String(token), 'base64url').toString('utf8');
+        const parts = decoded.split('.');
+        if (parts.length !== 5) return false;
+        const [target, pieceY, issuedAt, expires, sig] = parts;
+        const payload = `${target}.${pieceY}.${issuedAt}.${expires}`;
+        const expectedSig = crypto.createHmac('sha256', SESSION_SECRET).update('captcha:' + payload).digest('hex');
+        const a = Buffer.from(sig, 'hex'), b = Buffer.from(expectedSig, 'hex');
+        if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false;
+        if (Date.now() > Number(expires)) return false;
+        if (Date.now() - Number(issuedAt) < CAPTCHA_MIN_SOLVE_MS) return false;
+        if (Math.abs(Number(target) - Number(submittedPosition)) > CAPTCHA_TOLERANCE_PX) return false;
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+function issueCaptchaPassToken() {
+    const expires = Date.now() + 5 * 60 * 1000;
+    const nonce = crypto.randomBytes(8).toString('hex');
+    const payload = `captcha_pass.${expires}.${nonce}`;
+    const sig = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
+    return Buffer.from(`${payload}.${sig}`).toString('base64url');
+}
+
+function verifyCaptchaPassToken(passToken) {
+    if (!passToken || usedCaptchaPassTokens.has(passToken)) return false;
+    try {
+        const decoded = Buffer.from(String(passToken), 'base64url').toString('utf8');
+        const parts = decoded.split('.');
+        if (parts.length !== 4 || parts[0] !== 'captcha_pass') return false;
+        const [marker, expires, nonce, sig] = parts;
+        const payload = `${marker}.${expires}.${nonce}`;
+        const expectedSig = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
+        const a = Buffer.from(sig, 'hex'), b = Buffer.from(expectedSig, 'hex');
+        if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false;
+        if (Date.now() > Number(expires)) return false;
+        usedCaptchaPassTokens.add(passToken);
+        // پاکسازی خودکار بعد از انقضا تا حافظه پر نشه
+        setTimeout(() => usedCaptchaPassTokens.delete(passToken), 6 * 60 * 1000);
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+app.get('/api/captcha/challenge', (req, res) => {
+    const canvasWidth = 300, canvasHeight = 150;
+    const target = 60 + Math.floor(Math.random() * (canvasWidth - 100));
+    const pieceY = 30 + Math.floor(Math.random() * (canvasHeight - 60));
+    const token = signCaptchaChallenge(target, pieceY);
+    res.json({ token, target, pieceY, canvasWidth, canvasHeight });
+});
+
+app.post('/api/captcha/verify', (req, res) => {
+    const { token, position } = req.body || {};
+    if (typeof position !== 'number' || !verifyCaptchaChallenge(token, position)) {
+        return res.status(400).json({ success: false, error: 'پازل درست حل نشد، دوباره تلاش کن' });
+    }
+    res.json({ success: true, passToken: issueCaptchaPassToken() });
+});
+
 const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 20,
@@ -249,7 +333,10 @@ const authLimiter = rateLimit({
 // ============================================
 app.post('/api/auth/register', authLimiter, async (req, res) => {
     try {
-        const { username, email, password, name } = req.body || {};
+        const { username, email, password, name, captchaPassToken } = req.body || {};
+        if (!verifyCaptchaPassToken(captchaPassToken)) {
+            return res.status(400).json({ success: false, error: 'لطفاً پازل امنیتی را دوباره حل کن' });
+        }
         const uname = String(username || '').trim();
         const mail = String(email || '').trim().toLowerCase();
         const pass = String(password || '');
@@ -300,7 +387,10 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
 // ============================================
 app.post('/api/auth/login', authLimiter, async (req, res) => {
     try {
-        const { identifier, password } = req.body || {};
+        const { identifier, password, captchaPassToken } = req.body || {};
+        if (!verifyCaptchaPassToken(captchaPassToken)) {
+            return res.status(400).json({ success: false, error: 'لطفاً پازل امنیتی را دوباره حل کن' });
+        }
         if (!identifier || !password) {
             return res.status(400).json({ success: false, error: 'نام کاربری/ایمیل و رمز عبور الزامی است' });
         }
@@ -476,7 +566,7 @@ app.post('/api/stories/create', async (req, res) => {
 
         await db.query(userId, `
             INSERT INTO stories (id, user_id, media_url, media_type, caption, bg_color, text_color, views_count, created_at, expires_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, 0, CURRENT_TIMESTAMP, datetime('now', '+24 hours'))
+            VALUES ($1, $2, $3, $4, $5, $6, $7, 0, CURRENT_TIMESTAMP, NOW() + INTERVAL '24 hours')
         `, [storyId, userId, mediaUrl || null, type, (caption || '').trim().substring(0, 300) || null,
             bgColor || '#6c5ce7', textColor || '#ffffff']);
 
@@ -532,8 +622,9 @@ app.post('/api/stories/:storyId/view', async (req, res) => {
         if (viewerId === ownerId) return res.json({ success: true }); // بازدید خودِ صاحب استوری شمرده نمی‌شه
 
         const inserted = await db.query(ownerId, `
-            INSERT OR IGNORE INTO story_views (id, story_id, viewer_id, viewed_at)
+            INSERT INTO story_views (id, story_id, viewer_id, viewed_at)
             VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+            ON CONFLICT (story_id, viewer_id) DO NOTHING
         `, [crypto.randomUUID(), storyId, viewerId]);
 
         if (inserted.rowCount > 0) {
@@ -926,10 +1017,10 @@ app.get('/api/search', async (req, res) => {
         
         const result = await db.query(null, `
             SELECT id, name, avatar, 'user' as type FROM users 
-            WHERE name LIKE $1 AND id != 'admin_milad'
+            WHERE name ILIKE $1 AND id != 'admin_milad'
             UNION
             SELECT id, name, NULL as avatar, 'channel' as type FROM channels 
-            WHERE name LIKE $1
+            WHERE name ILIKE $1
             LIMIT 20
         `, [`%${q}%`]);
         res.json(result.rows);
