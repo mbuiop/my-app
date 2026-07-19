@@ -392,7 +392,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
             return res.status(400).json({ success: false, error: 'رمز عبور باید حداقل ۸ کاراکتر باشد' });
         }
 
-        const existing = db.findUserByUsernameOrEmail(uname) || db.findUserByUsernameOrEmail(mail);
+        const existing = (await db.findUserByUsernameOrEmail(uname)) || (await db.findUserByUsernameOrEmail(mail));
         if (existing) {
             return res.status(409).json({ success: false, error: 'این نام کاربری یا ایمیل قبلاً ثبت شده است' });
         }
@@ -432,7 +432,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
             return res.status(400).json({ success: false, error: 'نام کاربری/ایمیل و رمز عبور الزامی است' });
         }
 
-        const row = db.findUserByUsernameOrEmail(identifier);
+        const row = await db.findUserByUsernameOrEmail(identifier);
         if (!row || !row.password_hash || !db.verifyPassword(password, row.password_hash)) {
             return res.status(401).json({ success: false, error: 'نام کاربری/ایمیل یا رمز عبور اشتباه است' });
         }
@@ -620,7 +620,7 @@ app.post('/api/follow', async (req, res) => {
             return res.status(400).json({ success: false, error: 'اطلاعات ناقص است' });
         }
 
-        const result = db.followUser(followerId, followingId);
+        const result = await db.followUser(followerId, followingId);
         if (result.success && !result.alreadyFollowing) {
             const assistant = new IntelligentAssistant(followerId, db);
             await assistant.updateUserActivity('follow');
@@ -636,7 +636,7 @@ app.post('/api/follow', async (req, res) => {
 app.post('/api/unfollow', async (req, res) => {
     try {
         const { followerId, followingId } = req.body;
-        db.unfollowUser(followerId, followingId);
+        await db.unfollowUser(followerId, followingId);
         profileCache.clear();
         res.json({ success: true });
     } catch (error) {
@@ -873,7 +873,7 @@ app.post('/api/post/:postId/like', async (req, res) => {
         const { userId } = req.body;
         if (!userId) return res.status(400).json({ success: false, error: 'کاربر نامعتبر' });
 
-        const result = db.toggleLike(postId, userId);
+        const result = await db.toggleLike(postId, userId);
 
         if (result.liked) {
             const assistant = new IntelligentAssistant(userId, db);
@@ -1529,7 +1529,7 @@ app.post('/api/user/block', async (req, res) => {
     try {
         const { blockerId, blockedId } = req.body;
         if (!blockerId || !blockedId) return res.status(400).json({ success: false, error: 'اطلاعات ناقص است' });
-        res.json(db.blockUser(blockerId, blockedId));
+        res.json(await db.blockUser(blockerId, blockedId));
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -1538,7 +1538,7 @@ app.post('/api/user/block', async (req, res) => {
 app.post('/api/user/unblock', async (req, res) => {
     try {
         const { blockerId, blockedId } = req.body;
-        res.json(db.unblockUser(blockerId, blockedId));
+        res.json(await db.unblockUser(blockerId, blockedId));
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -1547,7 +1547,7 @@ app.post('/api/user/unblock', async (req, res) => {
 app.get('/api/user/:userId/is-blocked/:targetId', async (req, res) => {
     try {
         const { userId, targetId } = req.params;
-        res.json({ blocked: db.isBlocked(userId, targetId) });
+        res.json({ blocked: await db.isBlocked(userId, targetId) });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -1651,7 +1651,7 @@ io.on('connection', (socket) => {
         if (text.length > 4000) {
             return io.to(`user_${from}`).emit('message_sent', { success: false, error: 'پیام خیلی طولانیه', timestamp });
         }
-        if (db.isBlocked(from, to)) {
+        if (await db.isBlocked(from, to)) {
             return io.to(`user_${from}`).emit('message_sent', { success: false, error: 'امکان ارسال پیام به این کاربر وجود ندارد', timestamp });
         }
 
