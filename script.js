@@ -1525,7 +1525,12 @@ async function pfToggleComments(postId, slideKey) {
         try {
             const res = await fetch(`/api/post/${postId}/comments`);
             const comments = await res.json();
-            box.innerHTML = (comments.map(c => `
+            box.innerHTML = `
+                <div class="pf-comments-head">
+                    <strong>کامنت‌ها</strong>
+                    <button class="pf-comments-close" onclick="pfCloseComments('${slideKey}')"><i class="fas fa-times"></i></button>
+                </div>
+                <div class="pf-comments-list">` + (comments.map(c => `
                 <div class="comment-item">
                     <img src="${c.avatar || defaultAvatar(c.name)}" loading="lazy">
                     <div>
@@ -1533,13 +1538,18 @@ async function pfToggleComments(postId, slideKey) {
                         <span class="comment-text">${escapeHtml(c.text)}</span>
                     </div>
                 </div>
-            `).join('') || '') + `
+            `).join('') || '') + `</div>
                 <div class="comment-form">
                     <input type="text" id="pf-comment-input-${slideKey}" placeholder="کامنت بنویس...">
                     <button class="btn-plastic btn-plastic--pistachio" onclick="pfSubmitComment('${postId}', '${slideKey}')">ارسال</button>
                 </div>`;
         } catch (e) { showNotification('خطا'); }
     }
+}
+
+function pfCloseComments(slideKey) {
+    const box = document.getElementById(`pf-comments-${slideKey}`);
+    if (box) box.classList.remove('open');
 }
 
 async function pfSubmitComment(postId, slideKey) {
@@ -1556,7 +1566,7 @@ async function pfSubmitComment(postId, slideKey) {
         if (data.success) {
             input.value = '';
             const box = document.getElementById(`pf-comments-${slideKey}`);
-            const form = box.querySelector('.comment-form');
+            const list = box?.querySelector('.pf-comments-list');
             const item = document.createElement('div');
             item.className = 'comment-item';
             item.innerHTML = `
@@ -1565,7 +1575,7 @@ async function pfSubmitComment(postId, slideKey) {
                     <b>${escapeHtml(data.comment.name)}</b>
                     <span class="comment-text">${escapeHtml(data.comment.text)}</span>
                 </div>`;
-            if (form) box.insertBefore(item, form); else box.appendChild(item);
+            if (list) list.appendChild(item);
 
             const slide = document.querySelector(`.pf-slide[data-slide-key="${slideKey}"]`);
             const countEl = slide?.querySelectorAll('.pf-actions-bar span')[1];

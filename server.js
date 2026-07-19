@@ -1203,10 +1203,6 @@ app.get('/api/explore', async (req, res) => {
         }
 
         const result = await db.query(null, `
-            WITH ranked_users AS (
-                SELECT id, ROW_NUMBER() OVER (ORDER BY created_at ASC) AS signup_rank
-                FROM users
-            )
             SELECT 
                 u.id as user_id,
                 u.name,
@@ -1229,11 +1225,10 @@ app.get('/api/explore', async (req, res) => {
                 ) as recent_posts
             FROM channels c
             JOIN users u ON u.id = c.user_id
-            JOIN ranked_users ru ON ru.id = u.id
             WHERE c.posts_count > 0
-              AND (ru.signup_rank <= 1000 OR c.activity_score > 0)
+              AND (u.signup_rank <= 1000 OR c.activity_score > 0)
             ORDER BY 
-                (CASE WHEN ru.signup_rank <= 1000 THEN 1 ELSE 0 END) DESC,
+                (CASE WHEN u.signup_rank <= 1000 THEN 1 ELSE 0 END) DESC,
                 c.activity_score DESC, 
                 c.followers_count DESC
             LIMIT 50

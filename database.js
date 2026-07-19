@@ -58,12 +58,15 @@ const SHARD_SCHEMA_SQL = `
         is_verified INTEGER DEFAULT 0,
         restricted INTEGER DEFAULT 0,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        signup_rank BIGINT DEFAULT nextval('public.global_user_signup_seq')
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username) WHERE username IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_users_score ON users(score DESC);
     CREATE INDEX IF NOT EXISTS idx_users_created ON users(created_at ASC);
+    CREATE INDEX IF NOT EXISTS idx_users_signup_rank ON users(signup_rank ASC);
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS signup_rank BIGINT DEFAULT nextval('public.global_user_signup_seq');
 
     CREATE TABLE IF NOT EXISTS channels (
         id TEXT PRIMARY KEY,
@@ -344,6 +347,7 @@ class DatabaseManager {
                     shard_index INTEGER NOT NULL,
                     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
                 );
+                CREATE SEQUENCE IF NOT EXISTS public.global_user_signup_seq;
             `);
         } finally {
             bootClient.release();
@@ -691,11 +695,18 @@ class DatabaseManager {
             return [{ [alias]: total }];
         }
 
-        const orderMatch = sql.match(/ORDER BY\s+([\s\S]+?)(?:\s+LIMIT\s+(\d+))?\s*$/i);
-        if (!orderMatch) return rows;
-
-        const orderClause = orderMatch[1];
-        const limit = orderMatch[2] ? parseInt(orderMatch[2], 10) : null;
+        // برای پیدا کردن ORDER BY واقعیِ سطح بیرونیِ کوئری (نه ORDER BY داخل یه ساب‌کوئری تو دل SELECT/FROM)،
+        // آخرین رخداد «ORDER BY» تو کل متن رو در نظر می‌گیریم - چون ساب‌کوئری‌ها همیشه قبل از تمومِ
+        // کوئری میان، پس ORDER BY سطح بیرونی همیشه از همه‌شون بعدتر ظاهر می‌شه. قبلاً اولین رخداد
+        // در نظر گرفته می‌شد که با وجود ساب‌کوئری‌های دارای ORDER BY خودشون (مثل اکسپلور)، کل بقیه‌ی
+        // متن SQL به اشتباه به‌عنوان ستون‌های مرتب‌سازی پارس می‌شد و ادغام نتایج شاردها رو خراب می‌کرد.
+        const orderMatches = [...sql.matchAll(/ORDER BY/gi)];
+        if (!orderMatches.length) return rows;
+        const lastOrderBy = orderMatches[orderMatches.length - 1];
+        const tail = sql.slice(lastOrderBy.index + lastOrderBy[0].length);
+        const limitInTail = tail.match(/\bLIMIT\s+(\d+)/i);
+        const orderClause = limitInTail ? tail.slice(0, limitInTail.index) : tail;
+        const limit = limitInTail ? parseInt(limitInTail[1], 10) : null;
 
         const sortKeys = orderClause.split(',').map(part => {
             const [, col, dir] = part.trim().match(/([\w.]+)\s*(ASC|DESC)?/i) || [];
