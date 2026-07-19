@@ -1,30 +1,6 @@
 // ============================================
 // database.js - مدیریت دیتابیس با شاردینگ، کش هوشمند و رمزنگاری
-// نسخه‌ی PostgreSQL (قبلاً روی better-sqlite3 بود)
-// ============================================
-//
-// معماری شاردینگ (بدون تغییر نسبت به قبل، فقط موتور ذخیره‌سازی عوض شده):
-//   - ۱۵۰ "شارد منطقی" داریم (با DB_SHARD_COUNT قابل تغییره)، ولی به‌جای ۱۵۰ فایل SQLite جدا،
-//     همه‌شون روی یه دیتابیس PostgreSQL واحدند: هر شارد یه SCHEMA جدا (shard_0 .. shard_149) با
-//     یه Pool اتصال مشترک. این یعنی هزاران کاربر همزمان بدون باز نگه‌داشتن ۱۵۰ اتصال واقعی جواب
-//     می‌گیرن (Pool اتصال‌ها رو بین درخواست‌ها بازیافت می‌کنه) - دقیقاً همون چیزی که برای «میلیون‌ها
-//     کاربر» لازمه؛ نگه‌داشتن ۱۵۰ کانکشن دائمی به هر شارد (مثل نسخه‌ی SQLite قبلی) در مقیاس واقعی
-//     غیرممکن و کندکننده بود.
-//   - هر ردیف بر اساس "صاحبِ" اون ردیف مسیریابی می‌شه: کاربر با هش(id) روی یه شارد (schema) ثابت
-//     قرار می‌گیره و پست‌ها/کانال/کامنت‌ها/لایک‌های همون کاربر هم روی همون شارد ذخیره می‌شن.
-//   - برای موجودیت‌هایی که بعداً با شناسه‌ی خودشون (نه شناسه‌ی صاحبشون) جستجو می‌شن (مثلاً پست با
-//     postId) یه "دایرکتوری" (entity_id -> shard_index) روی جدول public._shard_directory
-//     نگه می‌داریم که موقع INSERT خودکار پر می‌شه (و در حافظه هم کش می‌شه، برای سرعت).
-//   - برای رابطه‌هایی که ذاتاً بین دو کاربر مختلفن (پیام‌های چت) از هش زوجی استفاده می‌شه تا کل
-//     مکالمه‌ی بین دو نفر همیشه روی یه شارد بمونه.
-//   - فالو/آنفالو/بلاک چون بین دو کاربر مختلفن و از هر دو طرف خونده می‌شن، با "نوشتن دوگانه"
-//     (dual-write) روی شارد هر دو کاربر ذخیره می‌شن.
-//
-// سازگاری با کد قبلی: ستون‌های تاریخ (created_at و...) به‌جای TEXT الان TIMESTAMPTZ واقعی هستن
-// (که خیلی درست‌تر و سریع‌تر برای مرتب‌سازی/فیلتره)، ولی خروجی‌شون از Postgres با یه
-// type-parser سفارشی به همون فرمت متنیِ قبلیِ SQLite ("YYYY-MM-DD HH:MM:SS", بدون تایم‌زون،
-// UTC) برگردونده می‌شه - یعنی کدهای فرانت/بک‌اند که قبلاً با new Date(dateStr + 'Z') کار
-// می‌کردن بدون هیچ تغییری درست کار می‌کنن.
+// نسخه‌ی PostgreSQL با ۱۵۰ شارد منطقی
 // ============================================
 const { Pool, types } = require('pg');
 const crypto = require('crypto');
@@ -32,18 +8,18 @@ const crypto = require('crypto');
 const SHARD_COUNT = Math.max(1, parseInt(process.env.DB_SHARD_COUNT || '150', 10));
 
 // ---- سازگاری فرمت تاریخ با نسخه‌ی قبلی (SQLite) ----
-const PG_TIMESTAMP_OID = 1114;   // timestamp بدون تایم‌زون
-const PG_TIMESTAMPTZ_OID = 1184; // timestamp with time zone
+const PG_TIMESTAMP_OID = 1114;
+const PG_TIMESTAMPTZ_OID = 1184;
 function formatTimestampLikeBefore(raw) {
     if (raw === null || raw === undefined) return raw;
     const d = new Date(raw);
     if (isNaN(d.getTime())) return raw;
-    return d.toISOString().slice(0, 19).replace('T', ' '); // "YYYY-MM-DD HH:MM:SS" (UTC)
+    return d.toISOString().slice(0, 19).replace('T', ' ');
 }
 types.setTypeParser(PG_TIMESTAMP_OID, formatTimestampLikeBefore);
 types.setTypeParser(PG_TIMESTAMPTZ_OID, formatTimestampLikeBefore);
 
-// ---- DDL کامل هر شارد (هر schema این جدول‌ها رو کامل داره) ----
+// ---- DDL کامل هر شارد ----
 const SHARD_SCHEMA_SQL = `
     CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
@@ -126,8 +102,6 @@ const SHARD_SCHEMA_SQL = `
     );
     CREATE INDEX IF NOT EXISTS idx_assistant_user ON assistant_training(user_id);
 
-    -- توجه: from_user/to_user عمداً بدون REFERENCES هستن، چون ممکنه صاحب هر طرف روی شارد
-    -- (schema) دیگه‌ای باشه و FK بین schema های مختلف در این معماری چک نمی‌شه.
     CREATE TABLE IF NOT EXISTS messages (
         id TEXT PRIMARY KEY,
         from_user TEXT NOT NULL,
@@ -152,7 +126,6 @@ const SHARD_SCHEMA_SQL = `
     CREATE INDEX IF NOT EXISTS idx_follows_follower ON follows(follower_id);
     CREATE INDEX IF NOT EXISTS idx_follows_following ON follows(following_id);
 
-    -- استوری: عکس/ویدیو/متن، ۲۴ ساعته منقضی می‌شه، قابلیت هایلایت دائمی داره
     CREATE TABLE IF NOT EXISTS stories (
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -224,7 +197,6 @@ const SHARD_SCHEMA_SQL = `
     );
     CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status);
 
-    -- مثل follows، بین دو کاربر ممکنه روی شاردهای متفاوت باشن، بدون REFERENCES بین‌شاردی
     CREATE TABLE IF NOT EXISTS blocked_users (
         blocker_id TEXT NOT NULL,
         blocked_id TEXT NOT NULL,
@@ -262,7 +234,6 @@ const SHARD_SCHEMA_SQL = `
     CREATE INDEX IF NOT EXISTS idx_receipts_status ON payment_receipts(status);
     CREATE INDEX IF NOT EXISTS idx_receipts_user ON payment_receipts(user_id);
 
-    -- نشست‌های ورود (برای "خروج نشد، اطلاعات پاک نشد" - آی‌دی دستگاه/توکن پایدار می‌مونه)
     CREATE TABLE IF NOT EXISTS user_sessions (
         token_hash TEXT PRIMARY KEY,
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -273,7 +244,6 @@ const SHARD_SCHEMA_SQL = `
     );
     CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions(user_id);
 
-    -- بازیابی رمز عبور با کد یک‌بارمصرف
     CREATE TABLE IF NOT EXISTS password_resets (
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -288,23 +258,12 @@ const SHARD_SCHEMA_SQL = `
 class DatabaseManager {
     constructor() {
         this.shardCount = SHARD_COUNT;
-
-        // ==========================================
-        // کش حافظه با سقف اندازه (LRU تقریبی) و ابطال آگاه از جدول
-        // ==========================================
-        this.cache = new Map(); // cacheKey -> { data, timestamp, tables: [] }
-        this.cacheTTL = 60000; // ۶۰ ثانیه
+        this.cache = new Map();
+        this.cacheTTL = 60000;
         this.cacheMaxEntries = 3000;
-
-        // دایرکتوری entity_id -> shard_index (در حافظه، پشتیبان‌گیری‌شده روی public._shard_directory)
         this.directory = new Map();
-
-        // کلید رمزنگاری - هر بار اجرای encrypt() یک IV تصادفی جدید تولید می‌کنه
         this.encryptionKey = crypto.randomBytes(32);
 
-        // ==========================================
-        // یک Pool اتصال مشترک برای کل ۱۵۰ شارد (schema) - نه ۱۵۰ اتصال جدا
-        // ==========================================
         this.pool = new Pool({
             connectionString: process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/yareman',
             max: parseInt(process.env.PG_POOL_MAX || '20', 10),
@@ -312,10 +271,9 @@ class DatabaseManager {
             connectionTimeoutMillis: 10000,
         });
         this.pool.on('error', (err) => {
-            console.error('⚠️  خطای غیرمنتظره در Pool اتصال PostgreSQL:', err.message);
+            console.error('⚠️ خطای غیرمنتظره در Pool اتصال PostgreSQL:', err.message);
         });
 
-        // سرور (server.js) باید قبل از server.listen(...) این Promise رو await کنه
         this.ready = this._init();
     }
 
@@ -331,9 +289,6 @@ class DatabaseManager {
         }
     }
 
-    // ============================================
-    // ساخت schema ها و جدول‌ها
-    // ============================================
     async _initSchemas() {
         const bootClient = await this.pool.connect();
         try {
@@ -360,7 +315,6 @@ class DatabaseManager {
             }
         };
 
-        // موازی ولی دسته‌ای (batch) تا موقع راه‌اندازی اول، Pool با ۱۵۰ درخواست همزمان خفه نشه
         const BATCH = 10;
         for (let start = 0; start < this.shardCount; start += BATCH) {
             const batch = [];
@@ -400,9 +354,6 @@ class DatabaseManager {
         }
     }
 
-    // ============================================
-    // رمزنگاری و رمزگشایی (AES-256-GCM با IV تصادفی به‌ازای هر پیام)
-    // ============================================
     encrypt(text) {
         try {
             const iv = crypto.randomBytes(16);
@@ -433,9 +384,6 @@ class DatabaseManager {
         }
     }
 
-    // ============================================
-    // هش رمز عبور (scrypt) - بدون I/O، پس همچنان synchronous
-    // ============================================
     hashPassword(password) {
         const salt = crypto.randomBytes(16).toString('hex');
         const hash = crypto.scryptSync(String(password), salt, 64).toString('hex');
@@ -456,7 +404,6 @@ class DatabaseManager {
         }
     }
 
-    // جستجوی کاربر با یوزرنیم یا ایمیل - همه‌ی شاردها موازی چک می‌شن (نه یکی‌یکی، برای سرعت)
     async findUserByUsernameOrEmail(usernameOrEmail) {
         const val = String(usernameOrEmail || '').trim().toLowerCase();
         if (!val) return null;
@@ -469,9 +416,6 @@ class DatabaseManager {
         return null;
     }
 
-    // ============================================
-    // شاردینگ - هش سازگار (consistent hashing ساده با mod) - بدون I/O
-    // ============================================
     hashKey(key) {
         const hash = crypto.createHash('md5').update(String(key)).digest();
         return hash.readUInt32BE(0) % this.shardCount;
@@ -493,7 +437,7 @@ class DatabaseManager {
         if (entityId === undefined || entityId === null) return;
         const id = String(entityId);
         if (this.directory.get(id) === shardIndex) return;
-        this.directory.set(id, shardIndex); // فوری در حافظه، برای resolveShardIndex همین لحظه
+        this.directory.set(id, shardIndex);
         try {
             const client = await this.pool.connect();
             try {
@@ -525,9 +469,6 @@ class DatabaseManager {
         }
     }
 
-    // اگه INSERT روی ستون اول id باشه، خودکار در دایرکتوری ثبت می‌شه (fire-and-forget عمدی:
-    // برای سرعت پاسخ، منتظر تمام‌شدنش نمی‌مونیم - نقشه در حافظه فوری آپدیت می‌شه، نوشتن روی
-    // دیسک در پس‌زمینه انجام می‌شه)
     _maybeRegisterFromInsert(sql, params, shardIndex) {
         const m = sql.match(/INSERT\s+INTO\s+(\w+)\s*\(([^)]+)\)/i);
         if (!m) return;
@@ -537,7 +478,6 @@ class DatabaseManager {
         }
     }
 
-    // اجرای مستقیم یه کوئری روی یه schema مشخص (بدون کش) - برای متدهای کمکی و کارهای ادمین
     async _exec(shardIndex, text, params = []) {
         const client = await this.pool.connect();
         try {
@@ -550,7 +490,6 @@ class DatabaseManager {
         }
     }
 
-    // اجرای تراکنشی (BEGIN/COMMIT/ROLLBACK) روی یه schema مشخص
     async _withTransaction(shardIndex, fn) {
         const client = await this.pool.connect();
         try {
@@ -567,8 +506,6 @@ class DatabaseManager {
         }
     }
 
-    // دسترسی مستقیم به یه schema با شماره (نه با کلید) - برای کارهای ادمین که باید همه‌ی
-    // شاردها رو یکی‌یکی بگردن (مثل ارسال همگانی)
     async queryShardByIndex(shardIndex, text, params = []) {
         return this._exec(shardIndex, text, params);
     }
@@ -577,9 +514,6 @@ class DatabaseManager {
         return Array.from({ length: this.shardCount }, (_, i) => i);
     }
 
-    // ============================================
-    // اجرای کوئری با مسیریابی شارد + کش (امضای بیرونی دقیقاً مثل قبل: db.query(key, sql, params))
-    // ============================================
     async query(key, text, params = []) {
         const cmd = text.trim().slice(0, 6).toUpperCase();
         const messagesRoute = this._routeMessagesQuery(text, params);
@@ -647,8 +581,6 @@ class DatabaseManager {
         return { rows: result.rows || [], rowCount: result.rowCount };
     }
 
-    // پخش موازی کوئری بین همه‌ی شاردها و ادغام نتایج (برای کلید null یا وقتی صاحب مشخصی نداریم)
-    // موازی (Promise.all) نه یکی‌یکی - چون ۱۵۰ رفت‌وبرگشت پشت‌سرهم خیلی کند می‌شد.
     async _runScatterGather(text, params, cmd) {
         const cacheKey = `scatter_${text}_${JSON.stringify(params)}`;
         if (cmd === 'SELECT') {
@@ -681,7 +613,6 @@ class DatabaseManager {
         return result;
     }
 
-    // ادغام هوشمند نتایج چند شارد: جمع COUNT(*)، یا اعمال دوباره‌ی ORDER BY/LIMIT روی نتایج ترکیب‌شده
     _mergeRows(sql, rows) {
         const countMatch = sql.match(/^\s*SELECT\s+COUNT\(\*\)\s+as\s+(\w+)\s+FROM/i);
         if (countMatch && rows.length) {
@@ -748,7 +679,7 @@ class DatabaseManager {
     clearCache() { this.cache.clear(); }
 
     // ============================================
-    // فالو/آنفالو - نوشتن دوگانه روی شارد هر دو کاربر
+    // متدهای اختصاصی شارد-ایمن
     // ============================================
     async followUser(followerId, followingId) {
         if (followerId === followingId) return { success: false, error: 'نمی‌توانید خودتان را فالو کنید' };
@@ -790,7 +721,6 @@ class DatabaseManager {
         return { success: true };
     }
 
-    // مسدود کردن کاربر در چت خصوصی - نوشتن دوگانه مثل فالو
     async blockUser(blockerId, blockedId) {
         const shardsInvolved = new Set([this.hashKey(blockerId), this.hashKey(blockedId)]);
         for (const idx of shardsInvolved) {
@@ -822,7 +752,6 @@ class DatabaseManager {
         return r.rows.length > 0;
     }
 
-    // لایک/آنلایک یک پست - شارد از روی دایرکتوری postId پیدا می‌شه، همه در یه تراکنش واقعی
     async toggleLike(postId, userId) {
         const shardIndex = this.resolveShardIndex(postId);
         let liked, likes;
@@ -846,9 +775,6 @@ class DatabaseManager {
         return { success: true, liked, likes };
     }
 
-    // ============================================
-    // نگهداری/آمار
-    // ============================================
     async getStats() {
         const stats = { shardCount: this.shardCount, perShard: [] };
         for (let i = 0; i < this.shardCount; i++) {

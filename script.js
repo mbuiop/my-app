@@ -117,16 +117,49 @@ function formatNumber(num) {
     return num;
 }
 
-// هدرهای احراز هویت برای مسیرهای ادمین - توکن واقعی، نه یک هدر ساختگی قابل جعل
 function authHeaders(extra = {}) {
     const token = localStorage.getItem('yareman_token') || '';
     return { ...extra, 'Authorization': 'Bearer ' + token };
 }
 
 // ============================================
+// نشست پایدار - بازیابی خودکار
+// ============================================
+async function restoreSession() {
+    const savedToken = localStorage.getItem('yareman_session_token');
+    if (!savedToken) return false;
+    try {
+        const res = await fetch('/api/auth/restore-session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: savedToken })
+        });
+        const data = await res.json();
+        if (data.success) {
+            currentUser = data.user;
+            localStorage.setItem('yareman_user_id', currentUser.id);
+            localStorage.setItem('yareman_token', data.token);
+            if (currentUser.role === 'admin') {
+                isAdmin = true;
+                document.getElementById('adminBtn').classList.add('show');
+            }
+            afterLogin();
+            return true;
+        }
+    } catch (e) {
+        console.error('Session restore error:', e);
+    }
+    return false;
+}
+
+// ============================================
 // ورود / ثبت‌نام
 // ============================================
 async function initApp() {
+    // ابتدا سعی کن نشست را بازیابی کنی
+    const restored = await restoreSession();
+    if (restored) return;
+
     const savedId = localStorage.getItem('yareman_user_id');
     const savedToken = localStorage.getItem('yareman_token');
     if (savedId && savedToken) {
@@ -173,6 +206,9 @@ function showAuthModal(mode) {
             ` : `
             <input type="text" id="loginIdentifierInput" class="name-input" placeholder="نام کاربری یا ایمیل" maxlength="80">
             <input type="password" id="loginPasswordInput" class="name-input" placeholder="رمز عبور" maxlength="100">
+            <p style="font-size:11.5px;text-align:left;margin:2px 0 0;">
+                <a href="#" onclick="event.preventDefault();showForgotPasswordModal();" style="color:var(--primary);">رمز رو فراموش کردی؟</a>
+            </p>
             `}
             <div class="captcha-container" id="captchaContainer"></div>
             <button class="btn-primary" style="width:100%;padding:12px;font-size:14px;" onclick="${isLogin ? 'loginUser()' : 'registerUser()'}">
@@ -218,7 +254,18 @@ async function registerUser() {
             localStorage.setItem('yareman_user_id', currentUser.id);
             localStorage.setItem('yareman_token', data.token);
 
-            // آواتار انتخابی رو جداگانه ذخیره می‌کنیم (ثبت‌نام فقط اطلاعات هویتی رو می‌گیره)
+            // ذخیره نشست پایدار
+            try {
+                const sessionRes = await fetch('/api/auth/session', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId: currentUser.id })
+                });
+                const sessionData = await sessionRes.json();
+                if (sessionData.success) {
+                    localStorage.setItem('yareman_session_token', sessionData.token);
+                }
+            } catch (e) {}
+
             if (avatar && !avatar.includes('dicebear')) {
                 try {
                     await fetch('/api/user/avatar', {
@@ -262,6 +309,19 @@ async function loginUser() {
             currentUser = data.user;
             localStorage.setItem('yareman_user_id', currentUser.id);
             localStorage.setItem('yareman_token', data.token);
+
+            // ذخیره نشست پایدار
+            try {
+                const sessionRes = await fetch('/api/auth/session', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId: currentUser.id })
+                });
+                const sessionData = await sessionRes.json();
+                if (sessionData.success) {
+                    localStorage.setItem('yareman_session_token', sessionData.token);
+                }
+            } catch (e) {}
+
             document.getElementById('authModal').remove();
             if (currentUser.role === 'admin') {
                 isAdmin = true;
@@ -279,7 +339,78 @@ async function loginUser() {
 function logoutUser() {
     localStorage.removeItem('yareman_user_id');
     localStorage.removeItem('yareman_token');
+    localStorage.removeItem('yareman_session_token');
     location.reload();
+}
+
+// ============================================
+// بازیابی رمز عبور
+// ============================================
+function showForgotPasswordModal() {
+    const existing = document.getElementById('forgotPassModal');
+    if (existing) existing.remove();
+
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.id = 'forgotPassModal';
+    modal.innerHTML = `
+        <div class="modal-content">
+            <h2>🔑 بازیابی رمز عبور</h2>
+            <p style="color:var(--text-2);font-size:12.5px;margin-bottom:10px;">
+                نام کاربری یا ایمیلت رو بنویس تا یه کد ۶ رقمی برات بفرستیم.
+            </p>
+            <input type="text" id="forgotIdentifierInput" class="name-input" placeholder="نام کاربری یا ایمیل" maxlength="80">
+            <button class="btn-primary" style="width:100%;padding:12px;font-size:14px;" onclick="submitForgotPassword()">
+                ارسال کد بازیابی
+            </button>
+            <div id="resetCodeSection" style="display:none;margin-top:10px;">
+                <input type="text" id="resetCodeInput" class="name-input" placeholder="کد ۶ رقمی" maxlength="6">
+                <input type="password" id="resetNewPasswordInput" class="name-input" placeholder="رمز جدید (حداقل ۸ کاراکتر)" maxlength="100">
+                <button class="btn-primary" style="width:100%;padding:12px;font-size:14px;" onclick="submitResetPassword()">
+                    تغییر رمز عبور
+                </button>
+            </div>
+            <button class="btn-ghost" style="width:100%;margin-top:8px;" onclick="document.getElementById('forgotPassModal').remove()">انصراف</button>
+        </div>`;
+    document.body.appendChild(modal);
+}
+
+async function submitForgotPassword() {
+    const identifier = document.getElementById('forgotIdentifierInput').value.trim();
+    if (!identifier) { showNotification('نام کاربری یا ایمیلت رو بنویس'); return; }
+    try {
+        const res = await fetch('/api/auth/forgot-password', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ identifier })
+        });
+        const data = await res.json();
+        if (data.success) {
+            document.getElementById('resetCodeSection').style.display = 'block';
+            showNotification('📧 اگه این حساب وجود داشته باشه، کد براش ارسال شد');
+        } else {
+            showNotification('خطا: ' + data.error);
+        }
+    } catch (e) { showNotification('خطا در ارتباط با سرور'); }
+}
+
+async function submitResetPassword() {
+    const identifier = document.getElementById('forgotIdentifierInput').value.trim();
+    const code = document.getElementById('resetCodeInput').value.trim();
+    const newPassword = document.getElementById('resetNewPasswordInput').value;
+    if (!code || newPassword.length < 8) { showNotification('کد و رمز جدید (حداقل ۸ کاراکتر) رو وارد کن'); return; }
+    try {
+        const res = await fetch('/api/auth/reset-password', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ identifier, code, newPassword })
+        });
+        const data = await res.json();
+        if (data.success) {
+            showNotification('✅ رمز عبور عوض شد، حالا وارد شو');
+            document.getElementById('forgotPassModal').remove();
+        } else {
+            showNotification('خطا: ' + data.error);
+        }
+    } catch (e) { showNotification('خطا در ارتباط با سرور'); }
 }
 
 // ============================================
@@ -316,7 +447,7 @@ async function initCaptcha(containerEl) {
 
     slider.addEventListener('change', async () => {
         if (containerEl.dataset.solved === 'true') return;
-        const position = parseInt(slider.value) + 20; // مرکز قطعه (شعاع ۲۰)
+        const position = parseInt(slider.value) + 20;
         const hint = document.getElementById('captchaHint');
         try {
             const vres = await fetch('/api/captcha/verify', {
@@ -357,7 +488,6 @@ function drawCaptchaScene(ctx, challenge, sliderVal) {
         ctx.fill();
     }
 
-    // جای خالی هدف
     ctx.save();
     ctx.globalCompositeOperation = 'destination-out';
     ctx.beginPath();
@@ -370,7 +500,6 @@ function drawCaptchaScene(ctx, challenge, sliderVal) {
     ctx.arc(challenge.target, challenge.pieceY, 20, 0, Math.PI * 2);
     ctx.stroke();
 
-    // قطعه‌ی متحرک
     const pieceX = 20 + (sliderVal || 0);
     ctx.fillStyle = '#feca57';
     ctx.beginPath();
@@ -382,7 +511,7 @@ function drawCaptchaScene(ctx, challenge, sliderVal) {
 }
 
 // ============================================
-// ارتقای پست - پرداخت کارت‌به‌کارت + آپلود فیش برای تایید مدیر
+// ارتقای پست
 // ============================================
 const UPGRADE_CARD_NUMBER = '5892101187322777';
 
@@ -496,7 +625,7 @@ function afterLogin() {
 }
 
 // ============================================
-// اعلان همگانی سنجاق‌شده - بالای اکسپلور، تا وقتی کاربر خودش نبنده می‌مونه
+// اعلان همگانی سنجاق‌شده
 // ============================================
 async function loadPinnedBroadcast() {
     try {
@@ -510,7 +639,6 @@ function showPinnedBroadcast(broadcastId, title, message) {
     if (!broadcastId) return;
     const dismissed = localStorage.getItem('dismissed_broadcast_id');
     if (dismissed === broadcastId) return;
-
     const box = document.getElementById('pinnedBroadcast');
     if (!box) return;
     box.dataset.broadcastId = broadcastId;
@@ -624,7 +752,6 @@ function handleMediaFile(file, type) {
     uploadMediaFile(file, type);
 }
 
-// آپلود واقعی و استریم‌شده به سرور (به‌جای Base64 توی JSON) - با نوار پیشرفت، بدون هنگ کردن مرورگر
 function uploadMediaFile(file, type) {
     const container = document.getElementById('mediaPreview');
     const content = document.getElementById('mediaPreviewContent');
@@ -779,7 +906,6 @@ function pickAdFor(seed) {
     const dismissedIds = JSON.parse(localStorage.getItem('dismissed_ad_ids') || '[]');
     const pool = activeAdsCache.filter(a => !dismissedIds.includes(a.id));
     if (!pool.length) return null;
-    // انتخاب پایدار بر اساس شناسه‌ی پست، تا با هر رندر دوباره، تبلیغ زیر همون پست عوض نشه
     let hash = 0;
     for (const ch of String(seed)) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
     return pool[hash % pool.length];
@@ -806,6 +932,27 @@ function dismissAdFooter(adId, btn) {
     if (!ids.includes(adId)) ids.push(adId);
     localStorage.setItem('dismissed_ad_ids', JSON.stringify(ids));
     btn.closest('.post-ad-footer')?.remove();
+}
+
+// ============================================
+// ذخیره پست (Save Post)
+// ============================================
+async function toggleSavePost(postId, btn) {
+    try {
+        const res = await fetch(`/api/post/${postId}/save`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: currentUser.id })
+        });
+        const data = await res.json();
+        if (data.success) {
+            btn.classList.toggle('saved', data.saved);
+            btn.querySelector('i').className = data.saved ? 'fas fa-bookmark' : 'far fa-bookmark';
+            showNotification(data.saved ? '✅ ذخیره شد' : '❌ از ذخیره خارج شد');
+        }
+    } catch (e) {
+        showNotification('خطا');
+    }
 }
 
 function renderPostCard(post, author) {
@@ -841,6 +988,9 @@ function renderPostCard(post, author) {
             </button>
             <button onclick="toggleComments('${post.id}', this)">
                 <i class="far fa-comment"></i> <span class="comment-count">${formatNumber(post.comments || 0)}</span>
+            </button>
+            <button onclick="toggleSavePost('${post.id}', this)" class="save-btn" title="ذخیره پست">
+                <i class="far fa-bookmark"></i>
             </button>
             <button onclick="sharePost('${post.id}')">
                 <i class="fas fa-share-alt"></i>
@@ -1119,7 +1269,6 @@ async function schedulePosts() {
     for (let i = 0; i < count; i++) {
         const postDate = new Date(baseDate);
         postDate.setDate(postDate.getDate() + (i * interval));
-        
         const media = scheduledMediaFiles[i] || null;
         posts.push({
             content: descriptions[i] || `پست شماره ${i + 1}`,
@@ -1148,9 +1297,9 @@ async function schedulePosts() {
 }
 
 // ============================================
-// اکسپلور - گرید سه‌تایی مثل اینستاگرام
+// اکسپلور
 // ============================================
-let explorePostIndex = {}; // postId -> { post, user }
+let explorePostIndex = {};
 
 async function loadExplore() {
     try {
@@ -1212,14 +1361,14 @@ async function loadExplore() {
 }
 
 // ============================================
-// نمایش تمام‌صفحه پست - اسکرول عمودی بی‌نهایت (مثل ریلز اینستاگرام)
+// نمایش تمام‌صفحه پست
 // ============================================
-let pfFeedList = [];        // ترتیب شناسه‌ی پست‌ها برای این جلسه‌ی مشاهده
-let pfNextIndex = 0;        // شمارنده‌ی کل اسلایدهای append‌شده (برای چرخش لیست وقتی به انتها رسیدیم)
+let pfFeedList = [];
+let pfNextIndex = 0;
 let pfObserver = null;
 let pfActiveSlideEl = null;
 let pfLoadingMore = false;
-let pfUserIndex = {};       // userId -> user (برای پیام/پروفایل از داخل اسلاید)
+let pfUserIndex = {};
 
 function pfSlideHtml(postId, slideKey) {
     const entry = explorePostIndex[postId];
@@ -1258,6 +1407,9 @@ function pfSlideHtml(postId, slideKey) {
                     <button class="pf-action-btn" onclick="pfToggleComments('${postId}', '${slideKey}')">
                         <i class="far fa-comment"></i><span>${formatNumber(post.comments || 0)}</span>
                     </button>
+                    <button class="pf-action-btn" onclick="toggleSavePost('${postId}', this)">
+                        <i class="far fa-bookmark"></i>
+                    </button>
                     <button class="pf-action-btn" onclick="sharePost('${postId}')">
                         <i class="fas fa-share-alt"></i>
                     </button>
@@ -1293,9 +1445,6 @@ function pfAppendSlides(count) {
     return added;
 }
 
-// وقتی به نزدیکی انتهای فید رسیدیم، اسلایدهای بعدی (پست‌های واقعاً جدید، نه تکراری) از قبل
-// append می‌شن (پیش‌بارگذاری، نه دانلود دستی کاربر) - چون media با preload="metadata"/loading="lazy"
-// فقط وقتی لازم بشه واکشی می‌شه.
 async function pfHandleScroll() {
     if (pfLoadingMore) return;
     const feedEl = document.getElementById('pfFeed');
@@ -1311,8 +1460,6 @@ async function pfHandleScroll() {
     pfLoadingMore = false;
 }
 
-// وقتی همه‌ی پست‌های اکسپلور که تا الان داشتیم تموم شد، یه بار دیگه از سرور می‌پرسیم -
-// اگه پست جدیدی (که قبلاً تو همین جلسه نشون داده نشده) پیدا شد اضافه می‌شه، وگرنه دیگه تکرار نمی‌کنیم.
 async function pfTryLoadMorePosts() {
     try {
         const res = await fetch('/api/explore');
@@ -1358,7 +1505,6 @@ function openPostFullscreen(postId, customList) {
     const entry = explorePostIndex[postId];
     if (!entry) return;
 
-    // فهرست فید رو از همون ترتیبی که تو اکسپلور (یا گرید پروفایل) چیده شده می‌سازیم، و از پستی که کاربر لمس کرده شروع می‌شه
     const allIds = customList && customList.length ? customList : Object.keys(explorePostIndex);
     const startIdx = allIds.indexOf(postId);
     pfFeedList = allIds.slice(startIdx).concat(allIds.slice(0, startIdx));
@@ -1499,15 +1645,13 @@ async function sharePost(postId) {
             await navigator.clipboard.writeText(shareUrl);
             showNotification('🔗 لینک پست کپی شد');
         }
-    } catch (e) {
-        // کاربر اشتراک‌گذاری را لغو کرده - نیازی به پیام خطا نیست
-    }
+    } catch (e) {}
 }
 
 // ============================================
-// استوری - نوار بالای صفحه + ویوئر تمام‌صفحه + ساخت استوری
+// استوری
 // ============================================
-let storyFeed = [];          // خروجی /api/stories/feed - آرایه‌ای از گروه‌ها {user_id, name, avatar, stories:[]}
+let storyFeed = [];
 let storyGroupIndex = 0;
 let storyIndexInGroup = 0;
 let storyTimer = null;
@@ -1776,9 +1920,7 @@ async function quickFollow(userId, btn) {
         showNotification('نمی‌توانید خودتان را فالو کنید');
         return;
     }
-    
     const isFollowing = btn.classList.contains('following');
-    
     try {
         const endpoint = isFollowing ? '/api/unfollow' : '/api/follow';
         const res = await fetch(endpoint, {
@@ -1857,7 +1999,6 @@ async function openProfile(userId) {
         }
 
         document.getElementById('viewAssistantChat').innerHTML = '';
-
         document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
         const profilePage = document.getElementById('profilePage');
         if (profilePage) profilePage.classList.add('active');
@@ -1930,7 +2071,6 @@ async function loadChatList() {
         chatListCache = chats;
         const container = document.getElementById('chatList');
         if (!container) return;
-        
         if (!chats.length) {
             container.innerHTML = `<div class="empty-state">
                 <i class="fas fa-comment-dots"></i>
@@ -1939,7 +2079,6 @@ async function loadChatList() {
             </div>`;
             return;
         }
-        
         container.innerHTML = chats.map(c => `
             <div class="chat-item" onclick="openChat('${c.id}', '${escapeHtml(c.name)}', '${c.avatar || defaultAvatar(c.name)}')">
                 <img src="${c.avatar || defaultAvatar(c.name)}" loading="lazy">
@@ -1950,7 +2089,6 @@ async function loadChatList() {
                 ${c.unreadCount > 0 ? `<span class="unread">${c.unreadCount}</span>` : ''}
             </div>
         `).join('');
-        
         const totalUnread = chats.reduce((sum, c) => sum + (c.unreadCount || 0), 0);
         const badge = document.getElementById('chatBadge');
         if (badge) {
@@ -1978,7 +2116,6 @@ async function openChat(userId, name, avatar) {
         updateChatBlockBtn(!!blockData.blocked);
     } catch (e) { updateChatBlockBtn(false); }
 
-    // علامت‌گذاری پیام‌ها به عنوان خوانده شده
     try {
         await fetch('/api/chat/read', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1993,7 +2130,6 @@ async function openChat(userId, name, avatar) {
             renderMessages(messagesCache[cacheKey]);
             return;
         }
-        
         const res = await fetch(`/api/chat/history/${currentUser.id}/${userId}`);
         const messages = await res.json();
         messagesCache[cacheKey] = messages;
@@ -2021,7 +2157,7 @@ function mediaBubbleHtml(url, type) {
         : `<img src="${url}" loading="lazy" onclick="window.open('${url}','_blank')">`;
 }
 
-let chatTargetMode = 'user'; // 'user' یعنی پیام واقعی برای خودش، 'assistant' یعنی گفتگو با دستیار هوشمندش
+let chatTargetMode = 'user';
 
 function setChatMode(mode) {
     chatTargetMode = mode === 'assistant' ? 'assistant' : 'user';
@@ -2152,7 +2288,6 @@ socket.on('new_message', (data) => {
             created_at: new Date().toISOString()
         });
     }
-    
     if (currentChatUser && data.from === currentChatUser.id) {
         displayMessage(data.message, 'received', false, data.mediaUrl, data.mediaType);
     } else {
@@ -2198,12 +2333,10 @@ function showSearchResults(results) {
         `;
         document.querySelector('.search-box').appendChild(container);
     }
-    
     if (!results.length) {
         container.style.display = 'none';
         return;
     }
-    
     container.style.display = 'block';
     container.innerHTML = results.map(r => `
         <div style="padding:8px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border);transition:var(--transition);"
@@ -2242,7 +2375,6 @@ function switchAdminTab(tab) {
     document.querySelectorAll('.admin-tab').forEach(t => t.classList.remove('active'));
     const tabBtn = document.querySelector(`.admin-tab[data-tab="${tab}"]`);
     if (tabBtn) tabBtn.classList.add('active');
-    
     document.querySelectorAll('.admin-tab-content').forEach(c => c.classList.remove('active'));
     const content = document.getElementById('admin' + tab.charAt(0).toUpperCase() + tab.slice(1));
     if (content) content.classList.add('active');
@@ -2445,7 +2577,6 @@ async function createAd() {
     const content = document.getElementById('adContent').value.trim();
     const linkUrl = document.getElementById('adLink').value.trim();
     if (!title) { showNotification('عنوان تبلیغ رو بنویس!'); return; }
-
     try {
         const res = await fetch('/api/admin/ads/create', {
             method: 'POST',
@@ -2494,7 +2625,6 @@ async function sendBroadcast() {
     const title = document.getElementById('broadcastTitle').value.trim();
     const message = document.getElementById('broadcastMessage').value.trim();
     if (!message) { showNotification('متن پیام رو بنویس!'); return; }
-
     try {
         const res = await fetch('/api/admin/broadcast', {
             method: 'POST',
@@ -2511,7 +2641,7 @@ async function sendBroadcast() {
 }
 
 // ============================================
-// گزارش (پست/کاربر/کامنت) - مودال مشترک
+// گزارش
 // ============================================
 function openReportModal(targetType, targetId) {
     document.querySelectorAll('.post-menu-dropdown.open').forEach(d => d.classList.remove('open'));
@@ -2553,7 +2683,7 @@ async function submitReport(targetType, targetId) {
 }
 
 // ============================================
-// منوی سه‌نقطه‌ی چت - گزارش و مسدود کردن کاربر
+// چت - منو
 // ============================================
 function toggleChatMenu() {
     const dropdown = document.getElementById('chatThreadMenu');
@@ -2601,8 +2731,6 @@ async function toggleBlockChatUser() {
 // ============================================
 document.addEventListener('DOMContentLoaded', () => {
     initApp();
-    
-    // Auto-refresh chat list
     setInterval(() => {
         if (document.getElementById('chatPage').classList.contains('active')) {
             loadChatList();
