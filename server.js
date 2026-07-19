@@ -14,6 +14,87 @@ const DatabaseManager = require('./database');
 const IntelligentAssistant = require('./assistant_logic');
 
 // ============================================
+// ردیس (اختیاری) - وقتی چند سرور/worker همزمان بالا هستن، کش فقط تو حافظه‌ی یک
+// پروسه کافی نیست (هر worker کش جدا داره). اگه REDIS_URL ست بشه، کش بین همه‌ی
+// worker ها/سرورها به اشتراک گذاشته می‌شه. اگه نه، دقیقاً مثل قبل با کش داخل حافظه کار می‌کنه.
+// npm install ioredis
+// ============================================
+let redisClient = null;
+if (process.env.REDIS_URL) {
+    try {
+        const Redis = require('ioredis');
+        redisClient = new Redis(process.env.REDIS_URL, { lazyConnect: false, maxRetriesPerRequest: 2 });
+        redisClient.on('error', (e) => console.error('⚠️ خطای اتصال ردیس (کش به حالت فقط-محلی برمی‌گرده):', e.message));
+        redisClient.on('connect', () => console.log('✅ ردیس وصل شد - کش بین همه‌ی سرورها به اشتراک گذاشته می‌شه'));
+    } catch (e) {
+        console.log('ℹ️  ioredis نصب نیست - کش فقط داخل حافظه‌ی همین پروسه کار می‌کنه (npm install ioredis)');
+    }
+} else {
+    console.log('ℹ️  REDIS_URL ست نشده - کش فقط داخل حافظه‌ی همین پروسه کار می‌کنه (برای مقیاس چندسروری، ست کن)');
+}
+
+// کش ترکیبی: لایه‌ی اول همیشه حافظه‌ی محلی (سریع‌ترین، صفر تاخیر)، لایه‌ی دوم (اختیاری) ردیس
+// که بین همه‌ی سرورها/worker های مختلف مشترکه - برای وقتی سیستم چندسروری اجرا می‌شه.
+class HybridCache {
+    constructor(namespace, ttlMs = 60000) {
+        this.namespace = namespace;
+        this.local = new Map();
+        this.ttlMs = ttlMs;
+    }
+    async get(key) {
+        const hit = this.local.get(key);
+        if (hit) return hit;
+        if (redisClient) {
+            try {
+                const raw = await redisClient.get(`cache:${this.namespace}:${key}`);
+                if (raw) {
+                    const parsed = JSON.parse(raw);
+                    this.local.set(key, parsed); // کش محلی همین worker رو هم گرم می‌کنیم
+                    return parsed;
+                }
+            } catch (e) { /* ردیس در دسترس نبود، برمی‌گردیم به رفتار فقط-محلی */ }
+        }
+        return null;
+    }
+    async set(key, value) {
+        this.local.set(key, value);
+        if (redisClient) {
+            try { await redisClient.set(`cache:${this.namespace}:${key}`, JSON.stringify(value), 'PX', this.ttlMs); } catch (e) {}
+        }
+    }
+    clear() {
+        this.local.clear();
+        if (redisClient) {
+            redisClient.keys(`cache:${this.namespace}:*`)
+                .then(keys => { if (keys.length) redisClient.del(...keys).catch(() => {}); })
+                .catch(() => {});
+        }
+    }
+}
+
+// ============================================
+// فشرده‌سازی رسانه (اختیاری) - sharp برای عکس، ffmpeg برای ویدیو
+// اگه این پکیج‌ها نصب نشده باشن (npm install sharp fluent-ffmpeg ffmpeg-static)
+// برنامه کرش نمی‌کنه، فقط فشرده‌سازی رو غیرفعال می‌کنه و فایل اصلی رو نگه می‌داره.
+// ============================================
+let sharp = null;
+try { sharp = require('sharp'); } catch (e) {
+    console.log('ℹ️  sharp نصب نیست - فشرده‌سازی عکس غیرفعاله (npm install sharp)');
+}
+let ffmpeg = null;
+try {
+    ffmpeg = require('fluent-ffmpeg');
+    try {
+        const ffmpegPath = require('ffmpeg-static');
+        if (ffmpegPath) ffmpeg.setFfmpegPath(ffmpegPath);
+    } catch (e2) {
+        console.log('ℹ️  ffmpeg-static نصب نیست - از ffmpeg نصب‌شده روی سیستم استفاده می‌شه اگه باشه');
+    }
+} catch (e) {
+    console.log('ℹ️  fluent-ffmpeg نصب نیست - فشرده‌سازی ویدیو غیرفعاله (npm install fluent-ffmpeg ffmpeg-static)');
+}
+
+// ============================================
 // تنظیمات سرور
 // ============================================
 const app = express();
@@ -124,8 +205,18 @@ const upload = multer({
         files: 1
     },
     fileFilter: (req, file, cb) => {
-        const allowed = /^(image\/(jpeg|png|gif|webp)|video\/(mp4|webm|quicktime|ogg))$/;
-        if (allowed.test(file.mimetype)) return cb(null, true);
+        // قبول هر نوع عکس/ویدیویی، نه فقط یه لیست محدود - چون گوشی‌های مختلف (سامسونگ، آیفون، شیائومی و ...)
+        // فرمت‌های خیلی متفاوتی می‌فرستن (mov, mkv, 3gp, avi, hevc و ...) و mimetype دقیق همیشه هم درست گزارش نمی‌شه.
+        const mt = String(file.mimetype || '').toLowerCase();
+        if (mt.startsWith('image/') || mt.startsWith('video/')) return cb(null, true);
+
+        // بعضی مرورگرها/اپ‌ها برای فایل‌های ویدیویی mimetype عمومی (application/octet-stream) می‌فرستن؛
+        // تو این حالت بر اساس پسوند فایل تشخیص می‌دیم تا آپلود رد نشه.
+        const ext = path.extname(file.originalname || '').toLowerCase();
+        const videoExts = ['.mp4', '.mov', '.webm', '.mkv', '.avi', '.3gp', '.3gpp', '.m4v', '.flv', '.wmv', '.ogg', '.ogv', '.hevc', '.ts'];
+        const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif', '.bmp'];
+        if (videoExts.includes(ext) || imageExts.includes(ext)) return cb(null, true);
+
         cb(new Error('نوع فایل مجاز نیست (فقط عکس یا ویدیو)'));
     }
 });
@@ -139,10 +230,53 @@ const uploadLimiter = rateLimit({
 
 app.use('/uploads', express.static(uploadsDir, { maxAge: '7d', etag: true }));
 
+// ============================================
+// فشرده‌سازی واقعی فایل آپلودشده - همیشه نسخه‌ی نهایی رو برمی‌گردونه (فشرده‌شده یا در بدترین حالت خودِ اصلی)
+// ============================================
+async function compressMediaFile(filePath, mediaType) {
+    if (mediaType === 'image' && sharp) {
+        const outPath = filePath.replace(path.extname(filePath), '') + '_c.jpg';
+        await sharp(filePath)
+            .rotate() // چرخش خودکار بر اساس EXIF (عکس‌های گوشی که چرخیده ذخیره می‌شن)
+            .resize({ width: 1600, height: 1600, fit: 'inside', withoutEnlargement: true })
+            .jpeg({ quality: 78, mozjpeg: true })
+            .toFile(outPath);
+        await fs.promises.unlink(filePath).catch(() => {});
+        const stat = await fs.promises.stat(outPath);
+        return { path: outPath, size: stat.size };
+    }
+
+    if (mediaType === 'video' && ffmpeg) {
+        const outPath = filePath.replace(path.extname(filePath), '') + '_c.mp4';
+        await new Promise((resolve, reject) => {
+            ffmpeg(filePath)
+                .videoCodec('libx264')
+                .audioCodec('aac')
+                .outputOptions([
+                    '-crf 26',            // کیفیت خوب با حجم خیلی کمتر از اصل
+                    '-preset veryfast',   // سرعت مناسب پردازش روی سرور
+                    '-movflags +faststart',
+                    '-vf', 'scale=min(1280\\,iw):-2', // حداکثر عرض ۱۲۸۰، ارتفاع متناسب و زوج (نیاز h264)
+                    '-max_muxing_queue_size 9999'
+                ])
+                .on('end', resolve)
+                .on('error', reject)
+                .save(outPath);
+        });
+        await fs.promises.unlink(filePath).catch(() => {});
+        const stat = await fs.promises.stat(outPath);
+        return { path: outPath, size: stat.size };
+    }
+
+    // نه sharp نه ffmpeg در دسترس نیست (یا نوع فایل پشتیبانی نمی‌شه) - فایل اصلی رو دست‌نخورده برمی‌گردونیم
+    const stat = await fs.promises.stat(filePath);
+    return { path: filePath, size: stat.size };
+}
+
 app.post('/api/upload', uploadLimiter, (req, res) => {
     // از multer.single به‌صورت دستی استفاده می‌کنیم تا خطاها (حجم زیاد، نوع نامعتبر و ...)
     // به‌جای کرش کردن سرور یا هنگ کردن درخواست، به‌صورت JSON تمیز به کاربر برگردن.
-    upload.single('file')(req, res, (err) => {
+    upload.single('file')(req, res, async (err) => {
         if (err instanceof multer.MulterError) {
             if (err.code === 'LIMIT_FILE_SIZE') {
                 return res.status(413).json({ success: false, error: `حجم فایل بیشتر از حد مجاز (${process.env.MAX_UPLOAD_MB || 300} مگابایت) است` });
@@ -156,13 +290,29 @@ app.post('/api/upload', uploadLimiter, (req, res) => {
             return res.status(400).json({ success: false, error: 'فایلی ارسال نشده' });
         }
 
-        const mediaType = req.file.mimetype.startsWith('video/') ? 'video' : 'image';
-        res.json({
-            success: true,
-            url: `/uploads/${req.file.filename}`,
-            mediaType,
-            size: req.file.size
-        });
+        const videoExts = ['.mp4', '.mov', '.webm', '.mkv', '.avi', '.3gp', '.3gpp', '.m4v', '.flv', '.wmv', '.ogg', '.ogv', '.hevc', '.ts'];
+        const ext = path.extname(req.file.originalname || '').toLowerCase();
+        const mediaType = req.file.mimetype.startsWith('video/') || videoExts.includes(ext) ? 'video' : 'image';
+
+        try {
+            const compressed = await compressMediaFile(req.file.path, mediaType);
+            return res.json({
+                success: true,
+                url: `/uploads/${path.basename(compressed.path)}`,
+                mediaType,
+                size: compressed.size
+            });
+        } catch (e) {
+            // اگه فشرده‌سازی به هر دلیلی (فرمت عجیب، نصب‌نبودن ffmpeg و ...) شکست خورد،
+            // فایل اصلی رو همون‌طوری که هست قبول می‌کنیم - کاربر هیچ‌وقت نباید با خطا مواجه بشه.
+            console.error('⚠️ فشرده‌سازی رسانه ناموفق بود، فایل اصلی نگه داشته شد:', e.message);
+            return res.json({
+                success: true,
+                url: `/uploads/${req.file.filename}`,
+                mediaType,
+                size: req.file.size
+            });
+        }
     });
 });
 
@@ -563,7 +713,7 @@ app.post('/api/user/bio', async (req, res) => {
 // ============================================
 // پروفایل عمومی با کش
 // ============================================
-const profileCache = new Map();
+const profileCache = new HybridCache('profile', 60000);
 const PROFILE_CACHE_TTL = 30000;
 
 app.get('/api/profile/:userId', async (req, res) => {
@@ -572,7 +722,7 @@ app.get('/api/profile/:userId', async (req, res) => {
         const { viewerId } = req.query;
         
         const cacheKey = `${userId}_${viewerId}`;
-        const cached = profileCache.get(cacheKey);
+        const cached = await profileCache.get(cacheKey);
         if (cached && (Date.now() - cached.timestamp) < PROFILE_CACHE_TTL) {
             return res.json(cached.data);
         }
@@ -1042,17 +1192,21 @@ app.post('/api/assistant/chat/:targetUserId', async (req, res) => {
 // ============================================
 // کانال و اکسپلور با کش
 // ============================================
-const exploreCache = new Map();
+const exploreCache = new HybridCache('explore', 15000);
 const EXPLORE_CACHE_TTL = 15000;
 
 app.get('/api/explore', async (req, res) => {
     try {
-        const cached = exploreCache.get('explore');
+        const cached = await exploreCache.get('explore');
         if (cached && (Date.now() - cached.timestamp) < EXPLORE_CACHE_TTL) {
             return res.json(cached.data);
         }
 
         const result = await db.query(null, `
+            WITH ranked_users AS (
+                SELECT id, ROW_NUMBER() OVER (ORDER BY created_at ASC) AS signup_rank
+                FROM users
+            )
             SELECT 
                 u.id as user_id,
                 u.name,
@@ -1064,33 +1218,30 @@ app.get('/api/explore', async (req, res) => {
                 c.boost_level,
                 c.activity_score,
                 (
-                    SELECT json_group_array(
-                        json_object(
-                            'id', p.id,
-                            'content', p.content,
-                            'media_url', p.media_url,
-                            'media_type', p.media_type,
-                            'likes', p.likes,
-                            'comments', p.comments,
-                            'views', p.views,
-                            'created_at', p.created_at
-                        )
-                    )
-                    FROM posts p
-                    WHERE p.channel_id = c.id AND p.is_published = 1
-                    ORDER BY p.created_at DESC
-                    LIMIT 5
+                    SELECT json_agg(row_to_json(rp))
+                    FROM (
+                        SELECT p.id, p.content, p.media_url, p.media_type, p.likes, p.comments, p.views, p.created_at
+                        FROM posts p
+                        WHERE p.channel_id = c.id AND p.is_published = 1
+                        ORDER BY p.created_at DESC
+                        LIMIT 5
+                    ) rp
                 ) as recent_posts
             FROM channels c
             JOIN users u ON u.id = c.user_id
+            JOIN ranked_users ru ON ru.id = u.id
             WHERE c.posts_count > 0
-            ORDER BY c.activity_score DESC, c.followers_count DESC
+              AND (ru.signup_rank <= 1000 OR c.activity_score > 0)
+            ORDER BY 
+                (CASE WHEN ru.signup_rank <= 1000 THEN 1 ELSE 0 END) DESC,
+                c.activity_score DESC, 
+                c.followers_count DESC
             LIMIT 50
         `);
         
         const items = result.rows.map(row => ({
             ...row,
-            recent_posts: row.recent_posts ? JSON.parse(row.recent_posts) : []
+            recent_posts: row.recent_posts || []
         }));
         
         exploreCache.set('explore', { data: items, timestamp: Date.now() });
@@ -1489,10 +1640,10 @@ app.get('/api/admin/payments', isAdmin, async (req, res) => {
 app.post('/api/admin/payments/:id/:action', isAdmin, async (req, res) => {
     try {
         const { id, action } = req.params;
-        if (!['approve', 'reject'].includes(action)) {
+        if (!['approve', 'reject', 'revert'].includes(action)) {
             return res.status(400).json({ error: 'عملیات نامعتبر' });
         }
-        const status = action === 'approve' ? 'approved' : 'rejected';
+        const status = action === 'approve' ? 'approved' : (action === 'reject' ? 'rejected' : 'pending');
 
         const existing = await db.query(null, `SELECT * FROM payment_receipts WHERE id = $1 LIMIT 1`, [id]);
         const receipt = existing.rows[0];
@@ -1501,6 +1652,11 @@ app.post('/api/admin/payments/:id/:action', isAdmin, async (req, res) => {
         await db.query(null, `
             UPDATE payment_receipts SET status = $1, reviewed_at = CURRENT_TIMESTAMP WHERE id = $2
         `, [status, id]);
+
+        // عملیات «برگشت» فقط یه تصمیم قبلی رو لغو می‌کنه، نیازی به اطلاع مجدد به کاربر نیست
+        if (action === 'revert') {
+            return res.json({ success: true });
+        }
 
         const title = action === 'approve' ? '✅ فیش واریزی تایید شد' : '❌ فیش واریزی رد شد';
         const message = action === 'approve'
@@ -1673,7 +1829,12 @@ io.on('connection', (socket) => {
                 VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
             `, [id, from, to, trimmed, hasMedia ? mediaUrl : null, safeMediaType]);
 
-            io.to(`user_${to}`).emit('new_message', { from, message: trimmed, mediaUrl: hasMedia ? mediaUrl : null, mediaType: safeMediaType, timestamp });
+            // new_message فقط وقتی به گیرنده‌ی واقعی (غیر از خودِ فرستنده) emit می‌شه - وگرنه وقتی کاربر
+            // به خودش پیام می‌ده (هر دو تو یک room هستن)، همون پیام یه بار «ارسالی» (که کلاینت خودش
+            // فوری نشون داده) و یه بار هم «دریافتی» تکراری نمایش داده می‌شد.
+            if (to !== from) {
+                io.to(`user_${to}`).emit('new_message', { from, message: trimmed, mediaUrl: hasMedia ? mediaUrl : null, mediaType: safeMediaType, timestamp });
+            }
             io.to(`user_${from}`).emit('message_sent', { success: true, timestamp });
         } catch (e) {
             console.error('save message error', e);

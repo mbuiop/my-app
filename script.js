@@ -800,6 +800,8 @@ async function createPost() {
     } catch (e) { showNotification('خطا در ارتباط با سرور'); }
 }
 
+let myChannelGridPostIds = [];
+
 async function loadChannelPosts() {
     try {
         const res = await fetch(`/api/channel/${currentUser.id}/posts`);
@@ -814,7 +816,21 @@ async function loadChannelPosts() {
                 اولین پستت رو بنویس! ✍️
             </div>`;
         } else {
-            container.innerHTML = posts.map(p => renderPostCard(p, currentUser)).join('');
+            myChannelGridPostIds = posts.map(p => p.id);
+            posts.forEach(p => { explorePostIndex[p.id] = { post: p, user: currentUser }; });
+            container.innerHTML = `<div class="explore-grid profile-grid">${posts.map(p => `
+                <div class="explore-tile${p.media_url ? '' : ' no-media'}" onclick="openPostFullscreen('${p.id}', myChannelGridPostIds)">
+                    ${p.media_url
+                        ? (p.media_type === 'video'
+                            ? `<video src="${p.media_url}" muted preload="metadata"></video><i class="fas fa-play tile-video-badge"></i>`
+                            : `<img src="${p.media_url}" loading="lazy">`)
+                        : `<p>${escapeHtml((p.content || '').substring(0, 140))}</p>`}
+                    <div class="tile-overlay">
+                        <span><i class="fas fa-eye"></i>${formatNumber(p.views || 0)}</span>
+                        <span><i class="fas fa-heart"></i>${formatNumber(p.likes || 0)}</span>
+                    </div>
+                </div>
+            `).join('')}</div>`;
         }
 
         const ures = await fetch(`/api/user/${currentUser.id}`);
@@ -2414,7 +2430,7 @@ async function loadAdminData(type) {
                 `).join('') : `<p style="font-size:12px;color:var(--text-3);text-align:center;padding:20px;">گزارش در انتظاری وجود ندارد 🎉</p>`;
             }
         } else if (type === 'payments') {
-            const res = await fetch('/api/admin/payments?status=pending', { headers: authHeaders() });
+            const res = await fetch(`/api/admin/payments?status=${currentPaymentsStatus}`, { headers: authHeaders() });
             const receipts = await res.json();
             const container = document.getElementById('adminPaymentsList');
             if (container) {
@@ -2425,11 +2441,15 @@ async function loadAdminData(type) {
                         ${r.amount ? `<span style="font-size:10px;color:var(--text-3);">مبلغ اعلامی: ${escapeHtml(r.amount)} تومان</span>` : ''}
                         <span style="font-size:10px;color:var(--text-3);">${timeAgo(r.created_at)}</span>
                         <div class="actions">
-                            <button class="btn-success" onclick="reviewPayment('${r.id}', 'approve')">✅ تایید</button>
-                            <button class="btn-danger" onclick="reviewPayment('${r.id}', 'reject')">❌ رد</button>
+                            ${currentPaymentsStatus === 'pending' ? `
+                                <button class="btn-success" onclick="reviewPayment('${r.id}', 'approve')">✅ تایید</button>
+                                <button class="btn-danger" onclick="reviewPayment('${r.id}', 'reject')">❌ رد</button>
+                            ` : `
+                                <button class="btn-secondary" onclick="reviewPayment('${r.id}', 'revert')"><i class="fas fa-undo"></i> برگشت به در انتظار</button>
+                            `}
                         </div>
                     </div>
-                `).join('') : `<p style="font-size:12px;color:var(--text-3);text-align:center;padding:20px;">فیش در انتظاری وجود ندارد 🎉</p>`;
+                `).join('') : `<p style="font-size:12px;color:var(--text-3);text-align:center;padding:20px;">موردی در این وضعیت وجود ندارد 🎉</p>`;
             }
         } else if (type === 'ads') {
             const res = await fetch('/api/admin/ads', { headers: authHeaders() });
@@ -2495,9 +2515,18 @@ async function dismissReport(reportId) {
     } catch (e) { showNotification('خطا: ' + e.message); }
 }
 
+let currentPaymentsStatus = 'pending';
+function switchPaymentsStatus(status) {
+    currentPaymentsStatus = status;
+    document.querySelectorAll('#paymentsStatusSwitch .mode-opt').forEach(b => {
+        b.classList.toggle('active', b.dataset.status === status);
+    });
+    loadAdminData('payments');
+}
+
 async function reviewPayment(receiptId, action) {
-    const label = action === 'approve' ? 'تایید' : 'رد';
-    if (!confirm(`این فیش ${label} بشه؟`)) return;
+    const labels = { approve: 'تایید', reject: 'رد', revert: 'برگشت به در انتظار' };
+    if (!confirm(`این فیش ${labels[action]} بشه؟`)) return;
     try {
         const res = await fetch(`/api/admin/payments/${receiptId}/${action}`, {
             method: 'POST',
@@ -2505,7 +2534,9 @@ async function reviewPayment(receiptId, action) {
         });
         const data = await res.json();
         if (data.success) {
-            showNotification(action === 'approve' ? '✅ فیش تایید شد و به کاربر اعلان رفت' : '❌ فیش رد شد و به کاربر اعلان رفت');
+            if (action === 'approve') showNotification('✅ فیش تایید شد و به کاربر اعلان رفت');
+            else if (action === 'reject') showNotification('❌ فیش رد شد و به کاربر اعلان رفت');
+            else showNotification('↩️ فیش به حالت در انتظار برگشت');
             loadAdminData('payments');
         } else {
             showNotification('خطا: ' + data.error);

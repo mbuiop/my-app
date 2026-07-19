@@ -63,6 +63,7 @@ const SHARD_SCHEMA_SQL = `
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username) WHERE username IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_users_score ON users(score DESC);
+    CREATE INDEX IF NOT EXISTS idx_users_created ON users(created_at ASC);
 
     CREATE TABLE IF NOT EXISTS channels (
         id TEXT PRIMARY KEY,
@@ -307,7 +308,7 @@ class DatabaseManager {
         // ==========================================
         this.pool = new Pool({
             connectionString: process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/yareman',
-            max: parseInt(process.env.PG_POOL_MAX || '20', 10),
+            max: parseInt(process.env.PG_POOL_MAX || '50', 10), // برای مقیاس بالاتر افزایش داده شد (قبلاً ۲۰)
             idleTimeoutMillis: 30000,
             connectionTimeoutMillis: 10000,
         });

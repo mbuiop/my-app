@@ -1280,7 +1280,7 @@ main {
   padding: 11px 16px;
   color: var(--text);
   outline: none;
-  font-size: 14px;
+  font-size: 16px;
   transition: var(--transition);
 }
 .chat-thread-input input:focus {
@@ -2446,7 +2446,7 @@ main {
   .profile-btn span { max-width: 50px; font-size: 11px; }
   .user-score { font-size: 10px; padding: 3px 8px; }
   .search-box { padding: 4px 10px; }
-  .search-box input { font-size: 11px; }
+  .search-box input { font-size: 16px; }
   
   .page-title { font-size: 17px; }
   .post-card { padding: 10px; }
@@ -2780,6 +2780,11 @@ main {
                     <div id="adminReportsList"></div>
                 </div>
                 <div id="adminPayments" class="admin-tab-content">
+                    <div class="chat-mode-switch" id="paymentsStatusSwitch" style="margin:10px 14px;">
+                        <button class="mode-opt active" data-status="pending" onclick="switchPaymentsStatus('pending')">در انتظار</button>
+                        <button class="mode-opt" data-status="approved" onclick="switchPaymentsStatus('approved')">تاییدشده</button>
+                        <button class="mode-opt" data-status="rejected" onclick="switchPaymentsStatus('rejected')">ردشده</button>
+                    </div>
                     <div id="adminPaymentsList"></div>
                 </div>
                 <div id="adminAds" class="admin-tab-content">
