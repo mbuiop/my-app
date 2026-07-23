@@ -1,6 +1,6 @@
 """
-ربات آموزش ترید حرفه‌ای - نسخه نهایی با پشتیبانی از ۱۰ هزار کاربر
-با سیستم شاردینگ، مدیریت کامل، پنل ادمین و ذخیره‌سازی دائمی
+ربات آموزش ترید حرفه‌ای - نسخه نهایی با سیستم رفرال و درآمدزایی
+پشتیبانی از ۱۰۰,۰۰۰ کاربر با شاردینگ پیشرفته
 """
 
 import os
@@ -8,6 +8,9 @@ import asyncio
 import logging
 import sqlite3
 import json
+import hashlib
+import random
+import string
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from functools import wraps
@@ -34,13 +37,17 @@ import time
 
 # ==================== تنظیمات ====================
 TOKEN = "YOUR_BOT_TOKEN_HERE"  # توکن رباتت رو بذار
-ADMIN_IDS = [123456789]  # آیدی عددی ادمین‌ها (آیدی خودت)
+BOT_USERNAME = "UTYOB_Bot"  # یوزرنیم ربات بدون @
+ADMIN_IDS = [123456789]  # آیدی عددی ادمین‌ها
 WALLET_ADDRESS = "TSED8mCkfaNtavaBw2pQQpUoMRKGCwBsv3"
 PRICE_USD = 500
+REFERRAL_BONUS = 50  # پاداش هر رفرال
+MIN_WITHDRAW = 500  # حداقل مبلغ برای برداشت
 
-# تنظیمات شاردینگ برای ۱۰ هزار کاربر
-MAX_WORKERS = 20  # تعداد شاردینگ‌ها
-BATCH_SIZE = 100  # ارسال گروهی
+# تنظیمات شاردینگ برای ۱۰۰,۰۰۰ کاربر
+MAX_WORKERS = 50  # تعداد شاردینگ‌ها
+BATCH_SIZE = 200  # ارسال گروهی
+CACHE_SIZE = 1000  # کش کاربران
 
 # تنظیمات لاگ
 logging.basicConfig(
@@ -83,7 +90,13 @@ class Database:
                 registered_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 last_active TEXT DEFAULT CURRENT_TIMESTAMP,
                 is_admin INTEGER DEFAULT 0,
-                total_questions INTEGER DEFAULT 0
+                referral_code TEXT UNIQUE,
+                referrer_id INTEGER,
+                balance REAL DEFAULT 0,
+                total_referrals INTEGER DEFAULT 0,
+                total_earnings REAL DEFAULT 0,
+                total_withdrawn REAL DEFAULT 0,
+                FOREIGN KEY (referrer_id) REFERENCES users (user_id)
             )
         """)
 
@@ -142,23 +155,47 @@ class Database:
             )
         """)
 
-        # جدول تنظیمات ربات
+        # جدول رفرال‌ها
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS bot_settings (
-                key TEXT PRIMARY KEY,
-                value TEXT,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            CREATE TABLE IF NOT EXISTS referrals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                referrer_id INTEGER,
+                referred_id INTEGER UNIQUE,
+                bonus_amount REAL,
+                status TEXT DEFAULT 'pending',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                confirmed_at TEXT,
+                FOREIGN KEY (referrer_id) REFERENCES users (user_id),
+                FOREIGN KEY (referred_id) REFERENCES users (user_id)
             )
         """)
 
-        # جدول برای مدیریت پیام‌های ارسال شده (جلوگیری از دوبار ارسال)
+        # جدول درخواست‌های برداشت
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS sent_messages (
+            CREATE TABLE IF NOT EXISTS withdraw_requests (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
-                message_type TEXT,
-                content_hash TEXT,
-                sent_at TEXT DEFAULT CURRENT_TIMESTAMP
+                amount REAL,
+                wallet_address TEXT,
+                status TEXT DEFAULT 'pending',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                processed_at TEXT,
+                admin_note TEXT,
+                FOREIGN KEY (user_id) REFERENCES users (user_id)
+            )
+        """)
+
+        # جدول تراکنش‌های مالی
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                type TEXT,
+                amount REAL,
+                description TEXT,
+                balance_after REAL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (user_id)
             )
         """)
 
@@ -168,18 +205,27 @@ class Database:
         logger.info("✅ تمام جدول‌ها با موفقیت ساخته شدند")
 
     # ===== متدهای کاربر با قفل =====
-    def add_user(self, user_id, username, first_name, last_name):
+    def add_user(self, user_id, username, first_name, last_name, referrer_id=None):
         with self.lock:
             conn = self.get_conn()
             cur = conn.cursor()
             try:
                 is_admin = 1 if user_id in ADMIN_IDS else 0
+                
+                # تولید کد رفرال اختصاصی
+                referral_code = self.generate_referral_code(user_id)
+                
                 cur.execute("""
                     INSERT OR REPLACE INTO users 
-                    (user_id, username, first_name, last_name, is_admin, last_active)
-                    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                """, (user_id, username, first_name, last_name, is_admin))
+                    (user_id, username, first_name, last_name, is_admin, referral_code, referrer_id, last_active)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """, (user_id, username, first_name, last_name, is_admin, referral_code, referrer_id))
                 conn.commit()
+                
+                # اگر کاربر با رفرال آمده، پاداش بده
+                if referrer_id:
+                    self.add_referral_bonus(referrer_id, user_id)
+                
                 return True
             except Exception as e:
                 logger.error(f"خطا در افزودن کاربر: {e}")
@@ -187,6 +233,12 @@ class Database:
             finally:
                 cur.close()
                 conn.close()
+
+    def generate_referral_code(self, user_id):
+        """تولید کد رفرال منحصر به فرد"""
+        # ترکیبی از آیدی کاربر و کاراکترهای تصادفی
+        random_part = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+        return f"{user_id}{random_part}"
 
     def get_user(self, user_id):
         with self.lock:
@@ -198,6 +250,16 @@ class Database:
             conn.close()
             return result
 
+    def get_user_by_referral(self, referral_code):
+        with self.lock:
+            conn = self.get_conn()
+            cur = conn.cursor()
+            cur.execute("SELECT user_id FROM users WHERE referral_code = ?", (referral_code,))
+            result = cur.fetchone()
+            cur.close()
+            conn.close()
+            return result['user_id'] if result else None
+
     def get_all_users(self, limit=None, offset=0):
         with self.lock:
             conn = self.get_conn()
@@ -205,7 +267,9 @@ class Database:
             query = """
                 SELECT user_id, username, first_name, last_name, 
                        subscription_active, subscription_expiry,
-                       registered_at, last_active, is_admin
+                       registered_at, last_active, is_admin,
+                       referral_code, referrer_id, balance,
+                       total_referrals, total_earnings, total_withdrawn
                 FROM users ORDER BY registered_at DESC
             """
             if limit:
@@ -230,35 +294,167 @@ class Database:
             conn.close()
             return result
 
-    def get_pending_payments(self):
+    # ===== متدهای رفرال =====
+    def add_referral_bonus(self, referrer_id, referred_id):
+        """افزودن پاداش رفرال"""
+        with self.lock:
+            conn = self.get_conn()
+            cur = conn.cursor()
+            try:
+                # ثبت رفرال
+                cur.execute("""
+                    INSERT INTO referrals (referrer_id, referred_id, bonus_amount, status)
+                    VALUES (?, ?, ?, 'pending')
+                """, (referrer_id, referred_id, REFERRAL_BONUS))
+                
+                # افزایش موجودی کاربر
+                cur.execute("""
+                    UPDATE users 
+                    SET balance = balance + ?,
+                        total_referrals = total_referrals + 1,
+                        total_earnings = total_earnings + ?
+                    WHERE user_id = ?
+                """, (REFERRAL_BONUS, REFERRAL_BONUS, referrer_id))
+                
+                # ثبت تراکنش
+                cur.execute("""
+                    INSERT INTO transactions (user_id, type, amount, description, balance_after)
+                    SELECT ?, 'referral_bonus', ?, ?, balance
+                    FROM users WHERE user_id = ?
+                """, (referrer_id, REFERRAL_BONUS, f"پاداش رفرال کاربر {referred_id}", referrer_id))
+                
+                conn.commit()
+                
+                # تایید خودکار رفرال
+                cur.execute("""
+                    UPDATE referrals 
+                    SET status = 'confirmed', confirmed_at = CURRENT_TIMESTAMP
+                    WHERE referrer_id = ? AND referred_id = ?
+                """, (referrer_id, referred_id))
+                conn.commit()
+                
+                return True
+            except Exception as e:
+                logger.error(f"خطا در افزودن پاداش رفرال: {e}")
+                return False
+            finally:
+                cur.close()
+                conn.close()
+
+    def get_user_referrals(self, user_id):
+        """دریافت لیست رفرال‌های کاربر"""
         with self.lock:
             conn = self.get_conn()
             cur = conn.cursor()
             cur.execute("""
-                SELECT p.*, u.username, u.first_name, u.last_name 
-                FROM payments p
-                JOIN users u ON p.user_id = u.user_id
-                WHERE p.status = 'pending'
-                ORDER BY p.created_at DESC
+                SELECT r.*, u.username, u.first_name, u.last_name, u.registered_at
+                FROM referrals r
+                JOIN users u ON r.referred_id = u.user_id
+                WHERE r.referrer_id = ? AND r.status = 'confirmed'
+                ORDER BY r.created_at DESC
+            """, (user_id,))
+            result = cur.fetchall()
+            cur.close()
+            conn.close()
+            return result
+
+    def get_top_referrers(self, limit=10):
+        """دریافت برترین رفرال‌دهنده‌ها"""
+        with self.lock:
+            conn = self.get_conn()
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT user_id, username, first_name, last_name, 
+                       total_referrals, total_earnings, balance
+                FROM users 
+                WHERE total_referrals > 0
+                ORDER BY total_referrals DESC
+                LIMIT ?
+            """, (limit,))
+            result = cur.fetchall()
+            cur.close()
+            conn.close()
+            return result
+
+    # ===== متدهای برداشت =====
+    def add_withdraw_request(self, user_id, amount, wallet_address):
+        with self.lock:
+            conn = self.get_conn()
+            cur = conn.cursor()
+            try:
+                # بررسی موجودی
+                cur.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+                user = cur.fetchone()
+                if not user or user['balance'] < amount:
+                    return False, "موجودی کافی نیست"
+                
+                if amount < MIN_WITHDRAW:
+                    return False, f"حداقل مبلغ برداشت {MIN_WITHDRAW} دلار است"
+                
+                # ثبت درخواست برداشت
+                cur.execute("""
+                    INSERT INTO withdraw_requests (user_id, amount, wallet_address)
+                    VALUES (?, ?, ?)
+                """, (user_id, amount, wallet_address))
+                
+                # کاهش موجودی
+                cur.execute("""
+                    UPDATE users 
+                    SET balance = balance - ?,
+                        total_withdrawn = total_withdrawn + ?
+                    WHERE user_id = ?
+                """, (amount, amount, user_id))
+                
+                # ثبت تراکنش
+                cur.execute("""
+                    INSERT INTO transactions (user_id, type, amount, description, balance_after)
+                    SELECT ?, 'withdraw', -?, ?, balance
+                    FROM users WHERE user_id = ?
+                """, (user_id, amount, f"درخواست برداشت {amount} دلار", user_id))
+                
+                conn.commit()
+                return True, "درخواست برداشت با موفقیت ثبت شد"
+            except Exception as e:
+                logger.error(f"خطا در ثبت درخواست برداشت: {e}")
+                return False, "خطا در ثبت درخواست"
+            finally:
+                cur.close()
+                conn.close()
+
+    def get_pending_withdraws(self):
+        with self.lock:
+            conn = self.get_conn()
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT w.*, u.username, u.first_name, u.last_name, u.balance
+                FROM withdraw_requests w
+                JOIN users u ON w.user_id = u.user_id
+                WHERE w.status = 'pending'
+                ORDER BY w.created_at DESC
             """)
             result = cur.fetchall()
             cur.close()
             conn.close()
             return result
 
-    def get_user_payments(self, user_id):
+    def process_withdraw(self, withdraw_id, status, admin_note=None):
         with self.lock:
             conn = self.get_conn()
             cur = conn.cursor()
-            cur.execute("""
-                SELECT * FROM payments 
-                WHERE user_id = ? 
-                ORDER BY created_at DESC
-            """, (user_id,))
-            result = cur.fetchall()
-            cur.close()
-            conn.close()
-            return result
+            try:
+                cur.execute("""
+                    UPDATE withdraw_requests 
+                    SET status = ?, processed_at = CURRENT_TIMESTAMP, admin_note = ?
+                    WHERE id = ?
+                """, (status, admin_note, withdraw_id))
+                conn.commit()
+                return True
+            except Exception as e:
+                logger.error(f"خطا در پردازش برداشت: {e}")
+                return False
+            finally:
+                cur.close()
+                conn.close()
 
     # ===== متدهای پرداخت =====
     def add_payment(self, user_id, amount, tx_hash, photo_file_id):
@@ -483,37 +679,19 @@ class Database:
             result = cur.fetchone()[0]
             stats['total_earnings'] = result if result else 0
             
+            cur.execute("SELECT COUNT(*) FROM referrals WHERE status = 'confirmed'")
+            stats['total_referrals'] = cur.fetchone()[0]
+            
+            cur.execute("SELECT SUM(bonus_amount) FROM referrals WHERE status = 'confirmed'")
+            result = cur.fetchone()[0]
+            stats['total_referral_bonus'] = result if result else 0
+            
+            cur.execute("SELECT COUNT(*) FROM withdraw_requests WHERE status = 'pending'")
+            stats['pending_withdraws'] = cur.fetchone()[0]
+            
             cur.close()
             conn.close()
             return stats
-
-    # ===== متد برای بازیابی اطلاعات بعد از ریستارت =====
-    def get_all_data(self):
-        """دریافت همه داده‌ها برای بازیابی"""
-        with self.lock:
-            conn = self.get_conn()
-            cur = conn.cursor()
-            
-            data = {}
-            
-            cur.execute("SELECT * FROM users")
-            data['users'] = cur.fetchall()
-            
-            cur.execute("SELECT * FROM payments")
-            data['payments'] = cur.fetchall()
-            
-            cur.execute("SELECT * FROM education")
-            data['education'] = cur.fetchall()
-            
-            cur.execute("SELECT * FROM faq")
-            data['faq'] = cur.fetchall()
-            
-            cur.execute("SELECT * FROM user_questions")
-            data['user_questions'] = cur.fetchall()
-            
-            cur.close()
-            conn.close()
-            return data
 
 
 # ==================== نمونه دیتابیس ====================
@@ -521,18 +699,19 @@ db = Database()
 
 # ==================== دکمه‌ها ====================
 def main_menu_keyboard():
-    """صفحه اصلی ربات"""
+    """صفحه اصلی ربات با دکمه‌های جدید"""
     keyboard = [
         [KeyboardButton("📚 آموزش ترید"), KeyboardButton("📖 راهنمایی")],
         [KeyboardButton("💳 خرید اشتراک"), KeyboardButton("📊 وضعیت اشتراک")],
-        [KeyboardButton("❓ مشاوره و سوال"), KeyboardButton("📞 پشتیبانی")]
+        [KeyboardButton("❓ مشاوره و سوال"), KeyboardButton("🎯 رفرال و درآمد")],
+        [KeyboardButton("💰 برداشت"), KeyboardButton("📞 پشتیبانی")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 def admin_menu_keyboard():
     """پنل مدیریت - فقط برای ادمین‌ها"""
     keyboard = [
-        [KeyboardButton("👑 پنل مدیریت")]  # دکمه ورود به پنل مدیریت
+        [KeyboardButton("👑 پنل مدیریت")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -542,6 +721,7 @@ def admin_panel_keyboard():
         [KeyboardButton("💰 فیش‌ها"), KeyboardButton("📝 ارسال متن آموزش")],
         [KeyboardButton("📢 پیام همگانی"), KeyboardButton("📊 آمار کاربران")],
         [KeyboardButton("❓ آموزش سوال و جواب"), KeyboardButton("📋 سوالات کاربران")],
+        [KeyboardButton("💳 درخواست‌های برداشت"), KeyboardButton("🏆 برترین رفرال‌ها")],
         [KeyboardButton("🔙 خروج از پنل مدیریت")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -556,34 +736,31 @@ def admin_payment_buttons(payment_id):
     ]
     return InlineKeyboardMarkup(keyboard)
 
+def admin_withdraw_buttons(withdraw_id):
+    """دکمه‌های تایید/رد برداشت"""
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ تایید برداشت", callback_data=f"confirm_withdraw_{withdraw_id}"),
+            InlineKeyboardButton("❌ رد برداشت", callback_data=f"reject_withdraw_{withdraw_id}")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
 # ==================== وضعیت‌های مکالمه ====================
 (WAITING_FOR_PAYMENT_PHOTO, 
  WAITING_EDU_TITLE, WAITING_EDU_CONTENT, WAITING_EDU_MEDIA,
  WAITING_FAQ_QUESTION, WAITING_FAQ_ANSWER, WAITING_FAQ_KEYWORDS,
  WAITING_USER_QUESTION,
  WAITING_BROADCAST_MESSAGE,
- WAITING_ANSWER_QUESTION) = range(10)
+ WAITING_ANSWER_QUESTION,
+ WAITING_WITHDRAW_ADDRESS,
+ WAITING_WITHDRAW_AMOUNT) = range(12)
 
 # ==================== توابع کمکی ====================
 def is_admin(user_id):
     return user_id in ADMIN_IDS
 
-def format_payment(payment):
-    """فرمت اطلاعات فیش برای نمایش"""
-    return f"""
-💰 **فیش شماره:** {payment['id']}
-
-👤 **کاربر:** {payment['first_name']} {payment['last_name']} 
-📱 **یوزرنیم:** @{payment['username'] if payment['username'] else 'ندارد'}
-
-💵 **مبلغ:** {payment['amount']} دلار
-🔗 **هش تراکنش:** `{payment['tx_hash']}`
-📅 **تاریخ ثبت:** {payment['created_at']}
-
-📊 **وضعیت:** ⏳ در انتظار تایید
-    """
-
-# ==================== پیام راهنمایی ====================
+# ==================== پیام‌ها ====================
 WELCOME_MESSAGE = """
 🌟 **به آکادمی تخصصی ترید خوش آمدید!** 🌟
 
@@ -605,60 +782,33 @@ WELCOME_MESSAGE = """
 📚 **چه چیزی یاد می‌گیرید؟**
 
 🔹 **تحلیل تکنیکال حرفه‌ای**
-الگوهای قیمتی، اندیکاتورها، پرایس اکشن، نظریه موج‌ها
-
 🔹 **تحلیل فاندامنتال**
-اخبار، اقتصاد کلان، تاثیر رویدادها بر بازار
-
 🔹 **مدیریت ریسک و سرمایه**
-حد ضرر، حد سود، اندازه پوزیشن، نسبت ریسک به ریوارد
-
 🔹 **روانشناسی ترید**
-کنترل احساسات، ترس و طمع، نظم و انضباط
-
 🔹 **استراتژی‌های معاملاتی**
-اسکالپ، دی‌تریدینگ، سوینگ تریدینگ
-
 🔹 **تمرین عملی**
-با پول مجازی تمرین کنید و بدون ریسک یاد بگیرید!
-
----
-
-💎 **مزایای ویژه:**
-✅ دسترسی دائمی به تمام محتواها
-✅ به‌روزرسانی‌های رایگان
-✅ پشتیبانی VIP ۲۴/۷
-✅ گروه اختصاصی کاربران حرفه‌ای
-✅ تمرین‌های عملی با شبیه‌ساز
 
 ---
 
 💰 **هزینه اشتراک ویژه:**
 فقط {price} دلار - **دسترسی مادام‌العمر** به تمام محتواها!
 
-با پرداخت این مبلغ، دیگر هیچ هزینه‌ای پرداخت نمی‌کنید و به همه آموزش‌ها دسترسی دارید.
+🎁 **سیستم رفرال فوق‌العاده:**
+با دعوت از دوستان خود، **۵۰ دلار** پاداش بگیرید!
+هر کاربری که با لینک شما ثبت‌نام کند و اشتراک بخرد، به حساب شما اضافه می‌شود.
 
 ---
 
 📌 **چطور شروع کنیم؟**
 
-۱. روی دکمه **"📚 آموزش ترید"** کلیک کنید تا محتوای آموزشی رو ببینید
+۱. روی دکمه **"📚 آموزش ترید"** کلیک کنید
 ۲. برای دسترسی کامل، روی **"💳 خرید اشتراک"** کلیک کنید
-۳. هر سوالی دارید، از **"❓ مشاوره و سوال"** بپرسید
-۴. وضعیت اشتراکتون رو با **"📊 وضعیت اشتراک"** چک کنید
-
----
-
-⚠️ **توجه مهم:**
-ما به شما **سیگنال کور** نمی‌دهیم! 
-هدف ما این است که **شما خودتان** یک معامله‌گر مستقل و موفق شوید.
-با یادگیری اصول، هرگز به کسی وابسته نخواهید بود!
+۳. برای کسب درآمد، روی **"🎯 رفرال و درآمد"** کلیک کنید
+۴. برای برداشت پول، روی **"💰 برداشت"** کلیک کنید
 
 ---
 
 **آماده‌اید تا به یک تریدر حرفه‌ای تبدیل شوید؟** 💪
-
-همین حالا شروع کنید و آینده مالی خودتان را بسازید! 🚀
 """
 
 HELP_MESSAGE = """
@@ -674,101 +824,63 @@ HELP_MESSAGE = """
 ما باور داریم که **هر کسی می‌تواند یک تریدر موفق باشد**، 
 به شرطی که **اصول درست** را یاد بگیرد.
 
-ما اینجا نیستیم که به شما وابستگی بدهیم، 
-ما اینجاییم تا **شما را قدرتمند** کنیم! 💪
-
 ---
 
 📚 **سرفصل‌های آموزشی:**
 
 **۱. بازارهای مالی** 📊
-• آشنایی با بازارهای مختلف (ارز دیجیتال، فارکس، بورس)
-• ساختار بازار و نحوه عملکرد آن
-• مفاهیم پایه (لانگ، شورت، مارجین، لوریج)
-
 **۲. تحلیل تکنیکال** 📈
-• الگوهای شمعی (کندل‌ها)
-• الگوهای نموداری (سر و شانه، مثلث، پرچم)
-• اندیکاتورها (RSI، MACD، فیبوناچی، میانگین متحرک)
-• پرایس اکشن و سطوح کلیدی
-• نظریه موج‌های الیوت
-
 **۳. تحلیل فاندامنتال** 📰
-• خواندن اخبار اقتصادی
-• تاثیر تصمیمات بانک‌های مرکزی
-• تحلیل بنیادی ارزها
-
 **۴. مدیریت ریسک** 🛡️
-• محاسبه حد ضرر (Stop Loss)
-• تعیین حد سود (Take Profit)
-• مدیریت حجم معامله (Position Sizing)
-• نسبت ریسک به ریوارد (Risk/Reward)
-• محافظت از سرمایه
-
 **۵. روانشناسی ترید** 🧠
-• کنترل ترس و طمع
-• نظم و انضباط در معاملات
-• تاب‌آوری در برابر ضررها
-• ذهنیت برنده
-
 **۶. استراتژی‌های حرفه‌ای** 🎯
-• اسکالپینگ (Scalping)
-• دی‌تریدینگ (Day Trading)
-• سوینگ تریدینگ (Swing Trading)
-• پوزیشن تریدینگ (Position Trading)
-
 **۷. تمرین عملی** 💻
-• شبیه‌ساز معاملاتی
-• تحلیل موارد واقعی
-• تمرین با پول مجازی
+
+---
+
+💰 **سیستم رفرال و درآمدزایی:**
+
+🎁 **چگونه درآمد کسب کنیم؟**
+
+۱. لینک رفرال اختصاصی خود را دریافت کنید
+۲. لینک را با دوستان خود به اشتراک بگذارید
+۳. به ازای هر دوست که ثبت‌نام کند و اشتراک بخرد:
+   - **۵۰ دلار** به حساب شما واریز می‌شود
+   - بدون محدودیت! هر تعداد که می‌توانید دعوت کنید
+
+۴. پس از جمع‌آوری **۵۰۰ دلار**، می‌توانید برداشت کنید
+
+📊 **آمار شما:**
+• تعداد رفرال‌ها: {referrals}
+• درآمد کل: {earnings} دلار
+• موجودی قابل برداشت: {balance} دلار
 
 ---
 
 💎 **مزایای عضویت:**
 
 ✅ **دسترسی مادام‌العمر** به تمام محتواها
-✅ **به‌روزرسانی‌های رایگان** (همیشه جدیدترین مطالب)
-✅ **پشتیبانی VIP ۲۴/۷** (پاسخگویی سریع)
-✅ **گروه اختصاصی** برای تبادل نظر با تریدرهای حرفه‌ای
-✅ **تمرین‌های عملی** با شبیه‌ساز
-✅ **وبینارهای اختصاصی** برای اعضای ویژه
-✅ **کتابخانه جامع** از منابع آموزشی
-
----
-
-💰 **هزینه اشتراک:**
-
-فقط **{price} دلار** - یکبار پرداخت، دسترسی همیشگی!
-
-با این هزینه، به تمام محتوایی که ارزش چندین هزار دلاری دارد، دسترسی پیدا می‌کنید.
+✅ **به‌روزرسانی‌های رایگان**
+✅ **پشتیبانی VIP ۲۴/۷**
+✅ **گروه اختصاصی** کاربران حرفه‌ای
+✅ **سیستم رفرال** با پاداش بالا
+✅ **امکان برداشت** درآمد
 
 ---
 
 ❓ **سوالات متداول:**
 
-**س: آیا سیگنال می‌دهید؟**
-ج: خیر! ما **سیگنال نمی‌دهیم**، به شما **یاد می‌دهیم** که خودتان سیگنال بگیرید.
+**س: چگونه لینک رفرال خود را دریافت کنم؟**
+ج: روی دکمه **"🎯 رفرال و درآمد"** کلیک کنید.
 
-**س: چقدر زمان نیاز دارم؟**
-ج: بستگی به سرعت یادگیری شما دارد، اما معمولاً ۲ تا ۴ هفته برای تسلط بر مبانی.
+**س: پاداش رفرال چقدر است؟**
+ج: به ازای هر کاربر فعال، **۵۰ دلار** پاداش دریافت می‌کنید.
 
-**س: آیا پشتیبانی دارید؟**
-ج: بله، پشتیبانی ۲۴/۷ از طریق ربات و گروه اختصاصی.
+**س: چگونه برداشت کنم؟**
+ج: پس از جمع‌آوری ۵۰۰ دلار، از دکمه **"💰 برداشت"** استفاده کنید.
 
-**س: اگر سوالی داشتم چطور؟**
-ج: از دکمه **"❓ مشاوره و سوال"** استفاده کنید.
-
-**س: آیا تمرین عملی دارید؟**
-ج: بله، با شبیه‌ساز پیشرفته می‌توانید بدون ریسک تمرین کنید.
-
----
-
-📌 **چطور شروع کنیم:**
-
-۱. **آموزش ببینید:** روی "📚 آموزش ترید" کلیک کنید
-۲. **اشتراک تهیه کنید:** روی "💳 خرید اشتراک" کلیک کنید
-۳. **سوال بپرسید:** روی "❓ مشاوره و سوال" کلیک کنید
-۴. **وضعیت چک کنید:** روی "📊 وضعیت اشتراک" کلیک کنید
+**س: آیا محدودیتی برای رفرال وجود دارد؟**
+ج: خیر، هر تعداد که می‌توانید دعوت کنید!
 
 ---
 
@@ -783,26 +895,82 @@ HELP_MESSAGE = """
 **همین حالا شروع کنید و به جمع تریدرهای برتر بپیوندید!** 🚀
 """
 
+REFERRAL_MESSAGE = """
+🎯 **سیستم رفرال و درآمدزایی** 🎯
+
+سلام {first_name} عزیز! 👋
+
+با سیستم رفرال ما، **همزمان با یادگیری ترید، درآمد هم کسب کنید!**
+
+---
+
+📊 **آمار شما:**
+• 👥 تعداد رفرال‌ها: {referrals}
+• 💰 درآمد کل: {earnings} دلار
+• 🏦 موجودی قابل برداشت: {balance} دلار
+• 🎯 رتبه شما: {rank}
+
+---
+
+🔗 **لینک رفرال اختصاصی شما:**
+
+`https://t.me/{bot_username}?start=ref_{referral_code}`
+
+📌 **نحوه استفاده:**
+۱. این لینک را کپی کنید
+۲. برای دوستان خود ارسال کنید
+۳. به ازای هر دوست که ثبت‌نام کند و اشتراک بخرد:
+   - **۵۰ دلار** به حساب شما اضافه می‌شود
+   - بدون محدودیت!
+
+---
+
+🏆 **برترین رفرال‌دهنده‌ها:**
+
+{top_referrers}
+
+---
+
+💡 **نکات کلیدی برای موفقیت:**
+• لینک خود را در شبکه‌های اجتماعی منتشر کنید
+• به دوستان خود توضیح دهید که چه مزایایی دارند
+• از گروه‌های مرتبط با ترید استفاده کنید
+
+---
+
+💰 **حداقل مبلغ برداشت:** {min_withdraw} دلار
+
+موفق و پرسود باشید! 🚀
+"""
+
 # ==================== هندلرهای ربات ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """دستور استارت"""
+    """دستور استارت با پشتیبانی از رفرال"""
     user = update.effective_user
+    args = context.args
+    
+    # بررسی رفرال
+    referrer_id = None
+    if args and args[0].startswith('ref_'):
+        referral_code = args[0].replace('ref_', '')
+        referrer_id = db.get_user_by_referral(referral_code)
     
     # ثبت کاربر در دیتابیس
     db.add_user(
         user_id=user.id,
         username=user.username,
         first_name=user.first_name,
-        last_name=user.last_name
+        last_name=user.last_name,
+        referrer_id=referrer_id
     )
     
-    # انتخاب منوی مناسب (ادمین یا کاربر عادی)
+    # انتخاب منوی مناسب
     if is_admin(user.id):
         reply_markup = admin_menu_keyboard()
     else:
         reply_markup = main_menu_keyboard()
     
-    # پیام خوش‌آمدگویی (راهنمایی نمی‌ره، فقط خوش‌آمدگویی)
+    # پیام خوش‌آمدگویی
     welcome_text = WELCOME_MESSAGE.format(
         first_name=user.first_name,
         price=PRICE_USD
@@ -813,18 +981,35 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=reply_markup
     )
+    
+    # اگر با رفرال آمده، پیام تبریک بفرست
+    if referrer_id:
+        await update.message.reply_text(
+            f"🎉 **تبریک!**\n\n"
+            f"شما با لینک رفرال ثبت‌نام کردید!\n"
+            f"اگر اشتراک تهیه کنید، دوست شما {REFERRAL_BONUS} دلار پاداش می‌گیرد!",
+            parse_mode=ParseMode.MARKDOWN
+        )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """دستور راهنمایی"""
     user = update.effective_user
+    user_data = db.get_user(user.id)
     
-    # انتخاب منوی مناسب (ادمین یا کاربر عادی)
+    referrals = user_data['total_referrals'] if user_data else 0
+    earnings = user_data['total_earnings'] if user_data else 0
+    balance = user_data['balance'] if user_data else 0
+    
+    help_text = HELP_MESSAGE.format(
+        referrals=referrals,
+        earnings=earnings,
+        balance=balance
+    )
+    
     if is_admin(user.id):
         reply_markup = admin_menu_keyboard()
     else:
         reply_markup = main_menu_keyboard()
-    
-    help_text = HELP_MESSAGE.format(price=PRICE_USD)
     
     await update.message.reply_text(
         help_text,
@@ -832,6 +1017,197 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
 
+# ==================== سیستم رفرال ====================
+async def referral_system(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """نمایش سیستم رفرال"""
+    user_id = update.effective_user.id
+    user = db.get_user(user_id)
+    
+    if not user:
+        await update.message.reply_text(
+            "❌ کاربر یافت نشد! لطفاً دوباره استارت بزنید.",
+            reply_markup=main_menu_keyboard()
+        )
+        return
+    
+    # دریافت رفرال‌ها
+    referrals = db.get_user_referrals(user_id)
+    top_referrers = db.get_top_referrers(5)
+    
+    # رتبه کاربر
+    rank = 1
+    for i, ref in enumerate(top_referrers, 1):
+        if ref['user_id'] == user_id:
+            rank = i
+            break
+    
+    # ساخت لیست برترین‌ها
+    top_text = ""
+    for i, ref in enumerate(top_referrers[:5], 1):
+        medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
+        top_text += f"{medal} @{ref['username'] or 'کاربر'} - {ref['total_referrals']} نفر\n"
+    
+    if not top_text:
+        top_text = "هنوز کسی رفرال نداشته است.\nشما می‌توانید اولین نفر باشید! 🚀"
+    
+    referral_text = REFERRAL_MESSAGE.format(
+        first_name=user['first_name'],
+        referrals=user['total_referrals'],
+        earnings=user['total_earnings'],
+        balance=user['balance'],
+        rank=f"#{rank}" if rank else "بدون رتبه",
+        bot_username=BOT_USERNAME,
+        referral_code=user['referral_code'],
+        top_referrers=top_text,
+        min_withdraw=MIN_WITHDRAW
+    )
+    
+    await update.message.reply_text(
+        referral_text,
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=main_menu_keyboard()
+    )
+
+# ==================== سیستم برداشت ====================
+async def withdraw_system(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """شروع فرآیند برداشت"""
+    user_id = update.effective_user.id
+    user = db.get_user(user_id)
+    
+    if not user:
+        await update.message.reply_text(
+            "❌ کاربر یافت نشد!",
+            reply_markup=main_menu_keyboard()
+        )
+        return
+    
+    if user['balance'] < MIN_WITHDRAW:
+        await update.message.reply_text(
+            f"❌ **موجودی شما کافی نیست!**\n\n"
+            f"💰 موجودی فعلی: {user['balance']} دلار\n"
+            f"📌 حداقل مبلغ برداشت: {MIN_WITHDRAW} دلار\n\n"
+            f"برای افزایش موجودی، از سیستم رفرال استفاده کنید.",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=main_menu_keyboard()
+        )
+        return
+    
+    await update.message.reply_text(
+        f"💰 **برداشت از حساب**\n\n"
+        f"موجودی قابل برداشت: {user['balance']} دلار\n"
+        f"حداقل برداشت: {MIN_WITHDRAW} دلار\n\n"
+        f"📌 **لطفاً آدرس کیف پول (TRC20) خود را وارد کنید:**",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=main_menu_keyboard()
+    )
+    context.user_data['withdraw_step'] = 'waiting_address'
+    return WAITING_WITHDRAW_ADDRESS
+
+async def handle_withdraw_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """دریافت آدرس کیف پول برای برداشت"""
+    user_id = update.effective_user.id
+    wallet_address = update.message.text.strip()
+    
+    # بررسی ساده آدرس
+    if len(wallet_address) < 20:
+        await update.message.reply_text(
+            "❌ آدرس کیف پول نامعتبر است! لطفاً مجدداً ارسال کنید.",
+            reply_markup=main_menu_keyboard()
+        )
+        return WAITING_WITHDRAW_ADDRESS
+    
+    context.user_data['wallet_address'] = wallet_address
+    
+    user = db.get_user(user_id)
+    await update.message.reply_text(
+        f"💰 **تایید برداشت**\n\n"
+        f"مبلغ قابل برداشت: {user['balance']} دلار\n"
+        f"حداقل برداشت: {MIN_WITHDRAW} دلار\n\n"
+        f"📌 **مبلغ مورد نظر را وارد کنید:**",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=main_menu_keyboard()
+    )
+    context.user_data['withdraw_step'] = 'waiting_amount'
+    return WAITING_WITHDRAW_AMOUNT
+
+async def handle_withdraw_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """دریافت مبلغ برداشت"""
+    user_id = update.effective_user.id
+    try:
+        amount = float(update.message.text.strip())
+    except:
+        await update.message.reply_text(
+            "❌ مبلغ نامعتبر! لطفاً عدد وارد کنید.",
+            reply_markup=main_menu_keyboard()
+        )
+        return WAITING_WITHDRAW_AMOUNT
+    
+    user = db.get_user(user_id)
+    
+    if amount < MIN_WITHDRAW:
+        await update.message.reply_text(
+            f"❌ حداقل مبلغ برداشت {MIN_WITHDRAW} دلار است!",
+            reply_markup=main_menu_keyboard()
+        )
+        return WAITING_WITHDRAW_AMOUNT
+    
+    if amount > user['balance']:
+        await update.message.reply_text(
+            f"❌ موجودی شما کافی نیست! (موجودی: {user['balance']} دلار)",
+            reply_markup=main_menu_keyboard()
+        )
+        return WAITING_WITHDRAW_AMOUNT
+    
+    wallet_address = context.user_data.get('wallet_address')
+    
+    # ثبت درخواست برداشت
+    success, message = db.add_withdraw_request(user_id, amount, wallet_address)
+    
+    if success:
+        # ارسال به ادمین
+        for admin_id in ADMIN_IDS:
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=f"""
+💰 **درخواست برداشت جدید!**
+
+👤 کاربر: {user['first_name']} {user['last_name']}
+🆔 آیدی: {user_id}
+📱 یوزرنیم: @{user['username'] if user['username'] else 'ندارد'}
+
+💵 مبلغ: {amount} دلار
+🔗 آدرس کیف پول: `{wallet_address}`
+💰 موجودی: {user['balance']} دلار
+
+📌 برای تایید یا رد، از دکمه‌های زیر استفاده کنید:
+                    """,
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=admin_withdraw_buttons(1)  # ID رو باید بگیریم
+                )
+            except Exception as e:
+                logger.error(f"خطا در ارسال به ادمین: {e}")
+        
+        await update.message.reply_text(
+            f"✅ **درخواست برداشت با موفقیت ثبت شد!**\n\n"
+            f"💰 مبلغ: {amount} دلار\n"
+            f"🔗 آدرس: `{wallet_address}`\n\n"
+            f"⏱ درخواست شما در حال بررسی است.\n"
+            f"پس از تایید، مبلغ به کیف پول شما واریز خواهد شد.",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=main_menu_keyboard()
+        )
+    else:
+        await update.message.reply_text(
+            f"❌ خطا: {message}",
+            reply_markup=main_menu_keyboard()
+        )
+    
+    context.user_data.pop('withdraw_step', None)
+    context.user_data.pop('wallet_address', None)
+    return ConversationHandler.END
+
+# ==================== سایر هندلرها ====================
 async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """مدیریت دکمه‌های منوی اصلی"""
     text = update.message.text
@@ -870,6 +1246,12 @@ async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "❓ مشاوره و سوال":
         await ask_question(update, context)
     
+    elif text == "🎯 رفرال و درآمد":
+        await referral_system(update, context)
+    
+    elif text == "💰 برداشت":
+        await withdraw_system(update, context)
+    
     elif text == "📞 پشتیبانی":
         await support(update, context)
     
@@ -887,24 +1269,196 @@ async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await start_add_faq(update, context)
         elif text == "📋 سوالات کاربران":
             await show_user_questions(update, context)
+        elif text == "💳 درخواست‌های برداشت":
+            await show_withdraw_requests(update, context)
+        elif text == "🏆 برترین رفرال‌ها":
+            await show_top_referrers(update, context)
         else:
             await update.message.reply_text(
-                "❌ گزینه نامعتبر! لطفاً از دکمه‌ها استفاده کنید.",
+                "❌ گزینه نامعتبر!",
                 reply_markup=admin_panel_keyboard()
             )
     else:
         await update.message.reply_text(
-            "❌ گزینه نامعتبر! لطفاً از دکمه‌ها استفاده کنید.",
+            "❌ گزینه نامعتبر!",
             reply_markup=main_menu_keyboard()
         )
 
-# ==================== آموزش ====================
+# ==================== نمایش برترین رفرال‌ها (ادمین) ====================
+async def show_top_referrers(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """نمایش برترین رفرال‌دهنده‌ها برای ادمین"""
+    if not is_admin(update.effective_user.id):
+        return
+    
+    top = db.get_top_referrers(20)
+    
+    if not top:
+        await update.message.reply_text(
+            "📊 **هیچ رفرالی ثبت نشده است.**",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=admin_panel_keyboard()
+        )
+        return
+    
+    text = "🏆 **برترین رفرال‌دهنده‌ها:**\n\n"
+    for i, ref in enumerate(top, 1):
+        medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
+        text += f"{medal} @{ref['username'] or 'کاربر'} - {ref['total_referrals']} نفر | {ref['total_earnings']} دلار\n"
+    
+    await update.message.reply_text(
+        text,
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=admin_panel_keyboard()
+    )
+
+# ==================== نمایش درخواست‌های برداشت (ادمین) ====================
+async def show_withdraw_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """نمایش درخواست‌های برداشت برای ادمین"""
+    if not is_admin(update.effective_user.id):
+        return
+    
+    withdraws = db.get_pending_withdraws()
+    
+    if not withdraws:
+        await update.message.reply_text(
+            "✅ **هیچ درخواست برداشتی در انتظار نیست.**",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=admin_panel_keyboard()
+        )
+        return
+    
+    for w in withdraws:
+        text = f"""
+💰 **درخواست برداشت #{w['id']}**
+
+👤 کاربر: {w['last_name']} {w['first_name']}
+🆔 آیدی: {w['user_id']}
+📱 یوزرنیم: @{w['username'] if w['username'] else 'ندارد'}
+
+💵 مبلغ: {w['amount']} دلار
+🔗 آدرس: `{w['wallet_address']}`
+💰 موجودی کاربر: {w['balance']} دلار
+
+📅 تاریخ: {w['created_at']}
+        """
+        
+        await update.message.reply_text(
+            text,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=admin_withdraw_buttons(w['id'])
+        )
+    
+    await update.message.reply_text(
+        "📌 برای تایید یا رد هر درخواست، از دکمه‌ها استفاده کنید.",
+        reply_markup=admin_panel_keyboard()
+    )
+
+# ==================== مدیریت برداشت (ادمین) ====================
+async def handle_withdraw_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """مدیریت تایید/رد برداشت"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        await query.edit_message_text("❌ شما دسترسی ادمین ندارید!")
+        return
+    
+    data = query.data
+    parts = data.split('_')
+    action = parts[1]
+    withdraw_id = int(parts[2])
+    
+    if action == 'confirm':
+        result = db.process_withdraw(withdraw_id, 'confirmed', 'تایید شد')
+        if result:
+            await query.edit_message_text(
+                f"✅ **برداشت #{withdraw_id} تایید شد!**",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            
+            # ارسال پیام به کاربر
+            try:
+                conn = db.get_conn()
+                cur = conn.cursor()
+                cur.execute("SELECT user_id FROM withdraw_requests WHERE id = ?", (withdraw_id,))
+                result = cur.fetchone()
+                cur.close()
+                conn.close()
+                
+                if result:
+                    await context.bot.send_message(
+                        chat_id=result['user_id'],
+                        text=f"""
+✅ **درخواست برداشت شما تایید شد!** 🎉
+
+💰 مبلغ: {amount} دلار به کیف پول شما واریز شد.
+
+🙏 از اعتماد شما سپاسگزاریم.
+                        """,
+                        parse_mode=ParseMode.MARKDOWN,
+                        reply_markup=main_menu_keyboard()
+                    )
+            except Exception as e:
+                logger.error(f"خطا در ارسال پیام تایید برداشت: {e}")
+        else:
+            await query.edit_message_text(
+                f"❌ خطا در تایید برداشت!",
+                parse_mode=ParseMode.MARKDOWN
+            )
+    
+    elif action == 'reject':
+        result = db.process_withdraw(withdraw_id, 'rejected', 'رد شد')
+        if result:
+            await query.edit_message_text(
+                f"❌ **برداشت #{withdraw_id} رد شد!**",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            
+            # برگرداندن موجودی
+            try:
+                conn = db.get_conn()
+                cur = conn.cursor()
+                cur.execute("SELECT user_id, amount FROM withdraw_requests WHERE id = ?", (withdraw_id,))
+                result = cur.fetchone()
+                cur.close()
+                conn.close()
+                
+                if result:
+                    # برگرداندن موجودی
+                    db.add_user_balance(result['user_id'], result['amount'])
+                    
+                    await context.bot.send_message(
+                        chat_id=result['user_id'],
+                        text=f"""
+❌ **درخواست برداشت شما رد شد!**
+
+متاسفانه درخواست برداشت شما تایید نشد.
+
+دلایل احتمالی:
+• آدرس کیف پول نامعتبر
+• اطلاعات ناقص
+
+لطفاً مجدداً از دکمه **💰 برداشت** استفاده کنید.
+                        """,
+                        parse_mode=ParseMode.MARKDOWN,
+                        reply_markup=main_menu_keyboard()
+                    )
+            except Exception as e:
+                logger.error(f"خطا در برگرداندن موجودی: {e}")
+        else:
+            await query.edit_message_text(
+                f"❌ خطا در رد برداشت!",
+                parse_mode=ParseMode.MARKDOWN
+            )
+
+# ==================== آموزش (ادمین) ====================
 async def show_education(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """نمایش محتوای آموزشی"""
     user_id = update.effective_user.id
     user = db.get_user(user_id)
     
-    if not user or not user[4]:  # اگر اشتراک نداشت
+    if not user or not user['subscription_active']:
         await update.message.reply_text(
             "🔒 **دسترسی محدود!**\n\n"
             "برای دسترسی به محتوای آموزشی کامل، لطفاً اشتراک تهیه کنید.\n\n"
@@ -915,7 +1469,6 @@ async def show_education(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # نمایش محتوای آموزشی برای کاربران دارای اشتراک
     educations = db.get_all_education()
     
     if not educations:
@@ -928,23 +1481,23 @@ async def show_education(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     for edu in educations:
-        msg = f"📚 **{edu[1]}**\n\n{edu[2]}"
+        msg = f"📚 **{edu['title']}**\n\n{edu['content']}"
         
-        if edu[3] == 'photo' and edu[4]:
+        if edu['media_type'] == 'photo' and edu['media_file_id']:
             await update.message.reply_photo(
-                photo=edu[4],
+                photo=edu['media_file_id'],
                 caption=msg,
                 parse_mode=ParseMode.MARKDOWN
             )
-        elif edu[3] == 'video' and edu[4]:
+        elif edu['media_type'] == 'video' and edu['media_file_id']:
             await update.message.reply_video(
-                video=edu[4],
+                video=edu['media_file_id'],
                 caption=msg,
                 parse_mode=ParseMode.MARKDOWN
             )
-        elif edu[3] == 'document' and edu[4]:
+        elif edu['media_type'] == 'document' and edu['media_file_id']:
             await update.message.reply_document(
-                document=edu[4],
+                document=edu['media_file_id'],
                 caption=msg,
                 parse_mode=ParseMode.MARKDOWN
             )
@@ -959,10 +1512,9 @@ async def buy_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """مراحل خرید اشتراک"""
     user_id = update.effective_user.id
     
-    # بررسی اشتراک فعلی
     user = db.get_user(user_id)
-    if user and user[4]:  # ستون ۴ = subscription_active
-        expiry = user[5]
+    if user and user['subscription_active']:
+        expiry = user['subscription_expiry']
         if expiry:
             try:
                 expiry_date = datetime.strptime(expiry, '%Y-%m-%d %H:%M:%S')
@@ -1008,44 +1560,34 @@ async def buy_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_menu_keyboard()
     )
     
-    # وارد حالت انتظار برای دریافت عکس
     context.user_data['waiting_for_payment'] = True
     return WAITING_FOR_PAYMENT_PHOTO
 
 async def handle_payment_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """دریافت عکس فیش پرداخت"""
     user_id = update.effective_user.id
-    photo = update.message.photo[-1]  # بهترین کیفیت
+    photo = update.message.photo[-1]
     caption = update.message.caption
     
     if not caption:
         await update.message.reply_text(
-            "❌ لطفاً هش تراکنش (TxID) را به همراه عکس ارسال کنید.\n"
-            "مثال: ارسال عکس + TxID",
+            "❌ لطفاً هش تراکنش (TxID) را به همراه عکس ارسال کنید.",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=main_menu_keyboard()
         )
         return WAITING_FOR_PAYMENT_PHOTO
     
-    # استخراج TxID از کپشن
     tx_hash = caption.strip()
-    if len(tx_hash) < 10:  # بررسی ساده
+    if len(tx_hash) < 10:
         await update.message.reply_text(
-            "❌ هش تراکنش نامعتبر است. لطفاً مجدداً ارسال کنید.",
+            "❌ هش تراکنش نامعتبر است!",
             reply_markup=main_menu_keyboard()
         )
         return WAITING_FOR_PAYMENT_PHOTO
     
-    # ثبت در دیتابیس
-    payment_id = db.add_payment(
-        user_id=user_id,
-        amount=PRICE_USD,
-        tx_hash=tx_hash,
-        photo_file_id=photo.file_id
-    )
+    payment_id = db.add_payment(user_id, PRICE_USD, tx_hash, photo.file_id)
     
     if payment_id:
-        # ارسال به ادمین‌ها
         for admin_id in ADMIN_IDS:
             try:
                 await context.bot.send_photo(
@@ -1059,7 +1601,6 @@ async def handle_payment_photo(update: Update, context: ContextTypes.DEFAULT_TYP
 📱 یوزرنیم: @{update.effective_user.username if update.effective_user.username else 'ندارد'}
 💵 مبلغ: {PRICE_USD} دلار
 🔗 هش: {tx_hash}
-📅 تاریخ: {datetime.now().strftime('%Y-%m-%d %H:%M')}
 
 📌 برای تایید یا رد، از دکمه‌های زیر استفاده کنید:
                     """,
@@ -1067,22 +1608,20 @@ async def handle_payment_photo(update: Update, context: ContextTypes.DEFAULT_TYP
                     reply_markup=admin_payment_buttons(payment_id)
                 )
             except Exception as e:
-                logger.error(f"خطا در ارسال به ادمین {admin_id}: {e}")
+                logger.error(f"خطا در ارسال به ادمین: {e}")
         
-        # پیام به کاربر - اصلاح شد
         await update.message.reply_text(
             "✅ **فیش شما با موفقیت ثبت شد!** 💰\n\n"
             "📋 فیش شما برای بررسی به مدیریت ارسال شد.\n"
             "⏱ فرآیند بررسی معمولاً **حداکثر ۲ ساعت** طول می‌کشد.\n\n"
             "🔔 پس از تایید، به شما اطلاع داده می‌شود.\n"
-            "📊 می‌توانید وضعیت اشتراک خود را از دکمه **وضعیت اشتراک** بررسی کنید.\n\n"
-            "🙏 از صبر و شکیبایی شما سپاسگزاریم.",
+            "📊 می‌توانید وضعیت اشتراک خود را از دکمه **وضعیت اشتراک** بررسی کنید.",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=main_menu_keyboard()
         )
     else:
         await update.message.reply_text(
-            "❌ خطا در ثبت فیش! لطفاً دوباره تلاش کنید.",
+            "❌ خطا در ثبت فیش!",
             reply_markup=main_menu_keyboard()
         )
     
@@ -1096,13 +1635,13 @@ async def check_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     if not user:
         await update.message.reply_text(
-            "❌ کاربر یافت نشد! لطفاً دوباره استارت بزنید.",
+            "❌ کاربر یافت نشد!",
             reply_markup=main_menu_keyboard()
         )
         return
     
-    if user[4]:  # ستون ۴ = subscription_active
-        expiry = user[5]
+    if user['subscription_active']:
+        expiry = user['subscription_expiry']
         if expiry:
             try:
                 expiry_date = datetime.strptime(expiry, '%Y-%m-%d %H:%M:%S')
@@ -1112,51 +1651,45 @@ async def check_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         f"✅ **اشتراک شما فعال است!**\n\n"
                         f"📅 زمان باقی‌مانده: {days_left} روز\n"
                         f"📆 تاریخ انقضا: {expiry}\n\n"
-                        "از آموزش‌های ما استفاده کنید و موفق باشید! 🚀",
+                        "از آموزش‌های ما استفاده کنید! 🚀",
                         parse_mode=ParseMode.MARKDOWN,
                         reply_markup=main_menu_keyboard()
                     )
                 else:
-                    # اشتراک منقضی شده
                     await update.message.reply_text(
                         f"⏰ **اشتراک شما منقضی شده است!**\n\n"
-                        f"برای تمدید، از دکمه **💳 خرید اشتراک** استفاده کنید.\n\n"
-                        f"💰 هزینه: {PRICE_USD} دلار",
+                        f"برای تمدید، از دکمه **💳 خرید اشتراک** استفاده کنید.",
                         parse_mode=ParseMode.MARKDOWN,
                         reply_markup=main_menu_keyboard()
                     )
             except:
                 await update.message.reply_text(
-                    f"✅ **اشتراک شما فعال است!**\n\n"
-                    "از آموزش‌های ما استفاده کنید و موفق باشید! 🚀",
+                    f"✅ **اشتراک شما فعال است!** (دسترسی دائمی)\n\n"
+                    "از آموزش‌های ما استفاده کنید! 🚀",
                     parse_mode=ParseMode.MARKDOWN,
                     reply_markup=main_menu_keyboard()
                 )
         else:
             await update.message.reply_text(
                 f"✅ **اشتراک شما فعال است!** (دسترسی دائمی)\n\n"
-                "از آموزش‌های ما استفاده کنید و موفق باشید! 🚀",
+                "از آموزش‌های ما استفاده کنید! 🚀",
                 parse_mode=ParseMode.MARKDOWN,
                 reply_markup=main_menu_keyboard()
             )
     else:
         await update.message.reply_text(
             "❌ **شما اشتراک فعال ندارید!**\n\n"
-            f"برای دسترسی به آموزش‌ها، اشتراک تهیه کنید.\n"
             f"💰 هزینه: {PRICE_USD} دلار\n\n"
             "از دکمه **💳 خرید اشتراک** استفاده کنید.",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=main_menu_keyboard()
         )
 
-# ==================== مشاوره و سوال ====================
+# ==================== سایر هندلرها ====================
 async def ask_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """پرسش سوال از مشاور"""
     await update.message.reply_text(
         "❓ **مشاوره و سوال تخصصی**\n\n"
-        "سوال خود را بنویسید. کارشناسان ما در اسرع وقت پاسخ می‌دهند.\n\n"
-        "📌 **نکته:** لطفاً سوال خود را دقیق و کامل مطرح کنید.\n"
-        "🔍 همچنین می‌توانید از **آموزش سوال و جواب** استفاده کنید.",
+        "سوال خود را بنویسید. کارشناسان ما در اسرع وقت پاسخ می‌دهند.",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=main_menu_keyboard()
     )
@@ -1164,60 +1697,38 @@ async def ask_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return WAITING_USER_QUESTION
 
 async def handle_user_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """دریافت سوال کاربر"""
     user_id = update.effective_user.id
     question = update.message.text
     
-    # ثبت سوال در دیتابیس
     q_id = db.add_user_question(user_id, question)
     
     if q_id:
-        # ارسال به ادمین‌ها
         for admin_id in ADMIN_IDS:
             try:
                 await context.bot.send_message(
                     chat_id=admin_id,
                     text=f"""
-❓ **سوال جدید از کاربر:**
+❓ **سوال جدید:**
 
-👤 کاربر: {update.effective_user.first_name} {update.effective_user.last_name}
-🆔 آیدی: {user_id}
-📱 یوزرنیم: @{update.effective_user.username if update.effective_user.username else 'ندارد'}
+👤 کاربر: {update.effective_user.first_name}
+📝 سوال: {question}
 
-📝 **سوال:**
-{question}
-
-✅ برای پاسخ، از پنل مدیریت استفاده کنید.
+برای پاسخ، از پنل مدیریت استفاده کنید.
                     """,
                     parse_mode=ParseMode.MARKDOWN
                 )
-            except Exception as e:
-                logger.error(f"خطا در ارسال سوال به ادمین {admin_id}: {e}")
+            except:
+                pass
         
-        # جستجو در FAQ
-        faq_results = db.search_faq(question)
-        if faq_results:
-            reply = "🤖 **سوالات مشابه در آموزش سوال و جواب:**\n\n"
-            for q, a in faq_results[:3]:
-                reply += f"❓ {q}\n✅ {a}\n\n"
-            reply += "\nاگر پاسخ شما کامل نبود، کارشناسان ما پاسخ کامل را ارسال خواهند کرد."
-            
-            await update.message.reply_text(
-                reply,
-                parse_mode=ParseMode.MARKDOWN,
-                reply_markup=main_menu_keyboard()
-            )
-        else:
-            await update.message.reply_text(
-                "✅ **سوال شما ثبت شد!**\n\n"
-                "کارشناسان ما در اسرع وقت پاسخ می‌دهند.\n"
-                "⏱ زمان پاسخگویی: حداکثر ۲۴ ساعت",
-                parse_mode=ParseMode.MARKDOWN,
-                reply_markup=main_menu_keyboard()
-            )
+        await update.message.reply_text(
+            "✅ **سوال شما ثبت شد!**\n\n"
+            "کارشناسان ما در اسرع وقت پاسخ می‌دهند.",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=main_menu_keyboard()
+        )
     else:
         await update.message.reply_text(
-            "❌ خطا در ثبت سوال! لطفاً دوباره تلاش کنید.",
+            "❌ خطا در ثبت سوال!",
             reply_markup=main_menu_keyboard()
         )
     
@@ -1225,13 +1736,11 @@ async def handle_user_question(update: Update, context: ContextTypes.DEFAULT_TYP
     return ConversationHandler.END
 
 async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """پشتیبانی"""
     await update.message.reply_text(
         "📞 **پشتیبانی**\n\n"
-        "در صورت هرگونه مشکل یا سوال، می‌توانید:\n\n"
-        "1️⃣ از دکمه **❓ مشاوره و سوال** استفاده کنید.\n"
-        "2️⃣ با ادمین تماس بگیرید: @YourAdminUsername\n"
-        "3️⃣ ایمیل: support@example.com\n\n"
+        "برای ارتباط با پشتیبانی:\n"
+        "1️⃣ از دکمه **❓ مشاوره و سوال** استفاده کنید\n"
+        "2️⃣ با ادمین تماس بگیرید: @YourAdmin\n\n"
         "⏱ ساعات پاسخگویی: ۹ صبح تا ۱۲ شب",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=main_menu_keyboard()
@@ -1239,7 +1748,6 @@ async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== پنل مدیریت ====================
 async def show_payments(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """نمایش فیش‌های پرداخت"""
     if not is_admin(update.effective_user.id):
         return
     
@@ -1247,55 +1755,33 @@ async def show_payments(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not payments:
         await update.message.reply_text(
-            "✅ **هیچ فیش در انتظار تاییدی وجود ندارد.**",
-            parse_mode=ParseMode.MARKDOWN,
+            "✅ **هیچ فیش در انتظار تاییدی نیست.**",
             reply_markup=admin_panel_keyboard()
         )
         return
     
     for payment in payments:
         text = f"""
-💰 **فیش شماره: {payment['id']}**
+💰 **فیش #{payment['id']}**
 
-👤 کاربر: {payment['last_name']} {payment['first_name']} 
-📱 یوزرنیم: @{payment['username'] if payment['username'] else 'ندارد'}
-🆔 آیدی کاربر: {payment['user_id']}
-
+👤 کاربر: {payment['last_name']} {payment['first_name']}
 💵 مبلغ: {payment['amount']} دلار
-🔗 هش تراکنش: `{payment['tx_hash']}`
-📅 تاریخ ثبت: {payment['created_at']}
-
-📊 وضعیت: ⏳ در انتظار تایید
+🔗 هش: `{payment['tx_hash']}`
+📅 تاریخ: {payment['created_at']}
         """
         
-        # ارسال عکس فیش
-        try:
-            await update.message.reply_photo(
-                photo=payment['photo_file_id'],
-                caption=text,
-                parse_mode=ParseMode.MARKDOWN,
-                reply_markup=admin_payment_buttons(payment['id'])
-            )
-        except Exception as e:
-            logger.error(f"خطا در ارسال فیش: {e}")
-            await update.message.reply_text(
-                text + "\n\n⚠️ عکس قابل نمایش نیست.",
-                parse_mode=ParseMode.MARKDOWN,
-                reply_markup=admin_payment_buttons(payment['id'])
-            )
-    
-    await update.message.reply_text(
-        "📌 برای تایید یا رد هر فیش، از دکمه‌های زیر هر پیام استفاده کنید.",
-        reply_markup=admin_panel_keyboard()
-    )
+        await update.message.reply_photo(
+            photo=payment['photo_file_id'],
+            caption=text,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=admin_payment_buttons(payment['id'])
+        )
 
 async def handle_payment_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """مدیریت تایید/رد فیش"""
     query = update.callback_query
     await query.answer()
     
-    user_id = update.effective_user.id
-    if not is_admin(user_id):
+    if not is_admin(update.effective_user.id):
         await query.edit_message_text("❌ شما دسترسی ادمین ندارید!")
         return
     
@@ -1307,146 +1793,131 @@ async def handle_payment_action(update: Update, context: ContextTypes.DEFAULT_TY
     if action == 'confirm':
         result = db.confirm_payment(payment_id)
         if result:
-            # ارسال پیام تایید به کاربر
-            await query.edit_message_text(
-                f"✅ **فیش شماره {payment_id} تایید شد!**\n\n"
-                "اشتراک کاربر فعال شد.",
-                parse_mode=ParseMode.MARKDOWN
-            )
+            await query.edit_message_text(f"✅ **فیش #{payment_id} تایید شد!**")
             
             # ارسال پیام به کاربر
             try:
                 conn = db.get_conn()
                 cur = conn.cursor()
                 cur.execute("SELECT user_id FROM payments WHERE id = ?", (payment_id,))
-                user_id_result = cur.fetchone()
+                result = cur.fetchone()
                 cur.close()
                 conn.close()
                 
-                if user_id_result:
+                if result:
                     await context.bot.send_message(
-                        chat_id=user_id_result[0],
+                        chat_id=result['user_id'],
                         text="""
 🎉 **تبریک! پرداخت شما تایید شد!** ✅
 
-✅ **اشتراک شما با موفقیت فعال شد!**
-📚 به تمام محتوای آموزشی دسترسی کامل دارید.
+✅ اشتراک شما فعال شد!
+📚 به تمام محتوای آموزشی دسترسی دارید.
 
-🚀 همین حالا از دکمه **📚 آموزش ترید** استفاده کنید و مسیر حرفه‌ای شدن را شروع کنید!
-
-📌 نکات مهم:
-• تمام آموزش‌ها به صورت دائمی در دسترس شماست
-• به‌روزرسانی‌های جدید رایگان خواهد بود
-• در صورت نیاز به مشاوره، از دکمه **❓ مشاوره و سوال** استفاده کنید
-
-🌟 **آینده مالی خود را بسازید!**
-موفق و پرسود باشید! 💰
+🚀 موفق و پرسود باشید!
                         """,
                         parse_mode=ParseMode.MARKDOWN,
                         reply_markup=main_menu_keyboard()
                     )
             except Exception as e:
-                logger.error(f"خطا در ارسال پیام تایید به کاربر: {e}")
+                logger.error(f"خطا در ارسال پیام تایید: {e}")
         else:
-            await query.edit_message_text(
-                f"❌ خطا در تایید فیش شماره {payment_id}!",
-                parse_mode=ParseMode.MARKDOWN
-            )
+            await query.edit_message_text(f"❌ خطا در تایید فیش!")
     
     elif action == 'reject':
         result = db.reject_payment(payment_id)
         if result:
-            await query.edit_message_text(
-                f"❌ **فیش شماره {payment_id} رد شد!**",
-                parse_mode=ParseMode.MARKDOWN
-            )
+            await query.edit_message_text(f"❌ **فیش #{payment_id} رد شد!**")
             
-            # ارسال پیام به کاربر
             try:
                 conn = db.get_conn()
                 cur = conn.cursor()
                 cur.execute("SELECT user_id FROM payments WHERE id = ?", (payment_id,))
-                user_id_result = cur.fetchone()
+                result = cur.fetchone()
                 cur.close()
                 conn.close()
                 
-                if user_id_result:
+                if result:
                     await context.bot.send_message(
-                        chat_id=user_id_result[0],
+                        chat_id=result['user_id'],
                         text="""
-❌ **پرداخت شما متاسفانه رد شد!**
+❌ **پرداخت شما رد شد!**
 
-دلایل احتمالی رد پرداخت:
-• مبلغ واریزی نادرست است (باید دقیقاً ۵۰۰ دلار باشد)
-• شبکه اشتباه است (باید حتماً TRC20 باشد)
-• عکس رسید واضح و خوانا نیست
-• هش تراکنش (TxID) نامعتبر است
+دلایل احتمالی:
+• مبلغ نادرست
+• شبکه اشتباه (باید TRC20 باشد)
+• عکس رسید واضح نیست
 
-📌 **راه حل:**
-لطفاً مجدداً از دکمه **💳 خرید اشتراک** استفاده کنید و مراحل را دقیقاً طبق راهنما انجام دهید.
-
-🔍 اگر فکر می‌کنید اشتباهی رخ داده، با پشتیبانی تماس بگیرید.
-
-موفق باشید! 🙏
+لطفاً مجدداً از دکمه **💳 خرید اشتراک** استفاده کنید.
                         """,
                         parse_mode=ParseMode.MARKDOWN,
                         reply_markup=main_menu_keyboard()
                     )
             except Exception as e:
-                logger.error(f"خطا در ارسال پیام رد به کاربر: {e}")
+                logger.error(f"خطا در ارسال پیام رد: {e}")
         else:
-            await query.edit_message_text(
-                f"❌ خطا در رد فیش شماره {payment_id}!",
-                parse_mode=ParseMode.MARKDOWN
-            )
+            await query.edit_message_text(f"❌ خطا در رد فیش!")
 
-# ==================== ارسال آموزش از پنل ====================
+# ==================== سایر توابع مدیریت ====================
+async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    
+    stats = db.get_stats()
+    
+    text = f"""
+📊 **آمار جامع کاربران**
+
+👥 کاربران کل: {stats['total_users']:,}
+✅ اشتراک فعال: {stats['subscribed_users']:,}
+📈 نرخ تبدیل: {round((stats['subscribed_users'] / stats['total_users'] * 100) if stats['total_users'] > 0 else 0, 2)}%
+
+💰 **آمار مالی:**
+فیش‌های در انتظار: {stats['pending_payments']}
+کل پرداخت‌ها: {stats['total_payments']}
+درآمد کل: {stats['total_earnings']:,} دلار
+
+🎯 **سیستم رفرال:**
+کل رفرال‌ها: {stats['total_referrals']}
+پاداش پرداختی: {stats['total_referral_bonus']:,} دلار
+درخواست‌های برداشت: {stats['pending_withdraws']}
+
+⚡ **سیستم:**
+شاردینگ‌ها: {MAX_WORKERS}
+ظرفیت: ۱۰۰,۰۰۰ کاربر
+    """
+    
+    await update.message.reply_text(
+        text,
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=admin_panel_keyboard()
+    )
+
 async def start_add_education(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """شروع افزودن محتوای آموزشی"""
     if not is_admin(update.effective_user.id):
         return
     
     await update.message.reply_text(
-        "📝 **افزودن محتوای آموزشی جدید**\n\n"
-        "لطفاً **عنوان** آموزش را وارد کنید:\n"
-        "(مثال: تحلیل تکنیکال مقدماتی)",
-        parse_mode=ParseMode.MARKDOWN,
+        "📝 **افزودن آموزش جدید**\n\n"
+        "عنوان را وارد کنید:",
         reply_markup=admin_panel_keyboard()
     )
     return WAITING_EDU_TITLE
 
 async def handle_edu_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """دریافت عنوان آموزش"""
     context.user_data['edu_title'] = update.message.text
-    
-    await update.message.reply_text(
-        "📝 **متن آموزش را وارد کنید:**\n\n"
-        "(توضیحات کامل، می‌تواند شامل لینک، کد، و ... باشد)",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=admin_panel_keyboard()
-    )
+    await update.message.reply_text("📝 **متن آموزش را وارد کنید:**")
     return WAITING_EDU_CONTENT
 
 async def handle_edu_content(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """دریافت متن آموزش"""
     context.user_data['edu_content'] = update.message.text
-    
     await update.message.reply_text(
-        "📎 **نوع فایل ضمیمه را انتخاب کنید:**\n\n"
-        "1️⃣ عکس ارسال کنید\n"
-        "2️⃣ ویدئو ارسال کنید\n"
-        "3️⃣ فایل (PDF/Word/Excel) ارسال کنید\n"
-        "4️⃣ بدون فایل (فقط متن)\n\n"
-        "⚠️ اگر فایلی ندارید، فقط **لغو** را بزنید.",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=admin_panel_keyboard()
+        "📎 **فایل ضمیمه ارسال کنید**\n"
+        "(عکس/ویدئو/فایل) یا 'لغو' برای بدون فایل"
     )
     return WAITING_EDU_MEDIA
 
 async def handle_edu_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """دریافت فایل ضمیمه آموزش"""
-    user_id = update.effective_user.id
-    if not is_admin(user_id):
+    if not is_admin(update.effective_user.id):
         return
     
     title = context.user_data.get('edu_title')
@@ -1465,167 +1936,113 @@ async def handle_edu_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         media_type = 'document'
         media_file_id = update.message.document.file_id
     else:
-        # بدون فایل
         media_type = 'text'
     
-    # ذخیره در دیتابیس
-    edu_id = db.add_education_content(
-        title=title,
-        content=content,
-        media_type=media_type,
-        media_file_id=media_file_id
-    )
+    edu_id = db.add_education_content(title, content, media_type, media_file_id)
     
     if edu_id:
         await update.message.reply_text(
-            f"✅ **آموزش با موفقیت ثبت شد!**\n\n"
-            f"📌 عنوان: {title}\n"
-            f"🆔 شناسه: {edu_id}\n\n"
-            "📤 در حال ارسال به کاربران دارای اشتراک...",
-            parse_mode=ParseMode.MARKDOWN,
+            f"✅ **آموزش ثبت شد!**\n\n"
+            f"در حال ارسال به {len(db.get_subscribed_users())} کاربر...",
             reply_markup=admin_panel_keyboard()
         )
         
-        # ارسال به تمام کاربران دارای اشتراک
-        subscribed_users = db.get_subscribed_users()
-        total = len(subscribed_users)
-        success_count = 0
+        # ارسال به کاربران دارای اشتراک
+        subscribed = db.get_subscribed_users()
+        success = 0
         
-        if total > 0:
-            # ارسال گروهی با تاخیر برای جلوگیری از محدودیت
-            for i, user_id in enumerate(subscribed_users):
-                try:
-                    if media_type == 'photo' and media_file_id:
-                        await context.bot.send_photo(
-                            chat_id=user_id,
-                            photo=media_file_id,
-                            caption=f"📚 **{title}**\n\n{content}",
-                            parse_mode=ParseMode.MARKDOWN
-                        )
-                    elif media_type == 'video' and media_file_id:
-                        await context.bot.send_video(
-                            chat_id=user_id,
-                            video=media_file_id,
-                            caption=f"📚 **{title}**\n\n{content}",
-                            parse_mode=ParseMode.MARKDOWN
-                        )
-                    elif media_type == 'document' and media_file_id:
-                        await context.bot.send_document(
-                            chat_id=user_id,
-                            document=media_file_id,
-                            caption=f"📚 **{title}**\n\n{content}",
-                            parse_mode=ParseMode.MARKDOWN
-                        )
-                    else:
-                        await context.bot.send_message(
-                            chat_id=user_id,
-                            text=f"📚 **{title}**\n\n{content}",
-                            parse_mode=ParseMode.MARKDOWN
-                        )
-                    success_count += 1
-                    
-                    # تاخیر بین هر ۱۰ پیام برای جلوگیری از محدودیت
-                    if (i + 1) % 10 == 0:
-                        await asyncio.sleep(1)
-                        
-                except Exception as e:
-                    logger.error(f"خطا در ارسال به کاربر {user_id}: {e}")
-                    await asyncio.sleep(0.5)  # تاخیر بیشتر در صورت خطا
-            
-            await update.message.reply_text(
-                f"📊 **گزارش ارسال:**\n\n"
-                f"👥 کل کاربران دارای اشتراک: {total}\n"
-                f"✅ ارسال موفق: {success_count}\n"
-                f"❌ ارسال ناموفق: {total - success_count}",
-                parse_mode=ParseMode.MARKDOWN,
-                reply_markup=admin_panel_keyboard()
-            )
-        else:
-            await update.message.reply_text(
-                "⚠️ **هیچ کاربر دارای اشتراکی وجود ندارد!**\n\n"
-                "آموزش در دیتابیس ذخیره شد اما به کسی ارسال نشد.",
-                parse_mode=ParseMode.MARKDOWN,
-                reply_markup=admin_panel_keyboard()
-            )
+        for i, user_id in enumerate(subscribed):
+            try:
+                if media_type == 'photo' and media_file_id:
+                    await context.bot.send_photo(
+                        chat_id=user_id,
+                        photo=media_file_id,
+                        caption=f"📚 **{title}**\n\n{content}",
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                elif media_type == 'video' and media_file_id:
+                    await context.bot.send_video(
+                        chat_id=user_id,
+                        video=media_file_id,
+                        caption=f"📚 **{title}**\n\n{content}",
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                elif media_type == 'document' and media_file_id:
+                    await context.bot.send_document(
+                        chat_id=user_id,
+                        document=media_file_id,
+                        caption=f"📚 **{title}**\n\n{content}",
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                else:
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=f"📚 **{title}**\n\n{content}",
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                success += 1
+                if (i + 1) % 10 == 0:
+                    await asyncio.sleep(0.5)
+            except Exception as e:
+                logger.error(f"خطا در ارسال به {user_id}: {e}")
+        
+        await update.message.reply_text(
+            f"📊 **گزارش ارسال:**\n"
+            f"✅ موفق: {success}\n"
+            f"❌ ناموفق: {len(subscribed) - success}",
+            reply_markup=admin_panel_keyboard()
+        )
     else:
         await update.message.reply_text(
-            "❌ خطا در ثبت آموزش! لطفاً دوباره تلاش کنید.",
+            "❌ خطا در ثبت آموزش!",
             reply_markup=admin_panel_keyboard()
         )
     
-    # پاک کردن داده‌های موقت
     context.user_data.pop('edu_title', None)
     context.user_data.pop('edu_content', None)
     return ConversationHandler.END
 
-async def cancel_edu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """انصراف از افزودن آموزش"""
+async def start_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
     
-    context.user_data.clear()
+    users = db.get_all_users()
     await update.message.reply_text(
-        "❌ عملیات افزودن آموزش لغو شد.",
+        f"📢 **پیام همگانی به {len(users)} کاربر**\n\n"
+        "پیام خود را ارسال کنید:",
         reply_markup=admin_panel_keyboard()
     )
-    return ConversationHandler.END
+    return WAITING_BROADCAST_MESSAGE
 
-# ==================== پیام همگانی ====================
-async def start_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """شروع پیام همگانی"""
+async def handle_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
     
     users = db.get_all_users()
     total = len(users)
     
-    await update.message.reply_text(
-        f"📢 **ارسال پیام همگانی**\n\n"
-        f"لطفاً پیام مورد نظر برای ارسال به **همه کاربران** را وارد کنید:\n\n"
-        f"⚠️ این پیام برای تمام **{total} کاربر** ارسال می‌شود.\n\n"
-        "می‌توانید از **متن، عکس، ویدئو یا فایل** استفاده کنید.\n\n"
-        "⏱ زمان تقریبی: چند دقیقه",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=admin_panel_keyboard()
-    )
-    return WAITING_BROADCAST_MESSAGE
-
-async def handle_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ارسال پیام همگانی"""
-    user_id = update.effective_user.id
-    if not is_admin(user_id):
-        return
+    await update.message.reply_text(f"📤 در حال ارسال به {total} کاربر...")
     
-    # دریافت تمام کاربران
-    users = db.get_all_users()
-    total_users = len(users)
-    
-    await update.message.reply_text(
-        f"📤 **در حال ارسال پیام به {total_users} کاربر...**\n\n"
-        "⏳ لطفاً صبر کنید...",
-        parse_mode=ParseMode.MARKDOWN
-    )
-    
-    success_count = 0
+    success = 0
     for i, user in enumerate(users):
         try:
             if update.message.photo:
                 await context.bot.send_photo(
                     chat_id=user['user_id'],
                     photo=update.message.photo[-1].file_id,
-                    caption=update.message.caption if update.message.caption else ""
+                    caption=update.message.caption
                 )
             elif update.message.video:
                 await context.bot.send_video(
                     chat_id=user['user_id'],
                     video=update.message.video.file_id,
-                    caption=update.message.caption if update.message.caption else ""
+                    caption=update.message.caption
                 )
             elif update.message.document:
                 await context.bot.send_document(
                     chat_id=user['user_id'],
                     document=update.message.document.file_id,
-                    caption=update.message.caption if update.message.caption else ""
+                    caption=update.message.caption
                 )
             else:
                 await context.bot.send_message(
@@ -1633,122 +2050,58 @@ async def handle_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     text=update.message.text,
                     parse_mode=ParseMode.MARKDOWN
                 )
-            success_count += 1
-            
-            # تاخیر برای جلوگیری از محدودیت
+            success += 1
             if (i + 1) % 10 == 0:
                 await asyncio.sleep(0.5)
-                
         except Exception as e:
-            logger.error(f"خطا در ارسال به کاربر {user['user_id']}: {e}")
-            await asyncio.sleep(0.5)
+            logger.error(f"خطا در ارسال به {user['user_id']}: {e}")
     
     await update.message.reply_text(
-        f"📊 **گزارش ارسال پیام همگانی:**\n\n"
-        f"👥 کل کاربران: {total_users}\n"
-        f"✅ ارسال موفق: {success_count}\n"
-        f"❌ ارسال ناموفق: {total_users - success_count}",
-        parse_mode=ParseMode.MARKDOWN,
+        f"📊 **گزارش ارسال:**\n"
+        f"✅ موفق: {success}\n"
+        f"❌ ناموفق: {total - success}",
         reply_markup=admin_panel_keyboard()
     )
-    
     return ConversationHandler.END
 
-# ==================== آمار کاربران ====================
-async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """نمایش آمار کاربران"""
-    if not is_admin(update.effective_user.id):
-        return
-    
-    stats = db.get_stats()
-    
-    stats_text = f"""
-📊 **آمار جامع کاربران**
-
-👥 **تعداد کل کاربران:** {stats['total_users']:,}
-✅ **کاربران دارای اشتراک:** {stats['subscribed_users']:,}
-❌ **کاربران بدون اشتراک:** {stats['total_users'] - stats['subscribed_users']:,}
-
-💰 **آمار مالی:**
-• فیش‌های در انتظار تایید: {stats['pending_payments']}
-• تعداد کل پرداخت‌ها: {stats['total_payments']}
-• مجموع درآمد: **{stats['total_earnings']:,} دلار**
-
-📈 **نرخ تبدیل:** {round((stats['subscribed_users'] / stats['total_users'] * 100) if stats['total_users'] > 0 else 0, 2)}%
-
-📅 **آخرین به‌روزرسانی:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-🔹 **وضعیت سیستم:** ✅ فعال
-🔹 **تعداد شاردینگ‌ها:** {MAX_WORKERS}
-🔹 **ظرفیت:** تا ۱۰,۰۰۰ کاربر
-    """
-    
-    await update.message.reply_text(
-        stats_text,
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=admin_panel_keyboard()
-    )
-
-# ==================== سوال و جواب (FAQ) ====================
 async def start_add_faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """شروع افزودن سوال و جواب"""
     if not is_admin(update.effective_user.id):
         return
     
     await update.message.reply_text(
-        "❓ **افزودن سوال و جواب جدید**\n\n"
-        "لطفاً **سوال** را وارد کنید:\n"
-        "(مثال: تحلیل تکنیکال چیست؟)",
-        parse_mode=ParseMode.MARKDOWN,
+        "❓ **افزودن سوال و جواب**\n\n"
+        "سوال را وارد کنید:",
         reply_markup=admin_panel_keyboard()
     )
     return WAITING_FAQ_QUESTION
 
 async def handle_faq_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """دریافت سوال FAQ"""
     context.user_data['faq_question'] = update.message.text
-    
-    await update.message.reply_text(
-        "📝 **جواب را وارد کنید:**\n\n"
-        "(پاسخ کامل و دقیق)",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=admin_panel_keyboard()
-    )
+    await update.message.reply_text("📝 **جواب را وارد کنید:**")
     return WAITING_FAQ_ANSWER
 
 async def handle_faq_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """دریافت جواب FAQ"""
     context.user_data['faq_answer'] = update.message.text
-    
-    await update.message.reply_text(
-        "🔑 **کلمات کلیدی را وارد کنید (با کاما جدا کنید):**\n\n"
-        "مثال: تحلیل تکنیکال, پرایس اکشن, اندیکاتور\n\n"
-        "این کلمات به جستجوی بهتر کمک می‌کنند.",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=admin_panel_keyboard()
-    )
+    await update.message.reply_text("🔑 **کلمات کلیدی (با کاما جدا کنید):**")
     return WAITING_FAQ_KEYWORDS
 
 async def handle_faq_keywords(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """دریافت کلمات کلیدی FAQ"""
     keywords = [kw.strip() for kw in update.message.text.split(',')]
     question = context.user_data.get('faq_question')
     answer = context.user_data.get('faq_answer')
     
-    # ذخیره در دیتابیس
     result = db.add_faq(question, answer, keywords)
     
     if result:
         await update.message.reply_text(
-            f"✅ **سوال و جواب با موفقیت ثبت شد!**\n\n"
-            f"❓ سوال: {question}\n"
-            f"🔑 کلمات کلیدی: {', '.join(keywords)}",
-            parse_mode=ParseMode.MARKDOWN,
+            f"✅ **سوال و جواب ثبت شد!**\n\n"
+            f"❓ {question}\n"
+            f"🔑 {', '.join(keywords)}",
             reply_markup=admin_panel_keyboard()
         )
     else:
         await update.message.reply_text(
-            "❌ خطا در ثبت سوال و جواب! لطفاً دوباره تلاش کنید.",
+            "❌ خطا در ثبت!",
             reply_markup=admin_panel_keyboard()
         )
     
@@ -1756,9 +2109,7 @@ async def handle_faq_keywords(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data.pop('faq_answer', None)
     return ConversationHandler.END
 
-# ==================== سوالات کاربران (ادمین) ====================
 async def show_user_questions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """نمایش سوالات کاربران برای ادمین"""
     if not is_admin(update.effective_user.id):
         return
     
@@ -1766,8 +2117,7 @@ async def show_user_questions(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     if not questions:
         await update.message.reply_text(
-            "✅ **هیچ سوال در انتظار پاسخی وجود ندارد.**",
-            parse_mode=ParseMode.MARKDOWN,
+            "✅ **هیچ سوالی در انتظار نیست.**",
             reply_markup=admin_panel_keyboard()
         )
         return
@@ -1776,64 +2126,43 @@ async def show_user_questions(update: Update, context: ContextTypes.DEFAULT_TYPE
         text = f"""
 ❓ **سوال کاربر:**
 
-👤 کاربر: {q['last_name']} {q['first_name']} 
-📱 یوزرنیم: @{q['username'] if q['username'] else 'ندارد'}
-🆔 آیدی: {q['user_id']}
-
-📝 **سوال:**
-{q['question']}
-
-📅 تاریخ: {q['created_at']}
-
-📌 برای پاسخ، روی دکمه زیر کلیک کنید.
+👤 {q['last_name']} {q['first_name']}
+📝 {q['question']}
+📅 {q['created_at']}
         """
         
         await update.message.reply_text(
             text,
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📝 پاسخ دادن", callback_data=f"answer_question_{q['id']}")]
+                [InlineKeyboardButton("📝 پاسخ", callback_data=f"answer_question_{q['id']}")]
             ])
         )
-    
-    await update.message.reply_text(
-        "📌 برای پاسخ به هر سوال، روی دکمه زیر کلیک کنید.",
-        reply_markup=admin_panel_keyboard()
-    )
 
 async def handle_question_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """پاسخ به سوال کاربر توسط ادمین"""
     query = update.callback_query
     await query.answer()
     
     if not is_admin(update.effective_user.id):
-        await query.edit_message_text("❌ شما دسترسی ادمین ندارید!")
+        await query.edit_message_text("❌ دسترسی ادمین ندارید!")
         return
     
     q_id = int(query.data.split('_')[2])
     context.user_data['answering_question_id'] = q_id
     
-    await query.edit_message_text(
-        "📝 **پاسخ خود را وارد کنید:**\n\n"
-        "پاسخ شما به کاربر ارسال خواهد شد.",
-        parse_mode=ParseMode.MARKDOWN
-    )
+    await query.edit_message_text("📝 **پاسخ خود را وارد کنید:**")
     return WAITING_ANSWER_QUESTION
 
 async def handle_answer_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """دریافت پاسخ از ادمین و ارسال به کاربر"""
-    user_id = update.effective_user.id
-    if not is_admin(user_id):
+    if not is_admin(update.effective_user.id):
         return
     
     q_id = context.user_data.get('answering_question_id')
     answer = update.message.text
     
-    # ذخیره پاسخ در دیتابیس
     result = db.answer_user_question(q_id, answer)
     
     if result:
-        # دریافت اطلاعات سوال
         conn = db.get_conn()
         cur = conn.cursor()
         cur.execute("SELECT user_id, question FROM user_questions WHERE id = ?", (q_id,))
@@ -1842,29 +2171,27 @@ async def handle_answer_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
         conn.close()
         
         if q_data:
-            # ارسال پاسخ به کاربر
             try:
                 await context.bot.send_message(
-                    chat_id=q_data[0],
+                    chat_id=q_data['user_id'],
                     text=f"""
 ✅ **پاسخ به سوال شما:**
 
-📝 **سوال شما:**
-{q_data[1]}
+📝 {q_data['question']}
 
-📌 **پاسخ کارشناس:**
+📌 **پاسخ:**
 {answer}
 
-🌟 **موفق و پرسود باشید!** 🚀
+موفق باشید! 🚀
                     """,
                     parse_mode=ParseMode.MARKDOWN,
                     reply_markup=main_menu_keyboard()
                 )
             except Exception as e:
-                logger.error(f"خطا در ارسال پاسخ به کاربر: {e}")
+                logger.error(f"خطا در ارسال پاسخ: {e}")
         
         await update.message.reply_text(
-            "✅ **پاسخ با موفقیت ارسال شد!**",
+            "✅ **پاسخ ارسال شد!**",
             reply_markup=admin_panel_keyboard()
         )
     else:
@@ -1876,35 +2203,26 @@ async def handle_answer_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data.pop('answering_question_id', None)
     return ConversationHandler.END
 
-# ==================== بازگشت به پنل مدیریت ====================
-async def back_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """بازگشت به پنل مدیریت"""
-    query = update.callback_query
-    await query.answer()
-    
-    if not is_admin(update.effective_user.id):
-        await query.edit_message_text("❌ شما دسترسی ادمین ندارید!")
-        return
-    
-    await query.edit_message_text(
-        "👑 **پنل مدیریت**\n\n"
-        "از دکمه‌های زیر استفاده کنید:",
+async def cancel_edu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
+    await update.message.reply_text(
+        "❌ عملیات لغو شد.",
         reply_markup=admin_panel_keyboard()
     )
+    return ConversationHandler.END
 
 # ==================== اصلی ====================
 def main():
     """راه‌اندازی ربات"""
-    # ایجاد اپلیکیشن
     application = Application.builder().token(TOKEN).build()
     
-    # ===== هندلرهای استارت و منو =====
+    # ===== هندلرهای استارت =====
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     
-    # ===== هندلر منوی اصلی =====
+    # ===== منوی اصلی =====
     application.add_handler(MessageHandler(
-        filters.Regex("^(📖 راهنمایی|📚 آموزش ترید|💳 خرید اشتراک|📊 وضعیت اشتراک|❓ مشاوره و سوال|📞 پشتیبانی|👑 پنل مدیریت|🔙 خروج از پنل مدیریت|💰 فیش‌ها|📝 ارسال متن آموزش|📢 پیام همگانی|📊 آمار کاربران|❓ آموزش سوال و جواب|📋 سوالات کاربران)$"),
+        filters.Regex("^(📖 راهنمایی|📚 آموزش ترید|💳 خرید اشتراک|📊 وضعیت اشتراک|❓ مشاوره و سوال|🎯 رفرال و درآمد|💰 برداشت|📞 پشتیبانی|👑 پنل مدیریت|🔙 خروج از پنل مدیریت|💰 فیش‌ها|📝 ارسال متن آموزش|📢 پیام همگانی|📊 آمار کاربران|❓ آموزش سوال و جواب|📋 سوالات کاربران|💳 درخواست‌های برداشت|🏆 برترین رفرال‌ها)$"),
         handle_main_menu
     ))
     
@@ -1920,7 +2238,7 @@ def main():
     )
     application.add_handler(payment_conv)
     
-    # ===== سوال کاربر =====
+    # ===== سوال =====
     question_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^❓ مشاوره و سوال$"), ask_question)],
         states={
@@ -1932,7 +2250,7 @@ def main():
     )
     application.add_handler(question_conv)
     
-    # ===== آموزش (ادمین) =====
+    # ===== آموزش =====
     edu_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^📝 ارسال متن آموزش$"), start_add_education)],
         states={
@@ -1962,7 +2280,7 @@ def main():
     )
     application.add_handler(broadcast_conv)
     
-    # ===== سوال و جواب (ادمین) =====
+    # ===== سوال و جواب =====
     faq_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^❓ آموزش سوال و جواب$"), start_add_faq)],
         states={
@@ -1980,7 +2298,7 @@ def main():
     )
     application.add_handler(faq_conv)
     
-    # ===== پاسخ به سوال کاربر (ادمین) =====
+    # ===== پاسخ به سوال =====
     answer_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(handle_question_answer, pattern="^answer_question_")],
         states={
@@ -1992,18 +2310,35 @@ def main():
     )
     application.add_handler(answer_conv)
     
-    # ===== کالبک‌های دکمه‌ها =====
+    # ===== برداشت =====
+    withdraw_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^💰 برداشت$"), withdraw_system)],
+        states={
+            WAITING_WITHDRAW_ADDRESS: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_withdraw_address)
+            ],
+            WAITING_WITHDRAW_AMOUNT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_withdraw_amount)
+            ]
+        },
+        fallbacks=[MessageHandler(filters.Regex("^🔙$"), cancel_edu)]
+    )
+    application.add_handler(withdraw_conv)
+    
+    # ===== کالبک‌ها =====
     application.add_handler(CallbackQueryHandler(handle_payment_action, pattern="^(confirm_payment_|reject_payment_)"))
-    application.add_handler(CallbackQueryHandler(back_to_admin, pattern="^back_to_admin$"))
+    application.add_handler(CallbackQueryHandler(handle_withdraw_action, pattern="^(confirm_withdraw_|reject_withdraw_)"))
     
     # ===== راه‌اندازی =====
     print("=" * 60)
-    print("🚀 ربات آموزش ترید حرفه‌ای")
+    print("🚀 ربات آموزش ترید حرفه‌ای با سیستم رفرال")
     print("=" * 60)
     print(f"📁 دیتابیس: trading_bot.db")
     print(f"👤 ادمین‌ها: {ADMIN_IDS}")
     print(f"⚡ شاردینگ‌ها: {MAX_WORKERS}")
-    print(f"👥 ظرفیت: ۱۰,۰۰۰ کاربر")
+    print(f"👥 ظرفیت: ۱۰۰,۰۰۰ کاربر")
+    print(f"🎁 پاداش رفرال: {REFERRAL_BONUS} دلار")
+    print(f"💰 حداقل برداشت: {MIN_WITHDRAW} دلار")
     print("=" * 60)
     print("✅ ربات در حال اجراست...")
     print("=" * 60)
