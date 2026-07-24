@@ -1,49 +1,35 @@
 # -*- coding: utf-8 -*-
 """
-ربات آموزش ترید — نسخه ۴ (تحلیل چارت با مدل Vision محلی + محدودیت روزانه)
-=============================================================================
-تغییرات نسبت به v3:
+ربات آموزش ترید — نسخه ۵ (بدون AI، سوال‌وجواب کاملاً دستی)
+================================================================
+تغییرات نسبت به v4:
 
-1. مشاوره متنی + تحلیل چارت (عکس) حالا هر دو از طریق یک مدل Vision روی
-   Ollama انجام می‌شه. کاربر می‌تونه عکس چارت بفرسته، مدل توضیح تکنیکال
-   (روند، حمایت/مقاومت، الگوها) می‌ده — نه یک سیگنال مشخص خرید/فروش، چون
-   این با فلسفه "آموزش نه سیگنال" ربات در تضاده.
+1. حذف کامل اتصال به Ollama/مدل هوش مصنوعی — دیگه هیچ فراخوانی خارجی برای
+   مشاوره یا تحلیل چارت وجود نداره.
+2. برگشت «آموزش سوال و جواب» به پنل مدیریت: خودتون کلمات کلیدی + جواب رو
+   وارد می‌کنید؛ وقتی سوال کاربر با یکی از کلمات کلیدی مطابقت داشت، همون
+   جواب فرستاده می‌شه.
+3. اگه سوال کاربر با هیچ کلمه کلیدی مطابقت نداشت، مثل قبل برای مدیر ارسال
+   می‌شه و مدیر می‌تونه از پنل «سوالات بی‌پاسخ» جواب بده.
+4. محدودیت روزانه استفاده حذف شد (چون دیگه منبع محاسباتی گرون قیمتی درگیر
+   نیست — جدول qna فقط یک SELECT ساده‌ست).
+5. ارسال عکس در حالت مشاوره دیگه معنی «تحلیل چارت» نداره؛ کاربر باید
+   سوالش رو به‌صورت متن بپرسه.
 
-2. محدودیت استفاده:
-   - کاربران دارای اشتراک (approved): استفاده نامحدود از مشاوره AI.
-   - کاربران عادی: فقط ۱ بار در روز (متن یا عکس، هرکدوم زودتر).
-
-3. نکته مهم درباره‌ی "۸ میلیارد پارامتر مخصوص ترید":
-   مدل پیشنهادی qwen2.5vl:7b یک مدل عمومیِ قوی در خوندن تصویر/چارت/نمودار
-   است، نه یک مدل که از صفر روی داده مالی ترید شده. تخصصی‌شدنش را با یک
-   system prompt مهندسی‌شده برای خواندن چارت انجام دادم. اگر روزی مدل
-   واقعاً fine-tune شده روی ترید پیدا کردید/ساختید، کافیه AI_MODEL_NAME رو
-   عوض کنید — بقیه کد دست‌نخورده می‌مونه.
-
-راه‌اندازی روی سرور خودتان:
-    1. نصب Ollama:  https://ollama.com/download
-    2. دانلود مدل:   ollama pull qwen2.5vl:7b
-    3. اجرا:          ollama serve      (پیش‌فرض روی پورت 11434 بالا میاد)
-    4. تنظیمات پایین فایل:
-           AI_API_BASE   = "http://localhost:11434/v1"
-           AI_MODEL_NAME = "qwen2.5vl:7b"
-           AI_API_KEY    = ""   (خالی — Ollama نیاز به کلید نداره)
-
-    اگر سرور Ollama جای دیگه‌ای (نه همون سرور ربات) اجراست، آدرس IP همون
-    سرور رو به‌جای localhost بذارید، مثلا: "http://192.168.1.50:11434/v1"
-
-نصب پکیج‌ها:
+نصب:
     pip install python-telegram-bot==21.4 httpx
+    (httpx دیگه لازم نیست ولی ضرری هم نداره نگه‌داشتنش)
+
+اجرا:
+    python trading_edu_bot_v5.py
 """
 
 import logging
 import sqlite3
 import asyncio
-import base64
 from datetime import datetime
 from contextlib import closing
 
-import httpx
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -63,9 +49,9 @@ from telegram.ext import (
 )
 
 # ==================== تنظیمات اصلی ====================
-BOT_TOKEN = "PUT_YOUR_BOT_TOKEN_HERE"
+BOT_TOKEN = "PUT_YOUR_BOT_TOKEN_HERE"       # توکن جدید (بعد از revoke کردن قبلی) رو اینجا بذارید
 BOT_USERNAME = "UTYOB_Bot"
-ADMIN_IDS = [111111111]
+ADMIN_IDS = [327855654]
 WALLET_ADDRESS = "TSED8mCkfaNtavaBw2pQQpUoMRKGCwBsv3"
 NETWORK_NAME = "TRC20 (Tron)"
 PRICE_USD = 500
@@ -77,42 +63,6 @@ DB_PATH = "bot.db"
 PERSISTENCE_PATH = "bot_state.pickle"
 BROADCAST_CONCURRENCY = 20
 BROADCAST_DELAY = 0.05
-
-FREE_DAILY_AI_LIMIT = 1   # تعداد استفاده رایگان AI برای کاربران بدون اشتراک، در روز
-
-# ---- تنظیمات مدل هوش مصنوعی محلی (Ollama - سازگار با OpenAI API) ----
-AI_API_BASE = "http://localhost:11434/v1"   # آدرس سرور Ollama شما؛ خالی = غیرفعال
-AI_API_KEY = ""
-AI_MODEL_NAME = "qwen2.5vl:7b"              # مدل vision+text نصب‌شده روی Ollama
-AI_TIMEOUT = 30
-AI_VISION_TIMEOUT = 90                      # تحلیل تصویر کندتره، timeout بیشتر
-
-AI_TEXT_SYSTEM_PROMPT = (
-    "شما دستیار آموزشی یک آکادمی ترید هستید. فقط به سوالات آموزشی درباره "
-    "تحلیل بازار، مدیریت ریسک و سرمایه، روانشناسی معامله‌گری و مفاهیم پایه "
-    "ترید پاسخ بده. هرگز سیگنال خرید/فروش مشخص برای یک نماد یا لحظه خاص "
-    "نده و همیشه در صورت لزوم یادآوری کن که ترید ریسک دارد و این آموزش، "
-    "مشاوره مالی رسمی نیست. پاسخ‌ها را کوتاه، دقیق، محاوره‌ای و به زبان "
-    "فارسی بده."
-)
-
-AI_CHART_SYSTEM_PROMPT = (
-    "شما یک مربی آموزش تحلیل تکنیکال هستید که به کاربر کمک می‌کنید خودش "
-    "چارت رو یاد بگیره بخونه — نه اینکه بهش بگید چیکار کنه.\n\n"
-    "وقتی یک تصویر چارت (کندل‌استیک، نمودار قیمت، اندیکاتور) دریافت می‌کنید:\n"
-    "۱. روند کلی قابل مشاهده رو توصیف کنید (صعودی/نزولی/رنج).\n"
-    "۲. سطوح حمایت و مقاومت قابل تشخیص در تصویر رو نام ببرید.\n"
-    "۳. الگوهای کندلی یا کلاسیک قابل مشاهده (اگر واضح است) رو توضیح بدید و "
-    "بگید معمولاً چه معنایی دارن.\n"
-    "۴. اگر اندیکاتوری مثل RSI/MACD/میانگین متحرک در تصویر است، وضعیتش رو "
-    "توصیف کنید.\n"
-    "۵. در پایان، ۱ تا ۲ سوال آموزشی از کاربر بپرسید تا خودش روی تحلیل فکر "
-    "کنه (مثلاً: با توجه به این الگو، به نظرت ریسک ورود کجاست؟).\n\n"
-    "🚫 هرگز نگید 'بخر' یا 'بفروش'، هرگز قیمت هدف یا حد ضرر مشخص ندید، و "
-    "هرگز ادعای قطعیت نکنید — این فقط خوانش آموزشیه، نه توصیه مالی. اگر "
-    "تصویر واضح نیست یا چارت نیست، صادقانه بگید که نمی‌تونید تحلیلش کنید.\n"
-    "پاسخ را به زبان فارسی و به‌صورت خوانا بدید."
-)
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -127,9 +77,8 @@ GUIDE_TEXT = (
     "بفهمید. این کار شما رو برای همیشه به یک نفر دیگه وابسته نگه می‌داره.\n\n"
     "🟢 <b>ما چیکار می‌کنیم؟</b>\n"
     "هدف اینه که <b>خودتون یک معامله‌گر مستقل بشید</b>: تحلیل بازار، مدیریت "
-    "ریسک، روانشناسی معامله‌گری و ساختن استراتژی شخصی. حتی مشاور هوش‌مصنوعی "
-    "ربات هم بهتون یاد می‌ده چارت رو خودتون بخونید، نه اینکه بهتون بگه چیکار "
-    "کنید.\n\nبرای ثبت‌نام از دکمه «💳 خرید و ثبت‌نام» استفاده کنید."
+    "ریسک، روانشناسی معامله‌گری و ساختن استراتژی شخصی.\n\n"
+    "برای ثبت‌نام از دکمه «💳 خرید و ثبت‌نام» استفاده کنید."
 )
 
 BUY_TEXT = (
@@ -204,6 +153,13 @@ def init_db():
             )"""
         )
         c.execute(
+            """CREATE TABLE IF NOT EXISTS qna (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                keywords TEXT,
+                answer TEXT
+            )"""
+        )
+        c.execute(
             """CREATE TABLE IF NOT EXISTS pending_questions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
@@ -214,15 +170,6 @@ def init_db():
             )"""
         )
         c.execute("CREATE INDEX IF NOT EXISTS idx_pq_answered ON pending_questions(answered)")
-
-        c.execute(
-            """CREATE TABLE IF NOT EXISTS ai_usage (
-                user_id INTEGER,
-                usage_date TEXT,
-                count INTEGER DEFAULT 0,
-                PRIMARY KEY (user_id, usage_date)
-            )"""
-        )
         conn.commit()
 
 
@@ -381,6 +328,26 @@ def all_education_content():
         return conn.execute("SELECT * FROM education_content ORDER BY id").fetchall()
 
 
+def add_qna(keywords_csv, answer):
+    with closing(db_conn()) as conn:
+        conn.execute(
+            "INSERT INTO qna (keywords, answer) VALUES (?,?)",
+            (keywords_csv.strip().lower(), answer),
+        )
+        conn.commit()
+
+
+def find_qna_answer(question_text):
+    q = question_text.strip().lower()
+    with closing(db_conn()) as conn:
+        rows = conn.execute("SELECT keywords, answer FROM qna").fetchall()
+    for r in rows:
+        keywords = [k.strip() for k in (r["keywords"] or "").split(",") if k.strip()]
+        if any(k in q for k in keywords):
+            return r["answer"]
+    return None
+
+
 def add_pending_question(user_id, question):
     with closing(db_conn()) as conn:
         cur = conn.execute(
@@ -401,98 +368,6 @@ def answer_question(qid, answer):
         conn.execute("UPDATE pending_questions SET answer=?, answered=1 WHERE id=?", (answer, qid))
         conn.commit()
         return conn.execute("SELECT * FROM pending_questions WHERE id=?", (qid,)).fetchone()
-
-
-# ---- سهمیه روزانه AI ----
-
-def get_today_usage_count(user_id):
-    today = datetime.now().strftime("%Y-%m-%d")
-    with closing(db_conn()) as conn:
-        row = conn.execute(
-            "SELECT count FROM ai_usage WHERE user_id=? AND usage_date=?", (user_id, today)
-        ).fetchone()
-        return row["count"] if row else 0
-
-
-def increment_usage(user_id):
-    today = datetime.now().strftime("%Y-%m-%d")
-    with closing(db_conn()) as conn:
-        conn.execute(
-            "INSERT INTO ai_usage (user_id, usage_date, count) VALUES (?,?,1) "
-            "ON CONFLICT(user_id, usage_date) DO UPDATE SET count = count + 1",
-            (user_id, today),
-        )
-        conn.commit()
-
-
-def check_and_consume_quota(user_id, approved):
-    """True یعنی مجاز به استفاده؛ برای کاربر approved همیشه True (و مصرف ثبت نمی‌شه چون نامحدوده)."""
-    if approved:
-        return True
-    used = get_today_usage_count(user_id)
-    if used >= FREE_DAILY_AI_LIMIT:
-        return False
-    increment_usage(user_id)
-    return True
-
-
-# ==================== هوش مصنوعی ====================
-
-async def ask_ai(question: str):
-    if not AI_API_BASE:
-        return None
-    try:
-        headers = {"Content-Type": "application/json"}
-        if AI_API_KEY:
-            headers["Authorization"] = f"Bearer {AI_API_KEY}"
-        payload = {
-            "model": AI_MODEL_NAME,
-            "messages": [
-                {"role": "system", "content": AI_TEXT_SYSTEM_PROMPT},
-                {"role": "user", "content": question},
-            ],
-            "temperature": 0.4,
-            "max_tokens": 700,
-        }
-        async with httpx.AsyncClient(timeout=AI_TIMEOUT) as client:
-            resp = await client.post(f"{AI_API_BASE}/chat/completions", json=payload, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
-            return data["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        logger.warning("AI call failed: %s", e)
-        return None
-
-
-async def ask_ai_vision(user_text: str, image_bytes: bytes):
-    if not AI_API_BASE:
-        return None
-    try:
-        b64 = base64.b64encode(image_bytes).decode()
-        headers = {"Content-Type": "application/json"}
-        if AI_API_KEY:
-            headers["Authorization"] = f"Bearer {AI_API_KEY}"
-        user_content = [
-            {"type": "text", "text": user_text or "این چارت رو از نظر تکنیکال و آموزشی تحلیل کن."},
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-        ]
-        payload = {
-            "model": AI_MODEL_NAME,
-            "messages": [
-                {"role": "system", "content": AI_CHART_SYSTEM_PROMPT},
-                {"role": "user", "content": user_content},
-            ],
-            "temperature": 0.3,
-            "max_tokens": 900,
-        }
-        async with httpx.AsyncClient(timeout=AI_VISION_TIMEOUT) as client:
-            resp = await client.post(f"{AI_API_BASE}/chat/completions", json=payload, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
-            return data["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        logger.warning("AI vision call failed: %s", e)
-        return None
 
 
 # ==================== ارسال امن (flood-safe) ====================
@@ -576,7 +451,7 @@ def user_main_keyboard():
     return ReplyKeyboardMarkup(
         [
             ["📖 راهنما", "💳 خرید و ثبت‌نام"],
-            ["📊 وضعیت من", "💬 مشاوره / تحلیل چارت"],
+            ["📊 وضعیت من", "💬 مشاوره"],
             ["💰 رفرال و موجودی", "🏦 برداشت"],
         ],
         resize_keyboard=True,
@@ -597,8 +472,8 @@ def admin_menu_keyboard():
         [
             ["🧾 فیش‌ها", "💸 درخواست‌های برداشت"],
             ["📝 ارسال متن آموزش", "📢 پیام همگانی"],
-            ["📊 آمار کاربران", "📥 سوالات بی‌پاسخ"],
-            ["🔙 بازگشت به منوی عادی"],
+            ["📊 آمار کاربران", "❓ آموزش سوال و جواب"],
+            ["📥 سوالات بی‌پاسخ", "🔙 بازگشت به منوی عادی"],
         ],
         resize_keyboard=True,
     )
@@ -635,11 +510,11 @@ STATUS_LABELS = {
 
 MAIN_MENU_TEXTS = {
     "📖 راهنما", "💳 خرید و ثبت‌نام", "📊 وضعیت من",
-    "💬 مشاوره / تحلیل چارت", "💰 رفرال و موجودی", "🏦 برداشت",
+    "💬 مشاوره", "💰 رفرال و موجودی", "🏦 برداشت",
 }
 ADMIN_MENU_TEXTS = {
     "🧾 فیش‌ها", "💸 درخواست‌های برداشت", "📝 ارسال متن آموزش", "📢 پیام همگانی",
-    "📊 آمار کاربران", "📥 سوالات بی‌پاسخ", "🔙 بازگشت به منوی عادی",
+    "📊 آمار کاربران", "❓ آموزش سوال و جواب", "📥 سوالات بی‌پاسخ", "🔙 بازگشت به منوی عادی",
 }
 
 
@@ -723,23 +598,8 @@ async def withdraw_button(update, context):
 
 
 async def consult_button(update, context):
-    u = update.effective_user
-    row = get_user(u.id)
-    approved = bool(row and row["status"] == "approved")
-
-    if not approved and get_today_usage_count(u.id) >= FREE_DAILY_AI_LIMIT:
-        await update.message.reply_text(
-            f"⏳ شما سهمیه رایگان امروز ({FREE_DAILY_AI_LIMIT} بار) رو استفاده کردید.\n"
-            "کاربران دارای اشتراک استفاده نامحدود دارن. برای خرید اشتراک از دکمه «💳 خرید و ثبت‌نام» استفاده کنید، "
-            "یا فردا دوباره امتحان کنید."
-        )
-        return
-
     context.user_data["awaiting_question"] = True
-    msg = "🟢 سوالتون رو بنویسید، یا عکس چارت رو برای تحلیل ارسال کنید."
-    if not approved:
-        msg += f"\n\n(کاربران بدون اشتراک روزی {FREE_DAILY_AI_LIMIT} بار می‌تونن استفاده کنن)"
-    await update.message.reply_text(msg)
+    await update.message.reply_text("🟢 سوالتون رو بنویسید:")
 
 
 async def send_receipt_callback(update, context):
@@ -770,7 +630,6 @@ async def use_balance_callback(update, context):
 async def photo_handler(update, context):
     u = update.effective_user
 
-    # ---- ادمین در حال افزودن محتوای آموزشی ----
     if is_admin(u.id) and context.user_data.get("awaiting_edu_content"):
         file_id = update.message.photo[-1].file_id
         caption = update.message.caption or ""
@@ -779,7 +638,6 @@ async def photo_handler(update, context):
         await update.message.reply_text(f"✅ عکس ثبت شد و برای {n} کاربر ارسال شد.\nبرای پایان /done را بزنید.")
         return
 
-    # ---- کاربر در حال ارسال رسید پرداخت ----
     if context.user_data.get("awaiting_receipt"):
         file_id = update.message.photo[-1].file_id
         receipt_id = add_receipt(u.id, file_id)
@@ -798,43 +656,8 @@ async def photo_handler(update, context):
             )
         return
 
-    # ---- کاربر در حالت مشاوره، عکس = چارت برای تحلیل ----
     if context.user_data.get("awaiting_question"):
-        row = get_user(u.id)
-        approved = bool(row and row["status"] == "approved")
-
-        if not check_and_consume_quota(u.id, approved):
-            await update.message.reply_text(
-                f"⏳ شما سهمیه رایگان امروز ({FREE_DAILY_AI_LIMIT} بار) رو استفاده کردید. "
-                "برای تحلیل نامحدود چارت، اشتراک تهیه کنید یا فردا دوباره امتحان کنید."
-            )
-            context.user_data["awaiting_question"] = False
-            return
-
-        photo = update.message.photo[-1]
-        tg_file = await context.bot.get_file(photo.file_id)
-        image_bytes = bytes(await tg_file.download_as_bytearray())
-        caption = update.message.caption or ""
-
-        await update.message.reply_text("⏳ در حال تحلیل چارت... (ممکنه چند ثانیه طول بکشه)")
-        answer = await ask_ai_vision(caption, image_bytes)
-
-        if answer:
-            await update.message.reply_text(answer)
-        else:
-            add_pending_question(u.id, caption or "[کاربر یک تصویر چارت ارسال کرد]")
-            await update.message.reply_text(
-                "در حال حاضر تحلیل خودکار چارت در دسترس نیست (سرور AI خاموشه یا مدل نصب نشده)؛ "
-                "برای بررسی به مدیر ارسال شد."
-            )
-            for admin_id in ADMIN_IDS:
-                await safe_send(
-                    context.bot, admin_id, "photo", photo=photo.file_id,
-                    caption=f"❓ چارت بی‌پاسخ از {u.first_name} (@{u.username or '-'}) — آیدی {u.id}\n{caption}",
-                )
-
-        if not approved:
-            context.user_data["awaiting_question"] = False
+        await update.message.reply_text("لطفاً سوالتون رو به‌صورت متن بنویسید 🙂")
         return
 
     await update.message.reply_text("برای ارسال عکس، اول از منو گزینه مربوطه رو انتخاب کنید.")
@@ -862,7 +685,7 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await show_buy(update, context)
     if text == "📊 وضعیت من":
         return await show_status(update, context)
-    if text == "💬 مشاوره / تحلیل چارت":
+    if text == "💬 مشاوره":
         return await consult_button(update, context)
     if text == "💰 رفرال و موجودی":
         return await show_referral(update, context)
@@ -953,6 +776,13 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
             return
 
+        if text == "❓ آموزش سوال و جواب":
+            context.user_data["awaiting_qna_keywords"] = True
+            await update.message.reply_text(
+                "کلمات کلیدی این سوال رو با کاما جدا و بفرست (مثلاً: حد ضرر, استاپ لاس, ریسک):"
+            )
+            return
+
         if text == "📥 سوالات بی‌پاسخ":
             rows = unanswered_questions()
             if not rows:
@@ -975,6 +805,22 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"📢 پیام به {n} کاربر ارسال شد.")
             return
 
+        if context.user_data.get("awaiting_qna_keywords"):
+            context.user_data["qna_keywords_temp"] = text
+            context.user_data["awaiting_qna_keywords"] = False
+            context.user_data["awaiting_qna_answer"] = True
+            await update.message.reply_text("جواب مربوط به این کلمات کلیدی رو بفرست:")
+            return
+
+        if context.user_data.get("awaiting_qna_answer"):
+            keywords = context.user_data.pop("qna_keywords_temp", "")
+            context.user_data["awaiting_qna_answer"] = False
+            add_qna(keywords, text)
+            await update.message.reply_text(
+                f"✅ ثبت شد.\nکلمات کلیدی: {keywords}\nبرای افزودن مورد بعدی دوباره «❓ آموزش سوال و جواب» رو بزنید."
+            )
+            return
+
         reply_qid = context.user_data.get("awaiting_reply_to_qid")
         if reply_qid:
             context.user_data["awaiting_reply_to_qid"] = None
@@ -985,34 +831,20 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("✅ پاسخ ارسال شد.")
             return
 
-    # ---- حالت مشاوره کاربر عادی (متن) ----
+    # ---- حالت مشاوره کاربر عادی (کاملاً دستی، کلیدواژه‌ای) ----
     if context.user_data.get("awaiting_question"):
-        row = get_user(u.id)
-        approved = bool(row and row["status"] == "approved")
-
-        if not check_and_consume_quota(u.id, approved):
-            await update.message.reply_text(
-                f"⏳ شما سهمیه رایگان امروز ({FREE_DAILY_AI_LIMIT} بار) رو استفاده کردید. "
-                "برای مشاوره نامحدود، اشتراک تهیه کنید یا فردا دوباره امتحان کنید."
-            )
-            context.user_data["awaiting_question"] = False
-            return
-
-        answer = await ask_ai(text)
+        answer = find_qna_answer(text)
         if answer:
             await update.message.reply_text(answer)
         else:
             add_pending_question(u.id, text)
-            await update.message.reply_text("در حال حاضر پاسخ خودکار در دسترس نیست؛ سوال شما برای مدیر ارسال شد 🙏")
+            await update.message.reply_text("سوال شما ثبت شد و برای مدیر ارسال شد؛ به‌زودی پاسخ داده می‌شه 🙏")
             note = (
                 f"❓ سوال بی‌پاسخ\nاز: {u.first_name} (@{u.username or '-'})\nآیدی: <code>{u.id}</code>\n\n"
                 f"سوال: {text}"
             )
             for admin_id in ADMIN_IDS:
                 await safe_send(context.bot, admin_id, "message", text=note, parse_mode=ParseMode.HTML)
-
-        if not approved:
-            context.user_data["awaiting_question"] = False
         return
 
     await update.message.reply_text("از دکمه‌های منو استفاده کنید 🙂", reply_markup=user_main_keyboard())
