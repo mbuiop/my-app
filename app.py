@@ -30,10 +30,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = "اینجا توکن ربات را بگذار"                 # ⬅️ TOKEN از @BotFather
+BOT_TOKEN = "7780798170:AAHTDl295s15_RwhfhjGentSLZzye3keJP0"                 # ⬅️ TOKEN از @BotFather
 
 ADMIN_IDS = [
-    111111111,                                          # ⬅️ اینجا آیدی عددی ادمین را بگذار (می‌تونی چند خط اضافه کنی)
+    327855654,                                          # ⬅️ اینجا آیدی عددی ادمین را بگذار (می‌تونی چند خط اضافه کنی)
 ]
 
 # ⬅️ اینجا کلید(های) TronGrid را بگذار (از پنل مدیریت هم می‌تونی بعداً کلید اضافه کنی)
@@ -41,7 +41,7 @@ TRONGRID_APIS = [
     "اینجا کلید API را بگذار",
 ]
 
-DESTINATION_WALLET = "اینجا آدرس کیف پول TRC20 را بگذار"   # ⬅️ آدرس مقصد پرداخت‌ها
+DESTINATION_WALLET = "TV61aTh98MGqmteYzda5AaBzdXgGqreG6A"
 
 PAYMENT_AMOUNT = 100          # مبلغ به دلار
 SUBSCRIPTION_DAYS = 30        # مدت اعتبار دسترسی (روز)
