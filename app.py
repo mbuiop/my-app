@@ -32,13 +32,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = "اینجا توکن ربات را بگذار"
-ADMIN_IDS = [111111111]  # آیدی عددی ادمین
+BOT_TOKEN = "7780798170:AAHTDl295s15_RwhfhjGentSLZzye3keJP0"
+ADMIN_IDS = [327855654]  # آیدی عددی ادمین
 
 TRONGRID_APIS = ["اینجا کلید API را بگذار"]
-DESTINATION_WALLET = "اینجا آدرس کیف پول TRC20 را بگذار"
+DESTINATION_WALLET = "TV61aTh98MGqmteYzda5AaBzdXgGqreG6A"
 
-OPENAI_API_KEY = "اینجا کلید OpenAI را بگذار"  # برای تحلیل چارت
+OPENAI_API_KEY = "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"
 
 PAYMENT_AMOUNT = 100
 SUBSCRIPTION_DAYS = 30
