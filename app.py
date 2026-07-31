@@ -20,8 +20,8 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 from telegram.constants import ParseMode
 
 # ============================================================
-# Config — never hardcode real secrets here. Set them as
-# environment variables on your server instead.
+# ⬇️⬇️⬇️  تنظیمات — مقادیر خودت رو دقیقاً همینجا وارد کن  ⬇️⬇️⬇️
+# CONFIG — fill in your own values right here
 # ============================================================
 logging.basicConfig(
     level=logging.INFO,
@@ -30,20 +30,27 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.environ.get('7780798170:AAHTDl295s15_RwhfhjGentSLZzye3keJP0', '7780798170:AAHTDl295s15_RwhfhjGentSLZzye3keJP0')
-ADMIN_IDS = [int(i) for i in os.environ.get('327855654', '327855654').split(',')]
+BOT_TOKEN = "اینجا توکن ربات را بگذار"                 # ⬅️ TOKEN از @BotFather
 
-# TronGrid API keys for automatic on-chain verification (more can be added from the admin panel)
+ADMIN_IDS = [
+    111111111,                                          # ⬅️ اینجا آیدی عددی ادمین را بگذار (می‌تونی چند خط اضافه کنی)
+]
+
+# ⬅️ اینجا کلید(های) TronGrid را بگذار (از پنل مدیریت هم می‌تونی بعداً کلید اضافه کنی)
 TRONGRID_APIS = [
-    k.strip() for k in os.environ.get('TRONGRID_APIS', '').split(',') if k.strip()
-] or ["YOUR_TRONGRID_API_KEY_HERE"]
+    "اینجا کلید API را بگذار",
+]
 
-DESTINATION_WALLET = os.environ.get('TV61aTh98MGqmteYzda5AaBzdXgGqreG6A', 'YOUR_WALLET_ADDRESS_HERE')
-PAYMENT_AMOUNT = float(os.environ.get('PAYMENT_AMOUNT', '100'))
-SUBSCRIPTION_DAYS = int(os.environ.get('SUBSCRIPTION_DAYS', '30'))
-DB_SHARDS = int(os.environ.get('DB_SHARDS', '200'))
+DESTINATION_WALLET = "اینجا آدرس کیف پول TRC20 را بگذار"   # ⬅️ آدرس مقصد پرداخت‌ها
+
+PAYMENT_AMOUNT = 100          # مبلغ به دلار
+SUBSCRIPTION_DAYS = 30        # مدت اعتبار دسترسی (روز)
+DB_SHARDS = 200                # تعداد شارد دیتابیس (برای ۵۰۰k+ کاربر)
 CACHE_TTL = 600
 DEFAULT_LANG = 'en'
+# ============================================================
+# ⬆️⬆️⬆️  پایان بخش تنظیمات  ⬆️⬆️⬆️
+# ============================================================
 
 
 # ============================================================
