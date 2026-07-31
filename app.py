@@ -30,15 +30,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.environ.get('BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
-ADMIN_IDS = [int(i) for i in os.environ.get('ADMIN_IDS', '123456789').split(',')]
+BOT_TOKEN = os.environ.get('7780798170:AAHTDl295s15_RwhfhjGentSLZzye3keJP0', '7780798170:AAHTDl295s15_RwhfhjGentSLZzye3keJP0')
+ADMIN_IDS = [int(i) for i in os.environ.get('327855654', '327855654').split(',')]
 
 # TronGrid API keys for automatic on-chain verification (more can be added from the admin panel)
 TRONGRID_APIS = [
     k.strip() for k in os.environ.get('TRONGRID_APIS', '').split(',') if k.strip()
 ] or ["YOUR_TRONGRID_API_KEY_HERE"]
 
-DESTINATION_WALLET = os.environ.get('DESTINATION_WALLET', 'YOUR_WALLET_ADDRESS_HERE')
+DESTINATION_WALLET = os.environ.get('TV61aTh98MGqmteYzda5AaBzdXgGqreG6A', 'YOUR_WALLET_ADDRESS_HERE')
 PAYMENT_AMOUNT = float(os.environ.get('PAYMENT_AMOUNT', '100'))
 SUBSCRIPTION_DAYS = int(os.environ.get('SUBSCRIPTION_DAYS', '30'))
 DB_SHARDS = int(os.environ.get('DB_SHARDS', '200'))
