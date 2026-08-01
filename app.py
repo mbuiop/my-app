@@ -45,7 +45,7 @@ TRONGRID_APIS = [
 DESTINATION_WALLET = "TV61aTh98MGqmteYzda5AaBzdXgGqreG6A"
 
 # ⬅️ کلید OpenAI برای تحلیل هوشمند چارت + چت هوش مصنوعی (از platform.openai.com بگیر)
-OPENAI_API_KEY = "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"
+OPENAI_API_KEY = "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"
 AI_MODEL = "gpt-4o"
 
 WELCOME_STICKER_ID = ""     # ⬅️ اختیاری: یک file_id استیکر واقعی اینجا بگذار (خالی = بدون استیکر)
