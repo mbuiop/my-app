@@ -31,10 +31,10 @@ logger = logging.getLogger(__name__)
 # CONFIG — fill in your own values right here
 # ============================================================
 
-BOT_TOKEN = "اینجا توکن ربات را بگذار"                       # ⬅️ از @BotFather
+BOT_TOKEN = "7780798170:AAHTDl295s15_RwhfhjGentSLZzye3keJP0"
 
 ADMIN_IDS = [
-    111111111,                                                # ⬅️ آیدی عددی ادمین (می‌تونی چند خط اضافه کنی)
+    327855654,                                                # ⬅️ آیدی عددی ادمین (می‌تونی چند خط اضافه کنی)
 ]
 
 # ⬅️ کلید(های) TronGrid برای تایید خودکار پرداخت (بعداً هم از پنل قابل افزودنه)
@@ -42,10 +42,10 @@ TRONGRID_APIS = [
     "اینجا کلید TronGrid API را بگذار",
 ]
 
-DESTINATION_WALLET = "اینجا آدرس کیف پول TRC20 را بگذار"       # ⬅️ آدرس مقصد پرداخت‌ها
+DESTINATION_WALLET = "TV61aTh98MGqmteYzda5AaBzdXgGqreG6A"
 
 # ⬅️ کلید OpenAI برای تحلیل هوشمند چارت + چت هوش مصنوعی (از platform.openai.com بگیر)
-OPENAI_API_KEY = "اینجا کلید OpenAI API را بگذار"
+OPENAI_API_KEY = "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"
 AI_MODEL = "gpt-4o"
 
 WELCOME_STICKER_ID = ""     # ⬅️ اختیاری: یک file_id استیکر واقعی اینجا بگذار (خالی = بدون استیکر)
